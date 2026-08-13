@@ -7,6 +7,7 @@ import CmuxTestSupport
 import CmuxTerminal
 import CmuxFoundation
 import CmuxSettings
+import UniformTypeIdentifiers
 
 /// View for rendering a terminal panel
 struct TerminalPanelView: View {
@@ -20,6 +21,8 @@ struct TerminalPanelView: View {
     @AppStorage(SessionContentWidthSettings.alignmentKey)
     private var storedSessionContentAlignment = SessionContentAlignment.center.rawValue
     @State private var terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
+    @State private var clipboardPreview: TerminalClipboardPreview?
+    @State private var clipboardPreviewChangeCount = -1
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -177,12 +180,63 @@ struct TerminalPanelView: View {
                     }
                 )
                 .sessionContentWidth(fillsHeight: false)
+                .overlay(alignment: .bottomLeading) {
+                    if shouldWatchClipboardPreview,
+                       let clipboardPreview {
+                        TerminalClipboardPreviewOverlay(
+                            preview: clipboardPreview,
+                            foregroundColor: appearance.foregroundColor
+                        )
+                        .id(clipboardPreviewChangeCount)
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: clipboardPreviewChangeCount)
+                .task(id: shouldWatchClipboardPreview) {
+                    if shouldWatchClipboardPreview {
+                        await watchClipboardPreview()
+                    } else {
+                        clipboardPreview = nil
+                    }
+                }
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
             terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
+    }
+
+    private var shouldWatchClipboardPreview: Bool {
+        isVisibleInUI
+            && panel.isTextBoxActive
+            && panel.textBoxContent.isEmpty
+            && panel.textBoxAttachments.isEmpty
+    }
+
+    @MainActor
+    private func watchClipboardPreview() async {
+        clipboardPreviewChangeCount = -1
+        refreshClipboardPreviewIfNeeded()
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: NSApp.isActive ? 120_000_000 : 450_000_000)
+            } catch {
+                break
+            }
+            guard !Task.isCancelled else { break }
+            refreshClipboardPreviewIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func refreshClipboardPreviewIfNeeded() {
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard changeCount != clipboardPreviewChangeCount else { return }
+        clipboardPreviewChangeCount = changeCount
+        clipboardPreview = TerminalClipboardPreview.read(from: pasteboard)
     }
 
     private var sessionContentWidthPresentation: SessionContentWidthPresentation {
@@ -250,6 +304,79 @@ struct TerminalPanelView: View {
     }
 }
 
+private struct TerminalClipboardPreview: Equatable {
+    let label: String
+
+    @MainActor
+    static func read(from pasteboard: NSPasteboard) -> TerminalClipboardPreview? {
+        let types = pasteboard.types ?? []
+
+        if types.contains(.fileURL),
+           let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+           !urls.isEmpty {
+            if urls.count == 1 {
+                let name = urls[0].lastPathComponent.isEmpty ? urls[0].path : urls[0].lastPathComponent
+                return TerminalClipboardPreview(label: "Clipboard · \(name)")
+            }
+            return TerminalClipboardPreview(label: "Clipboard · \(urls.count) files")
+        }
+
+        if types.contains(where: isImageType) {
+            return TerminalClipboardPreview(label: "Clipboard · Image")
+        }
+
+        if let rawText = GhosttyApp.terminalPasteboard.fallbackPlainTextContents(from: pasteboard) {
+            let collapsed = rawText
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !collapsed.isEmpty else { return nil }
+            let limit = 84
+            let excerpt = collapsed.count > limit
+                ? String(collapsed.prefix(limit - 1)) + "…"
+                : collapsed
+            return TerminalClipboardPreview(label: "Clipboard · “\(excerpt)”")
+        }
+
+        return nil
+    }
+
+    private static func isImageType(_ type: NSPasteboard.PasteboardType) -> Bool {
+        if type == .tiff || type == .png { return true }
+        guard let utType = UTType(type.rawValue) else { return false }
+        return utType.conforms(to: .image)
+    }
+}
+
+private struct TerminalClipboardPreviewOverlay: View {
+    let preview: TerminalClipboardPreview
+    let foregroundColor: NSColor
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: 45)
+
+            Text(preview.label)
+                .cmuxFont(size: 14)
+                .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.42))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
+                .padding(.horizontal, 1)
+                .background(.regularMaterial)
+
+            Color.clear
+                .frame(width: 45)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct AgentHibernationPlaceholderView: View {
     let state: AgentHibernationPanelState
     let appearance: PanelAppearance
@@ -285,7 +412,7 @@ private struct AgentHibernationPlaceholderView: View {
         case .failed:
             String(
                 localized: "terminal.agentHibernation.retry",
-                defaultValue: "Retry shutdown"
+                defaultValue: "Retry"
             )
         }
     }
