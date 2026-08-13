@@ -2,6 +2,14 @@ import AppKit
 import CmuxTerminal
 import GhosttyKit
 
+@_silgen_name("ghostty_surface_read_semantic_block")
+private func cmuxGhosttyReadSemanticBlock(
+    _ surface: ghostty_surface_t,
+    _ x: Double,
+    _ y: Double,
+    _ result: UnsafeMutablePointer<ghostty_text_s>
+) -> Bool
+
 final class GhosttyPassthroughVisualEffectView: NSVisualEffectView {
     override var acceptsFirstResponder: Bool { false }
 
@@ -67,6 +75,163 @@ final class TerminalLinkHoverIndicatorView: NSView {
     }
 }
 
+private final class TerminalSemanticHoverCopyView: NSView {
+    private weak var surfaceView: GhosttyNSView?
+    private let copyButton = NSButton(frame: .zero)
+    private var tracking: NSTrackingArea?
+    private var activeText: String?
+    private var lastLookupTimestamp: TimeInterval = 0
+    private var feedbackGeneration: UInt64 = 0
+
+    private static let lookupInterval: TimeInterval = 0.04
+    private static let buttonSize = NSSize(width: 30, height: 26)
+
+    init(surfaceView: GhosttyNSView) {
+        self.surfaceView = surfaceView
+        super.init(frame: .zero)
+
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        copyButton.isHidden = true
+        copyButton.isBordered = false
+        copyButton.imagePosition = .imageOnly
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
+        copyButton.contentTintColor = .labelColor
+        copyButton.wantsLayer = true
+        copyButton.layer?.cornerRadius = 7
+        copyButton.layer?.borderWidth = 0.8
+        copyButton.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
+        copyButton.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.88).cgColor
+        copyButton.target = self
+        copyButton.action = #selector(copyHoveredBlock)
+        copyButton.setAccessibilityLabel("Copy terminal block")
+        addSubview(copyButton)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) not implemented")
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking {
+            removeTrackingArea(tracking)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !copyButton.isHidden else { return nil }
+        let forgivingFrame = copyButton.frame.insetBy(dx: -4, dy: -4)
+        return forgivingFrame.contains(point) ? copyButton : nil
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        if !copyButton.isHidden, copyButton.frame.insetBy(dx: -5, dy: -5).contains(localPoint) {
+            return
+        }
+
+        guard event.timestamp - lastLookupTimestamp >= Self.lookupInterval else { return }
+        lastLookupTimestamp = event.timestamp
+        refreshSemanticBlock(at: event.locationInWindow, localPoint: localPoint)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hideSemanticBlock()
+    }
+
+    private func refreshSemanticBlock(at windowPoint: NSPoint, localPoint: NSPoint) {
+        guard let surfaceView,
+              let terminalSurface = surfaceView.terminalSurface,
+              let surface = terminalSurface.surface else {
+            hideSemanticBlock()
+            return
+        }
+
+        let point = surfaceView.convert(windowPoint, from: nil)
+        guard surfaceView.bounds.contains(point) else {
+            hideSemanticBlock()
+            return
+        }
+
+        var text = ghostty_text_s()
+        guard cmuxGhosttyReadSemanticBlock(
+            surface,
+            Double(point.x),
+            Double(surfaceView.bounds.height - point.y),
+            &text
+        ) else {
+            hideSemanticBlock()
+            return
+        }
+        defer { ghostty_surface_free_text(surface, &text) }
+
+        guard text.text_len > 0,
+              let bytes = text.text else {
+            hideSemanticBlock()
+            return
+        }
+        let data = Data(bytes: bytes, count: text.text_len)
+        guard let value = String(data: data, encoding: .utf8),
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            hideSemanticBlock()
+            return
+        }
+
+        if activeText == value {
+            return
+        }
+
+        activeText = value
+        feedbackGeneration &+= 1
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
+        positionButton(near: localPoint)
+        copyButton.isHidden = false
+    }
+
+    private func positionButton(near point: NSPoint) {
+        let size = Self.buttonSize
+        let x = max(8, bounds.width - size.width - 10)
+        let y = min(
+            max(8, point.y - size.height / 2),
+            max(8, bounds.height - size.height - 8)
+        )
+        copyButton.frame = NSRect(origin: NSPoint(x: x, y: y), size: size)
+    }
+
+    private func hideSemanticBlock() {
+        activeText = nil
+        feedbackGeneration &+= 1
+        copyButton.isHidden = true
+    }
+
+    @objc private func copyHoveredBlock() {
+        guard let activeText else { return }
+        GhosttyApp.terminalPasteboard.writeString(activeText, to: GHOSTTY_CLIPBOARD_STANDARD)
+
+        feedbackGeneration &+= 1
+        let generation = feedbackGeneration
+        copyButton.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) { [weak self] in
+            guard let self,
+                  self.feedbackGeneration == generation,
+                  self.activeText != nil else { return }
+            self.copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")
+        }
+    }
+}
+
 extension GhosttySurfaceScrollView {
     nonisolated static func linkHoverURL(from link: ghostty_action_mouse_over_link_s) -> String? {
         guard link.len > 0, let bytes = link.url else { return nil }
@@ -79,6 +244,18 @@ extension GhosttySurfaceScrollView {
             return
         }
         linkHoverIndicatorView.setURL(url)
+    }
+
+    func installSemanticHoverCopy(surfaceView: GhosttyNSView) {
+        let overlay = TerminalSemanticHoverCopyView(surfaceView: surfaceView)
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(overlay, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
     }
 }
 
