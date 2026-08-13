@@ -38,7 +38,9 @@ struct TerminalSurfaceViewFactory: TerminalSurfaceViewProviding {
             frame: initialFrame,
             imageTransferPreparation: imageTransferPreparation
         )
-        return (view, GhosttySurfaceScrollView(surfaceView: view))
+        let host = GhosttySurfaceScrollView(surfaceView: view)
+        host.installSemanticHoverCopy(surfaceView: view)
+        return (view, host)
     }
 }
 
