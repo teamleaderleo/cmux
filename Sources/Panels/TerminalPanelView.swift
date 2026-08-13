@@ -412,7 +412,7 @@ private struct AgentHibernationPlaceholderView: View {
         case .failed:
             String(
                 localized: "terminal.agentHibernation.retry",
-                defaultValue: "Retry"
+                defaultValue: "Retry shutdown"
             )
         }
     }
