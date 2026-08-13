@@ -190,6 +190,7 @@ private final class TerminalSemanticHoverCopyView: NSView {
         }
 
         if activeText == value {
+            positionButton(near: localPoint)
             return
         }
 
