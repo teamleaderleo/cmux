@@ -23,6 +23,7 @@ struct TerminalPanelView: View {
     @State private var terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
     @State private var clipboardPreview: TerminalClipboardPreview?
     @State private var clipboardPreviewChangeCount = -1
+    @State private var pathPeek: TerminalPathPeek?
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -191,13 +192,27 @@ struct TerminalPanelView: View {
                         .transition(.opacity)
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    if let pathPeek {
+                        TerminalPathPeekOverlay(
+                            peek: pathPeek,
+                            foregroundColor: appearance.foregroundColor
+                        )
+                        .offset(y: -32)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottomLeading)))
+                    }
+                }
                 .animation(.easeOut(duration: 0.12), value: clipboardPreviewChangeCount)
+                .animation(.easeOut(duration: 0.10), value: pathPeek)
                 .task(id: shouldWatchClipboardPreview) {
                     if shouldWatchClipboardPreview {
                         await watchClipboardPreview()
                     } else {
                         clipboardPreview = nil
                     }
+                }
+                .task(id: pathPeekTaskKey) {
+                    await updatePathPeekAfterIdle()
                 }
             }
         }
@@ -237,6 +252,42 @@ struct TerminalPanelView: View {
         guard changeCount != clipboardPreviewChangeCount else { return }
         clipboardPreviewChangeCount = changeCount
         clipboardPreview = TerminalClipboardPreview.read(from: pasteboard)
+    }
+
+    private var pathPeekTaskKey: String {
+        [
+            isVisibleInUI ? "1" : "0",
+            panel.isTextBoxActive ? "1" : "0",
+            completionRootDirectory ?? "",
+            panel.textBoxContent
+        ].joined(separator: "\u{1f}")
+    }
+
+    @MainActor
+    private func updatePathPeekAfterIdle() async {
+        pathPeek = nil
+        guard isVisibleInUI,
+              panel.isTextBoxActive,
+              let rootDirectory = completionRootDirectory,
+              let request = TerminalPathPeekRequest.parse(
+                text: panel.textBoxContent,
+                rootDirectory: rootDirectory
+              ) else {
+            return
+        }
+
+        do {
+            try await Task.sleep(nanoseconds: 350_000_000)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        let result = await Task.detached(priority: .utility) {
+            request.loadPeek()
+        }.value
+        guard !Task.isCancelled else { return }
+        pathPeek = result
     }
 
     private var sessionContentWidthPresentation: SessionContentWidthPresentation {
@@ -374,6 +425,176 @@ private struct TerminalClipboardPreviewOverlay: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+private struct TerminalPathPeekRequest: Sendable {
+    let directoryPath: String
+    let fragment: String
+    let exactPath: String?
+
+    static func parse(text: String, rootDirectory: String) -> TerminalPathPeekRequest? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard let rawLast = parts.last else { return nil }
+        let token = rawLast.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        guard !token.isEmpty, !token.hasPrefix("-") else { return nil }
+
+        let pathCommands: Set<String> = [
+            "cd", "ls", "ll", "la", "cat", "bat", "less", "open", "head", "tail",
+            "rg", "fd", "find", "vim", "nvim", "micro", "code", "tree", "du", "wc"
+        ]
+        let command = parts.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        let explicitPath = token.hasPrefix("./")
+            || token.hasPrefix("../")
+            || token.hasPrefix("~/")
+            || token.hasPrefix("/")
+            || token.contains("/")
+        guard explicitPath || (parts.count >= 2 && pathCommands.contains(command)) else {
+            return nil
+        }
+
+        let expanded: String
+        if token == "~" {
+            expanded = FileManager.default.homeDirectoryForCurrentUser.path
+        } else if token.hasPrefix("~/") {
+            expanded = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(String(token.dropFirst(2)))
+                .path
+        } else if token.hasPrefix("/") {
+            expanded = token
+        } else {
+            expanded = URL(fileURLWithPath: rootDirectory, isDirectory: true)
+                .appendingPathComponent(token)
+                .path
+        }
+        let standardized = URL(fileURLWithPath: expanded).standardizedFileURL.path
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory) {
+            if isDirectory.boolValue {
+                return TerminalPathPeekRequest(
+                    directoryPath: standardized,
+                    fragment: "",
+                    exactPath: standardized
+                )
+            }
+            return TerminalPathPeekRequest(
+                directoryPath: URL(fileURLWithPath: standardized).deletingLastPathComponent().path,
+                fragment: URL(fileURLWithPath: standardized).lastPathComponent,
+                exactPath: standardized
+            )
+        }
+
+        let url = URL(fileURLWithPath: standardized)
+        return TerminalPathPeekRequest(
+            directoryPath: url.deletingLastPathComponent().path,
+            fragment: url.lastPathComponent,
+            exactPath: nil
+        )
+    }
+
+    func loadPeek() -> TerminalPathPeek? {
+        if let exactPath {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: exactPath, isDirectory: &isDirectory),
+               !isDirectory.boolValue {
+                return .file(Self.fileSummary(path: exactPath))
+            }
+        }
+
+        let directoryURL = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        let needle = fragment.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        let matches = children.compactMap { url -> TerminalPathPeek.Entry? in
+            guard !Task.isCancelled else { return nil }
+            let name = url.lastPathComponent
+            let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            guard needle.isEmpty || folded.hasPrefix(needle) || folded.contains(needle) else { return nil }
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            guard values?.isDirectory == true || values?.isRegularFile == true else { return nil }
+            return TerminalPathPeek.Entry(name: name, isDirectory: values?.isDirectory == true)
+        }
+        .sorted { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
+            let leftPrefix = lhs.name.lowercased().hasPrefix(needle.lowercased())
+            let rightPrefix = rhs.name.lowercased().hasPrefix(needle.lowercased())
+            if leftPrefix != rightPrefix { return leftPrefix }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+
+        guard !matches.isEmpty else { return nil }
+        let directoryName = directoryURL.lastPathComponent.isEmpty ? directoryURL.path : directoryURL.lastPathComponent + "/"
+        return .directory(name: directoryName, entries: Array(matches.prefix(5)))
+    }
+
+    private static func fileSummary(path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        let byteCount = values?.fileSize ?? 0
+        let size: String
+        if byteCount >= 1_000_000 {
+            size = String(format: "%.1f MB", Double(byteCount) / 1_000_000)
+        } else if byteCount >= 1_000 {
+            size = String(format: "%.1f KB", Double(byteCount) / 1_000)
+        } else {
+            size = "\(byteCount) B"
+        }
+        let kind = url.pathExtension.isEmpty ? "file" : url.pathExtension.uppercased()
+        return "\(name) · \(kind) · \(size)"
+    }
+}
+
+private enum TerminalPathPeek: Equatable {
+    struct Entry: Equatable, Sendable {
+        let name: String
+        let isDirectory: Bool
+    }
+
+    case directory(name: String, entries: [Entry])
+    case file(String)
+
+    var label: String {
+        switch self {
+        case .file(let summary):
+            return summary
+        case .directory(let name, let entries):
+            let children = entries.map { $0.isDirectory ? $0.name + "/" : $0.name }.joined(separator: "   ")
+            return "\(name) · \(children)"
+        }
+    }
+}
+
+private struct TerminalPathPeekOverlay: View {
+    let peek: TerminalPathPeek
+    let foregroundColor: NSColor
+
+    var body: some View {
+        Text(peek.label)
+            .cmuxFont(size: 11, design: .monospaced)
+            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.78))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 9)
+            .frame(height: 25)
+            .background(.regularMaterial, in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(Color(nsColor: foregroundColor).opacity(0.12), lineWidth: 0.8)
+            }
+            .padding(.leading, 48)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
