@@ -97,7 +97,7 @@ struct TerminalPanelView: View {
     private var terminalBody: some View {
         @Bindable var textBoxState = panel.textBoxState
 
-        return VStack(spacing: 0) {
+        return ZStack(alignment: .bottom) {
             // Layering contract: terminal find UI is mounted in GhosttySurfaceScrollView (AppKit portal layer)
             // via `searchState`. Rendering `SurfaceSearchOverlay` in this SwiftUI container can hide it.
             GhosttyTerminalView(
@@ -131,7 +131,7 @@ struct TerminalPanelView: View {
 #endif
             .layoutPriority(1)
 
-            if panel.isTextBoxActive {
+            if panel.isTextBoxActive && panel.shellActivity.state != .commandRunning {
                 TextBoxInputContainer(
                     text: $panel.textBoxContent,
                     attachments: $panel.textBoxAttachments,
@@ -156,7 +156,7 @@ struct TerminalPanelView: View {
                         onFocus()
                     },
                     onToggleFocus: {
-                        _ = panel.focusTextBoxInputOrTerminal()
+                        panel.preferTextBoxInputWhenActivated()
                     },
                     onSelectSubmitAction: { actionID in
                         panel.textBoxState.selectSubmitAction(actionID)
@@ -168,7 +168,8 @@ struct TerminalPanelView: View {
                         panel.clearTextBoxLaunchCommand()
                     },
                     onEscape: {
-                        panel.handleTextBoxEscape()
+                        panel.clearTextBoxHideEscapeArm()
+                        panel.preferTextBoxInputWhenActivated()
                     },
                     onTextViewCreated: { view in
                         panel.registerTextBoxInputView(view)
@@ -217,6 +218,22 @@ struct TerminalPanelView: View {
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
+        .onAppear {
+            if panel.shellActivity.state != .commandRunning {
+                panel.preferTextBoxInputWhenActivated()
+            }
+        }
+        .onChange(of: panel.shellActivity.state) { _, state in
+            switch state {
+            case .promptIdle:
+                panel.preferTextBoxInputWhenActivated()
+            case .commandRunning:
+                panel.handleTextBoxEscape()
+                panel.clearTextBoxHideEscapeArm()
+            case .unknown:
+                break
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
             terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
@@ -367,13 +384,13 @@ private struct TerminalClipboardPreview: Equatable {
            !urls.isEmpty {
             if urls.count == 1 {
                 let name = urls[0].lastPathComponent.isEmpty ? urls[0].path : urls[0].lastPathComponent
-                return TerminalClipboardPreview(label: "Clipboard · \(name)")
+                return TerminalClipboardPreview(label: "clipboard · \(name)")
             }
-            return TerminalClipboardPreview(label: "Clipboard · \(urls.count) files")
+            return TerminalClipboardPreview(label: "clipboard · \(urls.count) files")
         }
 
         if types.contains(where: isImageType) {
-            return TerminalClipboardPreview(label: "Clipboard · Image")
+            return TerminalClipboardPreview(label: "clipboard · image")
         }
 
         if let rawText = GhosttyApp.terminalPasteboard.fallbackPlainTextContents(from: pasteboard) {
@@ -386,7 +403,7 @@ private struct TerminalClipboardPreview: Equatable {
             let excerpt = collapsed.count > limit
                 ? String(collapsed.prefix(limit - 1)) + "…"
                 : collapsed
-            return TerminalClipboardPreview(label: "Clipboard · “\(excerpt)”")
+            return TerminalClipboardPreview(label: "clipboard · “\(excerpt)”")
         }
 
         return nil
@@ -404,25 +421,13 @@ private struct TerminalClipboardPreviewOverlay: View {
     let foregroundColor: NSColor
 
     var body: some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .frame(width: 45)
-
-            Text(preview.label)
-                .cmuxFont(size: 14)
-                .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.42))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
-                .padding(.horizontal, 1)
-                .background(.regularMaterial)
-
-            Color.clear
-                .frame(width: 45)
-        }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        Text(preview.label)
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.38))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
+            .padding(.horizontal, 7)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -581,18 +586,12 @@ private struct TerminalPathPeekOverlay: View {
 
     var body: some View {
         Text(peek.label)
-            .cmuxFont(size: 11, design: .monospaced)
-            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.78))
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.46))
             .lineLimit(1)
             .truncationMode(.middle)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 7)
             .frame(height: 25)
-            .background(.regularMaterial, in: Capsule(style: .continuous))
-            .overlay {
-                Capsule(style: .continuous)
-                    .stroke(Color(nsColor: foregroundColor).opacity(0.12), lineWidth: 0.8)
-            }
-            .padding(.leading, 48)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

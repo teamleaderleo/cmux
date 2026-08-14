@@ -2267,11 +2267,9 @@ struct TextBoxInputContainer: View {
         commentPool.pendingCount(workspaceId: surface.owningWorkspace()?.id)
     }
 
-    private var textBasePointSize: CGFloat { max(14, terminalFont.pointSize / max(GlobalFontMagnification.scale, 0.01) + 2) }
+    private var textBasePointSize: CGFloat { terminalFont.pointSize }
 
-    private var textFont: NSFont {
-        GlobalFontMagnification.systemFont(ofSize: textBasePointSize, weight: .regular)
-    }
+    private var textFont: NSFont { terminalFont }
 
     private func heightForLines(_ lines: Int) -> CGFloat {
         let lineHeight = ceil(textFont.ascender - textFont.descender + textFont.leading)
@@ -2316,10 +2314,6 @@ struct TextBoxInputContainer: View {
                     .padding(.top, 6)
             }
             HStack(alignment: .bottom, spacing: 6) {
-            addFilesButton(foreground: foreground)
-                .offset(x: TextBoxLayout.leadingButtonHorizontalOffset)
-                .padding(.bottom, TextBoxLayout.buttonBottomPadding)
-
             ZStack(alignment: .leading) {
                 TextBoxInputView(
                     text: $text,
@@ -2354,7 +2348,7 @@ struct TextBoxInputContainer: View {
                     attachmentCount: attachments.count,
                     hasMarkedText: hasMarkedText
                 ) {
-                    Text(String(localized: "textbox.placeholder", defaultValue: "Prompt or command"))
+                    Text("")
                         .cmuxFont(size: textBasePointSize)
                         .foregroundStyle(Color(nsColor: terminalForegroundColor).opacity(0.36))
                         .padding(.leading, TextBoxLayout.textInset.width)
@@ -2366,21 +2360,11 @@ struct TextBoxInputContainer: View {
             .frame(height: clampedHeight)
             .frame(maxWidth: .infinity)
 
-            sendButton(canSend: canSend, presentation: submitActionPresentation)
-                .offset(x: TextBoxLayout.trailingButtonHorizontalOffset)
-                .padding(.bottom, TextBoxLayout.buttonBottomPadding)
             }
         }
-        .padding(.horizontal, TextBoxLayout.pillHorizontalPadding)
-        .padding(.vertical, TextBoxLayout.pillVerticalPadding)
-        .background(
-            TextBoxInputGlassPillBackground(
-                foreground: foreground,
-                fallbackTint: background
-            )
-        )
-        .padding(.horizontal, 10)
-        .padding(.bottom, 7)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 1)
+        .background(background)
         .task(id: submitActionImageCacheTaskKey) {
             await refreshSubmitActionImageCache(keys: submitActionImageCacheKeys)
         }
