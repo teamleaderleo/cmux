@@ -260,6 +260,13 @@ extension GhosttySurfaceScrollView {
     }
 }
 
+extension TerminalPanelView {
+    var completionRootDirectory: String? {
+        let directory = panel.directory.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        return directory.isEmpty ? nil : directory
+    }
+}
+
 func shouldAllowEnsureFocusWindowActivation(
     activeTabManager: TabManager?,
     targetTabManager: TabManager,
