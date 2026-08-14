@@ -182,9 +182,9 @@ private final class TerminalSemanticHoverCopyView: NSView {
             hideSemanticBlock()
             return
         }
-        let data = Data(bytes: bytes, count: text.text_len)
+        let data = Data(bytes: bytes, count: Int(text.text_len))
         guard let value = String(data: data, encoding: .utf8),
-              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              !value.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty else {
             hideSemanticBlock()
             return
         }
