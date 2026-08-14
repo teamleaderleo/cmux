@@ -290,6 +290,11 @@ final class SidebarWorkspaceRowTableCellView: NSTableCellView {
         contextMenuDidOpen = nil
         contextMenuDidClose = nil
         contextMenuVisible = false
+        // A detached cell can be reused for a different workspace after a close.
+        // Hover belongs to the controller's current pointer row, never to the
+        // retained cell instance, so retire any revealed close chrome here.
+        isPointerHovering = false
+        closeButton.setRevealed(false)
         pumpCancellables.removeAll()
         setPresentationActive(false)
         return postUpdateActions
