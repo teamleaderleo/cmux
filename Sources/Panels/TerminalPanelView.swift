@@ -97,7 +97,7 @@ struct TerminalPanelView: View {
     private var terminalBody: some View {
         @Bindable var textBoxState = panel.textBoxState
 
-        return ZStack(alignment: .bottom) {
+        return VStack(spacing: 0) {
             // Layering contract: terminal find UI is mounted in GhosttySurfaceScrollView (AppKit portal layer)
             // via `searchState`. Rendering `SurfaceSearchOverlay` in this SwiftUI container can hide it.
             GhosttyTerminalView(
@@ -131,7 +131,7 @@ struct TerminalPanelView: View {
 #endif
             .layoutPriority(1)
 
-            if panel.isTextBoxActive && panel.shellActivity.state != .commandRunning {
+            if panel.isTextBoxActive {
                 TextBoxInputContainer(
                     text: $panel.textBoxContent,
                     attachments: $panel.textBoxAttachments,
@@ -156,7 +156,7 @@ struct TerminalPanelView: View {
                         onFocus()
                     },
                     onToggleFocus: {
-                        panel.preferTextBoxInputWhenActivated()
+                        panel.focusTextBoxInputOrTerminal()
                     },
                     onSelectSubmitAction: { actionID in
                         panel.textBoxState.selectSubmitAction(actionID)
@@ -168,8 +168,7 @@ struct TerminalPanelView: View {
                         panel.clearTextBoxLaunchCommand()
                     },
                     onEscape: {
-                        panel.clearTextBoxHideEscapeArm()
-                        panel.preferTextBoxInputWhenActivated()
+                        panel.handleTextBoxEscape()
                     },
                     onTextViewCreated: { view in
                         panel.registerTextBoxInputView(view)
@@ -218,22 +217,6 @@ struct TerminalPanelView: View {
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
-        .onAppear {
-            if panel.shellActivity.state != .commandRunning {
-                panel.preferTextBoxInputWhenActivated()
-            }
-        }
-        .onChange(of: panel.shellActivity.state) { _, state in
-            switch state {
-            case .promptIdle:
-                panel.preferTextBoxInputWhenActivated()
-            case .commandRunning:
-                panel.handleTextBoxEscape()
-                panel.clearTextBoxHideEscapeArm()
-            case .unknown:
-                break
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
             terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
