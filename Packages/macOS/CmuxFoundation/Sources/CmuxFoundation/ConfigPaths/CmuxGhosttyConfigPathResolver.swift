@@ -1,9 +1,8 @@
 public import Foundation
 
 /// Resolves which cmux-managed Ghostty config file under Application Support is
-/// active for a given bundle identifier, including the release-channel fallback
-/// chain (debug/nightly/staging builds read the release config when they have
-/// none of their own).
+/// active for a given bundle identifier, including fallback to the release config
+/// for tagged/dev channel builds when they have none of their own.
 ///
 /// TRANSITIONAL: faithful lift of the app-target config-path namespace cluster
 /// the engine and ``GhosttyConfig`` recurse through. These stateless
@@ -11,9 +10,8 @@ public import Foundation
 /// an instantiated, dependency-injected resolver is deferred to the engine lift.
 public struct CmuxGhosttyConfigPathResolver {
     /// The bundle identifier of the released cmux app, used as the canonical
-    /// config location and the fallback for dev/nightly/staging channels.
+    /// config location and the fallback for tagged/dev channel builds.
     public static let releaseBundleIdentifier = "com.cmuxterm.app"
-    private static let releaseFallbackChannelSuffixes = ["debug", "nightly", "staging"]
 
     public init() {}
 
@@ -50,7 +48,7 @@ public struct CmuxGhosttyConfigPathResolver {
     }
 
     /// The ordered list of cmux-managed config files to load, applying the
-    /// release-channel fallback when the current bundle has none of its own.
+    /// release fallback when the current tagged/dev bundle has none of its own.
     public func loadConfigURLs(
         currentBundleIdentifier: String?,
         appSupportDirectory: URL,
@@ -144,17 +142,10 @@ public struct CmuxGhosttyConfigPathResolver {
     }
 
     private func allowsReleaseFallback(_ bundleIdentifier: String) -> Bool {
-        Self.releaseFallbackChannelSuffixes.contains { channelSuffix in
-            matchesChannelBundleIdentifier(bundleIdentifier, channelSuffix: channelSuffix)
+        let taggedBundlePrefix = "\(Self.releaseBundleIdentifier)."
+        guard bundleIdentifier.hasPrefix(taggedBundlePrefix) else {
+            return false
         }
-    }
-
-    private func matchesChannelBundleIdentifier(
-        _ bundleIdentifier: String,
-        channelSuffix: String
-    ) -> Bool {
-        let channelBundleIdentifier = "\(Self.releaseBundleIdentifier).\(channelSuffix)"
-        return bundleIdentifier == channelBundleIdentifier
-            || bundleIdentifier.hasPrefix("\(channelBundleIdentifier).")
+        return bundleIdentifier.count > taggedBundlePrefix.count
     }
 }
