@@ -2,8 +2,8 @@ public import Foundation
 
 /// Resolves which cmux-managed Ghostty config file under Application Support is
 /// active for a given bundle identifier, including the release-channel fallback
-/// chain (debug/nightly/staging builds read the release config when they have
-/// none of their own).
+/// chain (debug/nightly/staging and terminal-kit builds read the release config
+/// when they have none of their own).
 ///
 /// TRANSITIONAL: faithful lift of the app-target config-path namespace cluster
 /// the engine and ``GhosttyConfig`` recurse through. These stateless
@@ -13,7 +13,7 @@ public struct CmuxGhosttyConfigPathResolver {
     /// The bundle identifier of the released cmux app, used as the canonical
     /// config location and the fallback for dev/nightly/staging channels.
     public static let releaseBundleIdentifier = "com.cmuxterm.app"
-    private static let releaseFallbackChannelSuffixes = ["debug", "nightly", "staging"]
+    private static let releaseFallbackChannelSuffixes = ["debug", "nightly", "staging", "terminal-kit"]
 
     public init() {}
 
