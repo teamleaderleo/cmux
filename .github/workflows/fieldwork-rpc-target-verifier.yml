@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: fieldwork-rpc-target-verifier
+  cancel-in-progress: true
+
 env:
   CANDIDATE_BRANCH: fieldwork/rpc-target-keys-10910
   UPSTREAM_BASE_SHA: eaa899cb20bd411019744fbd2bdedeb397f3070b
