@@ -62,6 +62,8 @@ jobs:
         run: |
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure_handoff.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure_handoff.patch
           git diff --check
       - name: Run journal-forwarder unit tests
         run: |
