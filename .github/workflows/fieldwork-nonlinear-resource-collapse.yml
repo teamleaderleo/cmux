@@ -10,6 +10,66 @@ permissions:
   contents: read
 
 jobs:
+  journal-backpressure-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin candidate revision
+        run: git rev-parse HEAD
+      - name: Apply journal backpressure candidate
+        run: |
+          git apply --check scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git diff --check
+      - name: Run journal-forwarder unit tests
+        run: |
+          cargo test \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            journal_forwarder::tests::
+      - name: Build live journal harness
+        run: |
+          cargo build \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog
+      - name: Run healthy 50-session negative control
+        run: |
+          mkdir -p journal-backpressure-results
+          cargo run --quiet \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog -- \
+            --mode ack \
+            --sessions 50 \
+            --records-per-session 300 \
+            --payload-bytes 1024 \
+            > journal-backpressure-results/ack-50.json
+          cat journal-backpressure-results/ack-50.json
+      - name: Run stalled fixed-duration scaling sequence
+        run: |
+          for sessions in 1 10 50 128 200; do
+            echo "=== stalled sessions=${sessions} ==="
+            cargo run --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog -- \
+              --mode stall \
+              --sessions "${sessions}" \
+              --records-per-session 1000000 \
+              --payload-bytes 1024 \
+              --load-millis 1500 \
+              --settle-millis 100 \
+              > "journal-backpressure-results/stall-${sessions}.json"
+            cat "journal-backpressure-results/stall-${sessions}.json"
+          done
+      - name: Preserve journal candidate measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: journal-backpressure-results
+          path: journal-backpressure-results/*.json
+
   macos-rpc-candidate:
     runs-on: macos-15
     timeout-minutes: 20
@@ -34,7 +94,7 @@ jobs:
           swift test \
             --package-path Packages/macOS/CmuxRemoteDaemon \
             --filter timedOutPTYAttachBoundsCancellationWrite
-      - name: Run 1/10/50/200 physical-write scaling probe
+      - name: Run request + notification write scaling probes
         env:
           CMUX_FIELDWORK_SCALING: "1"
         run: |
