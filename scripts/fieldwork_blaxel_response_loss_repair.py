@@ -67,14 +67,38 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    '''                status: "provisioning",
+    '''            const [vm] = await tx
+              .insert(cloudVms)
+              .values({
+                userId: input.userId,
+                billingTeamId: input.billingTeamId,
+                billingPlanId: input.billingPlanId,
+                provider: input.provider,
+                imageId: input.image,
+                imageVersion: input.imageVersion ?? null,
+                status: "provisioning",
                 idempotencyKey,
               })
+              .returning();
+            if (!vm) throw new Error("insert returned no VM row");
+            return { inserted: true as const, vm };
 ''',
-    '''                status: "provisioning",
+    '''            const [vm] = await tx
+              .insert(cloudVms)
+              .values({
+                userId: input.userId,
+                billingTeamId: input.billingTeamId,
+                billingPlanId: input.billingPlanId,
+                provider: input.provider,
+                imageId: input.image,
+                imageVersion: input.imageVersion ?? null,
+                status: "provisioning",
                 idempotencyKey,
                 ...(createIdentity ? { providerMetadata: { createIdentity } } : {}),
               })
+              .returning();
+            if (!vm) throw new Error("insert returned no VM row");
+            return { inserted: true as const, vm };
 ''',
     "create identity persistence",
 )
