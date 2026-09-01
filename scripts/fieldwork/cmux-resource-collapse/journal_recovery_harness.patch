@@ -1,0 +1,281 @@
+diff --git a/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs b/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+--- a/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
++++ b/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+@@ -6,8 +6,8 @@ use std::os::unix::fs::PermissionsExt;
+ use std::path::{Path, PathBuf};
+ use std::process::Command;
+ use std::sync::Arc;
+-use std::sync::atomic::{AtomicUsize, Ordering};
+-use std::time::{Duration, SystemTime, UNIX_EPOCH};
++use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
++use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
+ use chatmux_relay::config::ManagedEvents;
+ use chatmux_relay::journal_forwarder;
+@@ -24,6 +24,7 @@ enum HttpMode {
+     Ack,
+     Stall,
++    Recover,
+ }
+ 
+ #[derive(Debug)]
+@@ -56,7 +57,7 @@ fn usage() -> ! {
+     eprintln!(
+         "usage: cargo run -p chatmux-relay --example fieldwork_journal_backlog -- \\
+          [--sessions N] [--records-per-session N] [--payload-bytes N] \\
+-         [--mode ack|stall] [--settle-millis N] [--load-millis N]"
++         [--mode ack|stall|recover] [--settle-millis N] [--load-millis N]"
+     );
+     std::process::exit(2);
+ }
+@@ -80,6 +81,7 @@ fn parse_options() -> Options {
+                 options.mode = match value().as_str() {
+                     "ack" => HttpMode::Ack,
+                     "stall" => HttpMode::Stall,
++                    "recover" => HttpMode::Recover,
+                     _ => usage(),
+                 }
+             }
+@@ -96,6 +98,9 @@ fn parse_options() -> Options {
+     if options.sessions == 0 || options.records_per_session == 0 || options.payload_bytes == 0 {
+         usage();
+     }
++    if options.mode == HttpMode::Recover && options.load_millis.is_none() {
++        usage();
++    }
+     options
+ }
+@@ -177,6 +182,7 @@ async fn run_fake_session(
+     generated: Arc<AtomicUsize>,
+     completed: Arc<AtomicUsize>,
++    producer_cancellation: CancellationToken,
+     cancellation: CancellationToken,
+ ) -> io::Result<()> {
+@@ -245,6 +251,7 @@ async fn run_fake_session(
+         });
+         let result = tokio::select! {
+             _ = cancellation.cancelled() => return Ok(()),
++            _ = producer_cancellation.cancelled() => break,
+             result = write_json_line(&mut write_half, &envelope) => result,
+         };
+         result?;
+@@ -256,7 +263,7 @@ async fn run_fake_session(
+     Ok(())
+ }
+ 
+-async fn read_http_request(stream: &mut TcpStream) -> io::Result<()> {
++async fn read_http_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+     const MAX_REQUEST: usize = 8 * 1024 * 1024;
+     let mut bytes = Vec::new();
+@@ -307,21 +314,54 @@ async fn read_http_request(stream: &mut TcpStream) -> io::Result<()> {
+             return Err(io::Error::new(io::ErrorKind::InvalidData, "HTTP request too large"));
+         }
+     }
+-    Ok(())
++    Ok(bytes[header_end..required].to_vec())
++}
++
++fn http_record_count(body: &[u8]) -> usize {
++    serde_json::from_slice::<Value>(body)
++        .ok()
++        .and_then(|value| value.get("sessions").and_then(Value::as_array).cloned())
++        .map(|sessions| {
++            sessions
++                .iter()
++                .map(|session| session.get("records").and_then(Value::as_array).map_or(0, Vec::len))
++                .sum()
++        })
++        .unwrap_or(0)
++}
++
++async fn write_http_ack(stream: &mut TcpStream) -> io::Result<()> {
++    let body = br#"{"cursors":{}}"#;
++    let response = format!(
++        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
++        body.len()
++    );
++    stream.write_all(response.as_bytes()).await?;
++    stream.write_all(body).await?;
++    stream.shutdown().await
+ }
+ 
+ async fn handle_http(
+     mut stream: TcpStream,
+     mode: HttpMode,
+     requests: Arc<AtomicUsize>,
++    delivered_records: Arc<AtomicUsize>,
++    recovery_wake: Arc<tokio::sync::Notify>,
++    recovered: Arc<AtomicBool>,
+     cancellation: CancellationToken,
+ ) -> io::Result<()> {
+-    read_http_request(&mut stream).await?;
++    let body = read_http_request(&mut stream).await?;
++    let record_count = http_record_count(&body);
+     requests.fetch_add(1, Ordering::SeqCst);
+     match mode {
+         HttpMode::Stall => {
+             cancellation.cancelled().await;
+         }
+         HttpMode::Ack => {
+-            let body = br#"{"cursors":{}}"#;
+-            let response = format!(
+-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+-                body.len()
+-            );
+-            stream.write_all(response.as_bytes()).await?;
+-            stream.write_all(body).await?;
+-            stream.shutdown().await?;
++            write_http_ack(&mut stream).await?;
++            delivered_records.fetch_add(record_count, Ordering::SeqCst);
++        }
++        HttpMode::Recover => {
++            if !recovered.load(Ordering::SeqCst) {
++                let mut wake = Box::pin(recovery_wake.notified());
++                wake.as_mut().enable();
++                if !recovered.load(Ordering::SeqCst) {
++                    tokio::select! {
++                        _ = cancellation.cancelled() => return Ok(()),
++                        _ = &mut wake => {}
++                    }
++                }
++            }
++            write_http_ack(&mut stream).await?;
++            delivered_records.fetch_add(record_count, Ordering::SeqCst);
+         }
+     }
+     Ok(())
+@@ -331,6 +371,9 @@ async fn run_http_server(
+     listener: TcpListener,
+     mode: HttpMode,
+     requests: Arc<AtomicUsize>,
++    delivered_records: Arc<AtomicUsize>,
++    recovery_wake: Arc<tokio::sync::Notify>,
++    recovered: Arc<AtomicBool>,
+     cancellation: CancellationToken,
+ ) -> io::Result<()> {
+@@ -341,9 +384,12 @@ async fn run_http_server(
+         let (stream, _) = accepted;
+         let requests = requests.clone();
++        let delivered_records = delivered_records.clone();
++        let recovery_wake = recovery_wake.clone();
++        let recovered = recovered.clone();
+         let cancellation = cancellation.clone();
+         tokio::spawn(async move {
+-            let _ = handle_http(stream, mode, requests, cancellation).await;
++            let _ = handle_http(stream, mode, requests, delivered_records, recovery_wake, recovered, cancellation).await;
+         });
+     }
+ }
+@@ -381,9 +427,13 @@ async fn main() -> anyhow::Result<()> {
+     let generated = Arc::new(AtomicUsize::new(0));
+     let completed = Arc::new(AtomicUsize::new(0));
+     let requests = Arc::new(AtomicUsize::new(0));
++    let delivered_records = Arc::new(AtomicUsize::new(0));
++    let producer_cancellation = CancellationToken::new();
++    let recovery_wake = Arc::new(tokio::sync::Notify::new());
++    let recovered = Arc::new(AtomicBool::new(false));
+     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+ 
+     for index in 0..options.sessions {
+@@ -394,6 +444,7 @@ async fn main() -> anyhow::Result<()> {
+         let generated = generated.clone();
+         let completed = completed.clone();
++        let producer_cancellation = producer_cancellation.clone();
+         let cancellation = cancellation.clone();
+         let records = options.records_per_session;
+@@ -408,6 +459,7 @@ async fn main() -> anyhow::Result<()> {
+                 generated,
+                 completed,
++                producer_cancellation,
+                 cancellation,
+             )
+@@ -423,10 +475,13 @@ async fn main() -> anyhow::Result<()> {
+     {
+         let requests = requests.clone();
++        let delivered_records = delivered_records.clone();
++        let recovery_wake = recovery_wake.clone();
++        let recovered = recovered.clone();
+         let cancellation = cancellation.clone();
+         let mode = options.mode;
+         tasks.push(tokio::spawn(async move {
+-            if let Err(error) = run_http_server(http_listener, mode, requests, cancellation).await {
++            if let Err(error) = run_http_server(http_listener, mode, requests, delivered_records, recovery_wake, recovered, cancellation).await {
+                 eprintln!("fake HTTP server failed: {error}");
+             }
+@@ -449,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
+ 
+     wait_for_counter(&accepted, expected_active, Duration::from_secs(10), "accepted sessions").await?;
+ 
+-    if options.mode == HttpMode::Stall {
++    if matches!(options.mode, HttpMode::Stall | HttpMode::Recover) {
+         wait_for_counter(&requests, 1, Duration::from_secs(10), "first HTTP POST").await?;
+     }
+@@ -457,6 +512,10 @@ async fn main() -> anyhow::Result<()> {
+     if let Some(load_millis) = options.load_millis {
+         tokio::time::sleep(Duration::from_millis(load_millis)).await;
++        if options.mode == HttpMode::Recover {
++            producer_cancellation.cancel();
++            wait_for_counter(&completed, expected_active, Duration::from_secs(5), "stopped producers").await?;
++        }
+     } else {
+@@ -469,10 +528,34 @@ async fn main() -> anyhow::Result<()> {
+     let http_requests = requests.load(Ordering::SeqCst);
+     let loaded_generated_records = generated.load(Ordering::SeqCst);
+     let loaded_completed_producers = completed.load(Ordering::SeqCst);
++    let loaded_delivered_records = delivered_records.load(Ordering::SeqCst);
++
++    let mut recovery_settle_millis = None;
++    let mut recovered_rss_kib = None;
++    let mut recovered_fds = None;
++    let mut recovered_http_requests = None;
++    let mut recovered_delivered_records = None;
++    if options.mode == HttpMode::Recover {
++        let target_records = loaded_generated_records;
++        let started = Instant::now();
++        recovered.store(true, Ordering::SeqCst);
++        recovery_wake.notify_waiters();
++        wait_for_counter(
++            &delivered_records,
++            target_records,
++            Duration::from_secs(30),
++            "records delivered after HTTP recovery",
++        )
++        .await?;
++        recovery_settle_millis = Some(started.elapsed().as_millis() as u64);
++        tokio::time::sleep(Duration::from_millis(options.settle_millis)).await;
++        recovered_rss_kib = current_rss_kib();
++        recovered_fds = current_fd_count();
++        recovered_http_requests = Some(requests.load(Ordering::SeqCst));
++        recovered_delivered_records = Some(delivered_records.load(Ordering::SeqCst));
++    }
+ 
+     cancellation.cancel();
+@@ -486,7 +569,11 @@ async fn main() -> anyhow::Result<()> {
+     let cleanup_fds = current_fd_count();
+ 
+     let output = json!({
+-        "mode": match options.mode { HttpMode::Ack => "ack", HttpMode::Stall => "stall" },
++        "mode": match options.mode {
++            HttpMode::Ack => "ack",
++            HttpMode::Stall => "stall",
++            HttpMode::Recover => "recover",
++        },
+         "requested_sessions": options.sessions,
+@@ -498,6 +585,11 @@ async fn main() -> anyhow::Result<()> {
+         "generated_records_at_measurement": loaded_generated_records,
+         "completed_producers_at_measurement": loaded_completed_producers,
++        "delivered_records_at_measurement": loaded_delivered_records,
++        "recovery_settle_millis": recovery_settle_millis,
++        "recovered_delivered_records": recovered_delivered_records,
++        "recovered_http_requests": recovered_http_requests,
+         "http_requests": http_requests,
+@@ -508,6 +600,8 @@ async fn main() -> anyhow::Result<()> {
+         "baseline_rss_kib": baseline_rss_kib,
+         "loaded_rss_kib": loaded_rss_kib,
++        "recovered_rss_kib": recovered_rss_kib,
+         "cleanup_rss_kib": cleanup_rss_kib,
+         "baseline_fds": baseline_fds,
+         "loaded_fds": loaded_fds,
++        "recovered_fds": recovered_fds,
+         "cleanup_fds": cleanup_fds,
+     });
