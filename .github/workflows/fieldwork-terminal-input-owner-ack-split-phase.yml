@@ -17,6 +17,7 @@ jobs:
         with:
           persist-credentials: true
           ref: ${{ github.sha }}
+          fetch-depth: 0
           submodules: false
 
       - name: Require current-main baseline ancestry
