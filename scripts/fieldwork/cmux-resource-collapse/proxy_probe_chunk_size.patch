@@ -1,0 +1,23 @@
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+@@ -25,7 +25,10 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             Int(environment["CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION"] ?? "1048576") ?? 1_048_576
+         )
+         let drainsLocalClient = environment["CMUX_FIELDWORK_PROXY_DRAIN"] == "1"
+-        let chunkBytes = 32 * 1024
++        let chunkBytes = max(
++            1,
++            Int(environment["CMUX_FIELDWORK_PROXY_CHUNK_BYTES"] ?? "32768") ?? 32 * 1024
++        )
+         let rounds = max(1, (bytesPerSession + chunkBytes - 1) / chunkBytes)
+ 
+         let rpcClient = ProbeRPCClient()
+@@ -86,6 +89,7 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             "sessions": sessionCount,
+             "drain": drainsLocalClient,
+             "bytes_per_session": rounds * chunkBytes,
++            "chunk_bytes": chunkBytes,
+             "offered_bytes": offeredBytes,
+             "drained_bytes": drainedBytes,
+             "enqueue_millis": enqueueMillis,
