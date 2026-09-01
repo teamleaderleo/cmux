@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,19 +25,19 @@ func fieldworkLeaseTokenHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func installPTYLeaseThroughAdminForTest(t *testing.T, cfg wsPTYServerConfig, adminToken string, lease *wsLease) {
-	t.Helper()
+func installPTYLeaseThroughAdminForTest(cfg wsPTYServerConfig, adminToken string, lease *wsLease) error {
 	body, err := json.Marshal(wsLeaseInstallRequest{PTYLease: lease})
 	if err != nil {
-		t.Fatalf("marshal lease install: %v", err)
+		return fmt.Errorf("marshal lease install: %w", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/admin/leases", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	recorder := httptest.NewRecorder()
 	handleWebSocketLeaseInstall(recorder, req, cfg)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("install replacement lease: status=%d body=%q", recorder.Code, recorder.Body.String())
+		return fmt.Errorf("install replacement lease: status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
+	return nil
 }
 
 func TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration(t *testing.T) {
@@ -100,7 +101,10 @@ func TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration(t *testing.
 			}
 			break
 		}
-		installPTYLeaseThroughAdminForTest(t, cfg, adminToken, leaseB)
+		if err := installPTYLeaseThroughAdminForTest(cfg, adminToken, leaseB); err != nil {
+			installErr <- err
+			return
+		}
 		close(installed)
 	}()
 
@@ -114,7 +118,7 @@ func TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration(t *testing.
 
 	select {
 	case err := <-installErr:
-		t.Fatalf("wait for lease A read-close: %v", err)
+		t.Fatalf("publish replacement B after lease A read-close: %v", err)
 	case <-installed:
 	case <-time.After(10 * time.Second):
 		t.Fatal("replacement B was not published")
@@ -173,7 +177,9 @@ func TestLeaseInstallAfterSingleUseConsumptionSurvives(t *testing.T) {
 	if err := consumeWebSocketLease(leasePath, wsAuthFrame{Token: "token-a", SessionID: "settled-a"}); err != nil {
 		t.Fatalf("consume settled lease A: %v", err)
 	}
-	installPTYLeaseThroughAdminForTest(t, cfg, adminToken, leaseB)
+	if err := installPTYLeaseThroughAdminForTest(cfg, adminToken, leaseB); err != nil {
+		t.Fatalf("install replacement B after A settled: %v", err)
+	}
 
 	data, err := os.ReadFile(leasePath)
 	if err != nil {
