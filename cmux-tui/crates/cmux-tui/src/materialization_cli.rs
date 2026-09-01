@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 const MARKER_FILE: &str = "cloud-materialization.json";
 const MARKER_LOCK_FILE: &str = "cloud-materialization.lock";
+const USAGE: &str = "usage: cmux-tui __materialize-new-machine --workspace-state-root <path> --remote-state-dir <path> --materialization-id <id> [--inherit-enrollments]";
 
 #[derive(Debug)]
 struct Args {
@@ -44,6 +45,10 @@ struct MaterializationMarker {
 /// Cloud control plane needs to distinguish "same machine resurrected" from
 /// "copied state is becoming a new machine".
 pub fn run(raw_args: &[String]) -> i32 {
+    if raw_args.iter().any(|arg| matches!(arg.as_str(), "--help" | "-h")) {
+        println!("{USAGE}");
+        return 0;
+    }
     match run_inner(raw_args) {
         Ok(()) => 0,
         Err(error) => {
@@ -158,17 +163,6 @@ fn parse_args(raw_args: &[String]) -> anyhow::Result<Args> {
                 materialization_id = raw_args.get(index).cloned();
             }
             "--inherit-enrollments" => enrollment_policy = MaterializedEnrollmentPolicy::Inherit,
-            "--help" | "-h" => {
-                println!(
-                    "usage: cmux-tui __materialize-new-machine --workspace-state-root <path> --remote-state-dir <path> --materialization-id <id> [--inherit-enrollments]"
-                );
-                return Ok(Args {
-                    workspace_state_root: PathBuf::new(),
-                    remote_state_dir: PathBuf::new(),
-                    materialization_id: "help".into(),
-                    enrollment_policy,
-                });
-            }
             other => bail!("unknown argument {other:?}"),
         }
         index += 1;
