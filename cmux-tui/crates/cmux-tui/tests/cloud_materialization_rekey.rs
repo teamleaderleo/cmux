@@ -1,8 +1,9 @@
 #![cfg(unix)]
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use cmux_remote::crypto::{
     AuthKind, AuthRequest, InboundAuthEvidence, NetworkPeer, ServerAuthenticator, StaticIdentity,
@@ -77,6 +78,23 @@ fn materialize(
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn wait_for_committed_marker(path: &std::path::Path, child: &mut std::process::Child) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(data) = std::fs::read(path)
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&data)
+            && value["phase"] == "committed"
+        {
+            return;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!("cmux-tui server exited before materialization committed: {status}");
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for materialization marker");
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]
@@ -178,5 +196,52 @@ async fn inherited_enrollment_is_explicit_and_keeps_device_authority() {
         .await
         .expect("explicit inherited-enrollment policy should retain copied device authority");
     assert_eq!(grant.device_id, enrolled_id);
+    database.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cloud_create_token_rekeys_before_server_start_opens_copied_state() {
+    let home = tempfile::tempdir().unwrap();
+    let state_home = home.path().join(".local").join("state");
+    let workspace_state = state_home.join("cmux-tui").join("sessions");
+    let remote_state = state_home.join("cmux").join("remote");
+
+    let registry = WorkspaceRegistry::open(&workspace_state, "cloud").unwrap();
+    let source_machine = registry.machine_id().clone();
+    let source_session = registry.session_id().clone();
+    drop(registry);
+    let (source_fingerprint, client, enrolled_id) = enroll_device(&remote_state).await;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cmux-tui"))
+        .args(["server", "start", "--session", "cloud"])
+        .env("HOME", home.path())
+        .env_remove("XDG_STATE_HOME")
+        .env("CMUX_TUI_MATERIALIZATION_ID", "provider-create-token")
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let marker = workspace_state.join("cloud-materialization.json");
+    wait_for_committed_marker(&marker, &mut child);
+    child.kill().unwrap();
+    let _ = child.wait().unwrap();
+
+    let registry = WorkspaceRegistry::open(&workspace_state, "cloud").unwrap();
+    assert_ne!(registry.machine_id(), &source_machine);
+    assert_eq!(registry.session_id(), &source_session);
+    drop(registry);
+
+    let database = AuthDatabase::load_or_create(&remote_state, "copy", false).unwrap();
+    assert_ne!(database.identity().fingerprint(), source_fingerprint);
+    assert!(!database.device_is_active(&enrolled_id).await);
+    assert!(
+        database
+            .authorize(request(AuthKind::Enrolled, None, &client))
+            .await
+            .is_err()
+    );
     database.shutdown().await.unwrap();
 }
