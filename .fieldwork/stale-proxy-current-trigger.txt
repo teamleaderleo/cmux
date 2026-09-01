@@ -1,0 +1,4 @@
+Current-main stale proxy verifier.
+Base: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+Red: e9ea500cebfba753444e961e2ef9d6af079ec096
+Green: 8daa014321001d9aec128a9112720fb74e2ae11d
