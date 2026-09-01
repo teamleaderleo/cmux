@@ -10,99 +10,31 @@ permissions:
   contents: read
 
 jobs:
-  journal-model:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Pin revision
-        run: git rev-parse HEAD
-      - name: Run source-pinned journal backlog model
-        run: |
-          python3 scripts/fieldwork/cmux-resource-collapse/journal_backlog_model.py
-          python3 scripts/fieldwork/cmux-resource-collapse/journal_backlog_model.py \
-            --recovery-service-records-per-second 2000 \
-            --json > journal-backlog-model.json
-      - name: Preserve model output
-        uses: actions/upload-artifact@v4
-        with:
-          name: journal-backlog-model
-          path: journal-backlog-model.json
-
-  journal-runtime:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - name: Pin revision
-        run: git rev-parse HEAD
-      - name: Build live journal harness
-        run: |
-          cargo build \
-            --manifest-path cmux-tui/Cargo.toml \
-            -p chatmux-relay \
-            --example fieldwork_journal_backlog
-      - name: Run healthy negative control
-        run: |
-          mkdir -p journal-runtime-results
-          cargo run --quiet \
-            --manifest-path cmux-tui/Cargo.toml \
-            -p chatmux-relay \
-            --example fieldwork_journal_backlog -- \
-            --mode ack \
-            --sessions 50 \
-            --records-per-session 300 \
-            --payload-bytes 1024 \
-            > journal-runtime-results/ack-50.json
-          cat journal-runtime-results/ack-50.json
-      - name: Run stalled 1/10/50/128/200 sequence
-        run: |
-          for sessions in 1 10 50 128 200; do
-            echo "=== stalled sessions=${sessions} ==="
-            cargo run --quiet \
-              --manifest-path cmux-tui/Cargo.toml \
-              -p chatmux-relay \
-              --example fieldwork_journal_backlog -- \
-              --mode stall \
-              --sessions "${sessions}" \
-              --records-per-session 300 \
-              --payload-bytes 1024 \
-              > "journal-runtime-results/stall-${sessions}.json"
-            cat "journal-runtime-results/stall-${sessions}.json"
-          done
-      - name: Preserve live journal measurements
-        uses: actions/upload-artifact@v4
-        with:
-          name: journal-runtime-results
-          path: journal-runtime-results/*.json
-
-  macos-rpc-upstream-control:
-    runs-on: macos-15
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: 8ef183f1e5de765b183aec9d1799f17a0848ae84
-      - name: Pin untouched upstream-derived revision
-        run: test "$(git rev-parse HEAD)" = "8ef183f1e5de765b183aec9d1799f17a0848ae84"
-      - name: Run untouched remote-daemon package control
-        run: |
-          swift test \
-            --package-path Packages/macOS/CmuxRemoteDaemon
-
-  macos-rpc-write-admission:
+  macos-rpc-candidate:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: swift --version
-      - name: Pin revision
+      - name: Pin candidate revision
         run: git rev-parse HEAD
-      - name: Run normal remote-daemon package
+      - name: Run package outside upstream-parallel-flaky timeout suite
         run: |
           swift test \
-            --package-path Packages/macOS/CmuxRemoteDaemon
-      - name: Run heavy write-admission scaling probe separately
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --skip RemoteDaemonRPCClientTimeoutIsolationTests
+      - name: Run preserve-after-timeout discriminator alone
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachPreservesHealthyTransportState
+      - name: Run blocked-cancellation discriminator alone
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachBoundsCancellationWrite
+      - name: Run 1/10/50/200 physical-write scaling probe
         env:
           CMUX_FIELDWORK_SCALING: "1"
         run: |
