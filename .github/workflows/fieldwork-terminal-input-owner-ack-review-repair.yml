@@ -1,0 +1,180 @@
+name: Fieldwork terminal input ACK review repair
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-review-repair-run]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          submodules: false
+
+      - name: Reset to reviewed candidate
+        run: |
+          git config user.name Fieldwork
+          git config user.email fieldwork@users.noreply.github.com
+          git checkout --detach a7fba4766f359963a375b67c6c62818240f53dda
+
+      - name: Init build dependencies
+        run: |
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize reviewed candidate
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/before.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          failures=set(); active=False
+          for line in Path('/tmp/before.log').read_text(errors='replace').splitlines():
+              if line.strip() == 'failures:': active=True; continue
+              if active and line.startswith('test result:'): break
+              if active and re.match(r'^    [A-Za-z0-9_].*::', line): failures.add(line.strip())
+          Path('/tmp/before-failures.txt').write_text(''.join(f'{x}\n' for x in sorted(failures)))
+          PY
+          echo "before status=$status"
+          cat /tmp/before-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/before.log
+            test -s /tmp/before-failures.txt
+          fi
+
+      - name: Apply repair
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def r(path, old, new):
+              p=Path(path); text=p.read_text(); count=text.count(old)
+              if count != 1: raise SystemExit(f'{path}: expected one match, found {count}')
+              p.write_text(text.replace(old,new,1))
+
+          surface='cmux-tui/crates/cmux-tui-core/src/surface.rs'
+          r(surface,
+            '}\n\nconst ATTACH_STREAM_CAPACITY: usize = 256;',
+            '''}\n\n#[cfg(unix)]\nfn is_hosted_control_response(frame: &Frame) -> bool {\n    matches!(\n        frame.kind,\n        MessageKind::Capability\n            | MessageKind::CellPixelSizeAck\n            | MessageKind::KittyGraphicsLimitsAck\n            | MessageKind::ClearHistoryAck\n            | MessageKind::TerminateAck\n            | MessageKind::DetachAck\n            | MessageKind::InputAck\n    ) && frame.request_id != 0\n}\n\nconst ATTACH_STREAM_CAPACITY: usize = 256;''')
+          r(surface,
+            '''                        if matches!(\n                            frame.kind,\n                            MessageKind::Capability\n                                | MessageKind::CellPixelSizeAck\n                                | MessageKind::KittyGraphicsLimitsAck\n                                | MessageKind::ClearHistoryAck\n                                | MessageKind::TerminateAck\n                                | MessageKind::DetachAck\n                        ) && frame.request_id != 0\n                        {''',
+            '                        if is_hosted_control_response(&frame) {')
+          r(surface,
+            '    use crate::MuxEvent;\n\n    #[test]\n    fn agent_browser_provider_uses_a_terminal_local_daemon_session() {',
+            '''    use crate::MuxEvent;\n\n    #[cfg(unix)]\n    #[test]\n    fn hosted_input_ack_is_a_targeted_control_response() {\n        let mut frame = Frame::new(MessageKind::InputAck, Vec::new());\n        frame.request_id = 7;\n        assert!(is_hosted_control_response(&frame));\n        frame.request_id = 0;\n        assert!(!is_hosted_control_response(&frame));\n        let mut output = Frame::new(MessageKind::Output, Vec::new());\n        output.request_id = 7;\n        assert!(!is_hosted_control_response(&output));\n    }\n\n    #[test]\n    fn agent_browser_provider_uses_a_terminal_local_daemon_session() {''')
+
+          runtime='cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs'
+          r(runtime,
+            '        if record.record_version == 1 {\n            if record.host_pid != 0',
+            '''        if record.record_version < HOST_RECORD_VERSION && record.supports_input_ack {\n            anyhow::bail!("legacy terminal-host record advertises input receipts");\n        }\n        if record.record_version == 1 {\n            if record.host_pid != 0''')
+          r(runtime,
+            '            validate_terminal_host_record(&legacy_path, &legacy).unwrap();\n            assert_eq!(',
+            '''            validate_terminal_host_record(&legacy_path, &legacy).unwrap();\n\n            let mut serialized_legacy = serde_json::to_value(&legacy).unwrap();\n            serialized_legacy.as_object_mut().unwrap().remove("supports_input_ack");\n            let decoded_legacy: TerminalHostRecord = serde_json::from_value(serialized_legacy).unwrap();\n            assert!(!decoded_legacy.supports_input_ack);\n\n            let mut impossible_ack_legacy = legacy.clone();\n            impossible_ack_legacy.supports_input_ack = true;\n            assert!(validate_terminal_host_record(&legacy_path, &impossible_ack_legacy).is_err());\n\n            assert_eq!(''')
+
+          effects='cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs'
+          r(effects,
+            "pub(super) fn recover_resource_effects(transaction: &Transaction<'_>) -> anyhow::Result<()> {",
+            '''/// Success receipts created before owner input acknowledgements cannot prove\n/// that the PTY effect crossed the old mux/host crash boundary. Preserve\n/// committed failures and downgrade historical terminal-input successes.\npub(super) fn quarantine_pre_input_ack_terminal_successes(\n    transaction: &Transaction<'_>,\n) -> anyhow::Result<usize> {\n    let candidates = {\n        let mut statement = transaction.prepare(\n            "SELECT idempotency_key, operation, intent_json, outcome_json\n             FROM resource_effect_receipts\n             WHERE state = 'committed' AND operation GLOB 'terminal.input.*'\n             ORDER BY idempotency_key",\n        )?;\n        statement.query_map([], |row| {\n            Ok((\n                row.get::<_, String>(0)?, row.get::<_, String>(1)?,\n                row.get::<_, String>(2)?, row.get::<_, String>(3)?,\n            ))\n        })?.collect::<Result<Vec<_>, _>>()?\n    };\n    let mut quarantined = 0;\n    for (idempotency_key, operation, intent_json, outcome_json) in candidates {\n        let outcome: ResourceEffectOutcome = serde_json::from_str(&outcome_json)?;\n        if !matches!(outcome, ResourceEffectOutcome::Success(_)) { continue; }\n        let changed = transaction.execute(\n            "UPDATE resource_effect_receipts\n             SET state = 'indeterminate', outcome_json = NULL, committed_revision = NULL\n             WHERE idempotency_key = ?1 AND state = 'committed'",\n            [&idempotency_key],\n        )?;\n        anyhow::ensure!(changed == 1, "pre-input-ack effect receipt changed during quarantine");\n        transaction.execute(\n            "DELETE FROM resource_input_receipt_completions WHERE idempotency_key = ?1",\n            [&idempotency_key],\n        )?;\n        append_resource_effect_journal_record(\n            transaction, &idempotency_key, &operation,\n            &serde_json::from_str(&intent_json)?, None,\n            ResourceEffectJournalState::Indeterminate,\n        )?;\n        quarantined += 1;\n    }\n    Ok(quarantined)\n}\n\npub(super) fn recover_resource_effects(transaction: &Transaction<'_>) -> anyhow::Result<()> {''')
+          r(effects,
+            '    #[test]\n    fn pending_effect_resumes_and_committed_effect_replays() {',
+            '''    #[test]\n    fn pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed() {\n        let mut registry = WorkspaceRegistry::in_memory("pre-input-ack-quarantine").unwrap();\n        let intent = json!({\n            "terminal_id":"term_11111111111111111111111111111111",\n            "fields":{"$cmux_redacted":{"kind":"request_fields","version":1}},\n        });\n        let success_fp = json!({"request":"success"});\n        let failure_fp = json!({"request":"failure"});\n        for (key, fp, outcome) in [\n            ("pre-input-ack-success", &success_fp, ResourceEffectOutcome::Success(json!({}))),\n            (\n                "pre-input-ack-failure",\n                &failure_fp,\n                ResourceEffectOutcome::Failure(ResourceError::operation_failed(\n                    "terminal.input.write", "known pre-effect failure", json!({}),\n                )),\n            ),\n        ] {\n            registry.prepare_resource_effect(\n                key, "terminal.input.write", fp, &intent, None, None,\n            ).unwrap();\n            registry.mark_resource_effect_executing(key, "terminal.input.write", fp).unwrap();\n            registry.commit_resource_effect(key, "terminal.input.write", fp, &outcome, None).unwrap();\n        }\n        let failure = match registry.lookup_resource_effect(\n            "pre-input-ack-failure", "terminal.input.write", &failure_fp,\n        ).unwrap().unwrap() {\n            ResourceEffectPreparation::Committed { outcome: ResourceEffectOutcome::Failure(error), .. } => error,\n            other => panic!("unexpected failure receipt before quarantine: {other:?}"),\n        };\n        let tx = registry.connection.transaction().unwrap();\n        assert_eq!(quarantine_pre_input_ack_terminal_successes(&tx).unwrap(), 1);\n        tx.commit().unwrap();\n        assert_eq!(registry.lookup_resource_effect(\n            "pre-input-ack-success", "terminal.input.write", &success_fp,\n        ).unwrap(), Some(ResourceEffectPreparation::Indeterminate));\n        assert_eq!(registry.lookup_resource_effect(\n            "pre-input-ack-failure", "terminal.input.write", &failure_fp,\n        ).unwrap(), Some(ResourceEffectPreparation::Committed {\n            outcome: ResourceEffectOutcome::Failure(failure), revision: 0,\n        }));\n        let completion_count: i64 = registry.connection.query_row(\n            "SELECT COUNT(*) FROM resource_input_receipt_completions WHERE idempotency_key = ?1",\n            ["pre-input-ack-success"], |row| row.get(0),\n        ).unwrap();\n        assert_eq!(completion_count, 0);\n        let states = registry.session_journal_after(0, 64).unwrap().records.into_iter()\n            .filter(|record| record.payload["idempotency_key"] == "pre-input-ack-success")\n            .map(|record| record.payload["state"].as_str().unwrap().to_string())\n            .collect::<Vec<_>>();\n        assert_eq!(states, vec!["succeeded", "indeterminate"]);\n    }\n\n    #[test]\n    fn pending_effect_resumes_and_committed_effect_replays() {''')
+
+          registry='cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs'
+          r(registry,
+            '''use effect_store::{\n    create_resource_effect_schema, delete_legacy_sensitive_effect_receipts,\n    initialize_resource_input_receipt_retention, recover_resource_effects,\n};''',
+            '''use effect_store::{\n    create_resource_effect_schema, delete_legacy_sensitive_effect_receipts,\n    initialize_resource_input_receipt_retention, quarantine_pre_input_ack_terminal_successes,\n    recover_resource_effects,\n};''')
+          r(registry,
+            '''// projections one owned envelope instead of storing anonymous projection JSON.\nconst SCHEMA_VERSION: i64 = 14;''',
+            '''// projections one owned envelope instead of storing anonymous projection JSON.\n// Version 15 quarantines terminal-input successes recorded before PTY-owner acknowledgements.\nconst SCHEMA_VERSION: i64 = 15;\nconst INPUT_ACK_RECEIPT_SCHEMA_VERSION: i64 = 15;''')
+          r(registry, '            Some(9..=13) => {', '            Some(9..=14) => {')
+          r(registry,
+            '        if migrate_existing_registry && resource_tabs_needs_multiview_normalization(&connection)? {',
+            '''        if stored_schema.is_some_and(|schema| schema < INPUT_ACK_RECEIPT_SCHEMA_VERSION) {\n            let tx = connection.unchecked_transaction()?;\n            quarantine_pre_input_ack_terminal_successes(&tx)?;\n            tx.commit()?;\n        }\n        if migrate_existing_registry && resource_tabs_needs_multiview_normalization(&connection)? {''')
+          PY
+          git diff --check
+          cd cmux-tui
+          cargo fmt --all
+          cd ..
+          git diff --check
+
+      - name: Require scoped product delta
+        run: |
+          git diff --name-only a7fba4766f359963a375b67c6c62818240f53dda | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Run focused regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib hosted_input_ack_is_a_targeted_control_response --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib legacy_record_is_adoptable_shape_but_never_unsafely_reaped --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Check specs and bindings
+        run: |
+          python3 cmux-tui/scripts/test_check_spec_inventory.py
+          python3 cmux-tui/scripts/check-spec-inventory.py
+          python3 cmux-tui/scripts/test_check_resource_api_boundary.py
+          python3 cmux-tui/scripts/check-resource-api-boundary.py
+          python3 cmux-tui/bindings/codegen/generate.py --check
+
+      - name: Require no new full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/after.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          failures=set(); active=False
+          for line in Path('/tmp/after.log').read_text(errors='replace').splitlines():
+              if line.strip() == 'failures:': active=True; continue
+              if active and line.startswith('test result:'): break
+              if active and re.match(r'^    [A-Za-z0-9_].*::', line): failures.add(line.strip())
+          Path('/tmp/after-failures.txt').write_text(''.join(f'{x}\n' for x in sorted(failures)))
+          PY
+          echo "after status=$status"
+          cat /tmp/after-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/after.log
+            test -s /tmp/after-failures.txt
+          fi
+          comm -13 /tmp/before-failures.txt /tmp/after-failures.txt > /tmp/new-failures.txt
+          test ! -s /tmp/new-failures.txt || { cat /tmp/new-failures.txt >&2; exit 1; }
+
+      - name: Publish repaired candidate
+        run: |
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs \
+                  cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs
+          git commit -m "fix(cmux-tui): complete terminal input owner ack repair"
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-review-repair-candidate --force
+          echo "repaired=$(git rev-parse HEAD)"
