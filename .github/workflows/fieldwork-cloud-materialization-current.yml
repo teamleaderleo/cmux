@@ -31,13 +31,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           submodules: false
 
-      - name: Require exact PR head
-        env:
-          EXPECTED: ${{ github.event.pull_request.head.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
-
-      - name: Require current upstream parent
-        run: test "$(git rev-parse HEAD^)" = "544c0e0ff4f3aebb1a34eb8503c7ccc1f33a2de8"
+      - name: Require exact candidate ancestry
+        run: |
+          test "$(git rev-parse HEAD^)" = "695f982c36b6d56e6ec02d05763764e24817ed50"
+          test "$(git rev-parse HEAD^^)" = "544c0e0ff4f3aebb1a34eb8503c7ccc1f33a2de8"
 
       - name: Init Ghostty submodule
         run: git submodule update --init --depth 1 ghostty
@@ -70,13 +67,10 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Require exact PR head
-        env:
-          EXPECTED: ${{ github.event.pull_request.head.sha }}
-        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
-
-      - name: Require current upstream parent
-        run: test "$(git rev-parse HEAD^)" = "544c0e0ff4f3aebb1a34eb8503c7ccc1f33a2de8"
+      - name: Require exact candidate ancestry
+        run: |
+          test "$(git rev-parse HEAD^)" = "695f982c36b6d56e6ec02d05763764e24817ed50"
+          test "$(git rev-parse HEAD^^)" = "544c0e0ff4f3aebb1a34eb8503c7ccc1f33a2de8"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
