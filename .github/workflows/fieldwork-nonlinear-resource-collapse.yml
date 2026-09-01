@@ -10,6 +10,47 @@ permissions:
   contents: read
 
 jobs:
+  journal-unpatched-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin unpatched revision
+        run: git rev-parse HEAD
+      - name: Verify journal source remains upstream-pinned
+        run: |
+          test "$(git rev-parse HEAD:cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs)" = \
+            "$(git rev-parse 8ef183f1e5de765b183aec9d1799f17a0848ae84:cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs)"
+      - name: Build live journal harness
+        run: |
+          cargo build \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog
+      - name: Run stalled matched-duration scaling sequence
+        run: |
+          mkdir -p journal-unpatched-results
+          for sessions in 1 10 50 128 200; do
+            echo "=== unpatched stalled sessions=${sessions} ==="
+            cargo run --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog -- \
+              --mode stall \
+              --sessions "${sessions}" \
+              --records-per-session 1000000 \
+              --payload-bytes 1024 \
+              --load-millis 1500 \
+              --settle-millis 100 \
+              > "journal-unpatched-results/stall-${sessions}.json"
+            cat "journal-unpatched-results/stall-${sessions}.json"
+          done
+      - name: Preserve matched unpatched measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: journal-unpatched-results
+          path: journal-unpatched-results/*.json
+
   journal-backpressure-candidate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
