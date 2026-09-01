@@ -16,7 +16,7 @@ permissions:
 jobs:
   event-delivery-candidate:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain and revision
@@ -28,12 +28,34 @@ jobs:
           set -euo pipefail
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
-          if [[ -f scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch ]]; then
-            git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
-            git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
-          fi
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
           git diff --check
       - name: Run full remote-daemon package
         run: |
           swift test \
             --package-path Packages/macOS/CmuxRemoteDaemon
+      - name: Run 200 MiB healthy and blocked delivery probes
+        env:
+          CMUX_FIELDWORK_BOUNDED_DELIVERY: "1"
+          CMUX_FIELDWORK_BOUNDED_DELIVERY_TOTAL_BYTES: "209715200"
+        run: |
+          mkdir -p event-delivery-candidate-results
+          for kind in stream pty; do
+            for blocked in 0 1; do
+              echo "=== kind=${kind} blocked=${blocked} ===" | tee -a event-delivery-candidate-results/load.log
+              CMUX_FIELDWORK_BOUNDED_DELIVERY_KIND="$kind" \
+                CMUX_FIELDWORK_BOUNDED_DELIVERY_BLOCKED="$blocked" \
+                swift test \
+                  --skip-build \
+                  --package-path Packages/macOS/CmuxRemoteDaemon \
+                  --filter RemoteDaemonBoundedDeliveryLoadTests \
+                2>&1 | tee -a event-delivery-candidate-results/load.log
+            done
+          done
+      - name: Preserve event-delivery candidate measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-delivery-candidate-results
+          path: event-delivery-candidate-results/*.log
