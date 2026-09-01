@@ -26,7 +26,9 @@ jobs:
           git merge-base --is-ancestor a61624869fb9c27f4131ee4757e5e4e987f22580 HEAD
 
       - name: Apply split-phase repair
-        run: python3 .fieldwork/refine_terminal_input_owner_ack_split_phase.py
+        run: |
+          python3 .fieldwork/refine_terminal_input_owner_ack_split_phase.py
+          python3 .fieldwork/refine_terminal_input_owner_ack_split_phase_controls.py
 
       - name: Require exact product delta
         run: |
