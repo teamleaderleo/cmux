@@ -1,0 +1,68 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+@@ -130,6 +130,61 @@ struct RemoteDaemonEventDeliveryQueueTests {
+         #expect(terminal.wait(timeout: .now() + 2) == .success)
+         #expect(budget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
+     }
++
++    @Test("PTY overflow retires the attachment before terminal delivery")
++    func ptyOverflowRetiresBeforeTerminalDelivery() {
++        let client = makeDeliveryClient()
++        let deliveryQueue = DispatchQueue(label: "com.cmux.test.pty-event-delivery-retirement")
++        let deliveryGate = DispatchSemaphore(value: 0)
++        deliveryQueue.async { deliveryGate.wait() }
++        let budget = RemoteDaemonEventDeliveryBudget(maxPendingBytes: 8, maxPendingEvents: 8)
++        let terminal = DispatchSemaphore(value: 0)
++        let sessionID = "bounded-session"
++        let attachmentID = "bounded-attachment"
++        let token = "bounded-token"
++        let key = RemoteDaemonRPCClient.ptySubscriptionKey(
++            sessionID: sessionID,
++            attachmentID: attachmentID,
++            attachmentToken: token
++        )
++        let subscription = RemoteDaemonRPCClient.PTYSubscription(
++            queue: deliveryQueue,
++            handler: { event in
++                if case .error = event {
++                    client.unregisterPTY(
++                        sessionID: sessionID,
++                        attachmentID: attachmentID,
++                        attachmentToken: token
++                    )
++                    terminal.signal()
++                }
++            },
++            budget: budget,
++            limits: .init(maxPendingBytes: 4, maxPendingEvents: 2)
++        )
++        client.stateQueue.sync {
++            client.ptySubscriptions[key] = subscription
++        }
++        let payload = Data(repeating: 0x78, count: 4).base64EncodedString()
++        client.stateQueue.sync {
++            _ = client.consumePTYEventPayload([
++                "event": "pty.data",
++                "session_id": sessionID,
++                "attachment_id": attachmentID,
++                "attachment_token": token,
++                "data_base64": payload,
++            ])
++            _ = client.consumePTYEventPayload([
++                "event": "pty.data",
++                "session_id": sessionID,
++                "attachment_id": attachmentID,
++                "attachment_token": token,
++                "data_base64": payload,
++            ])
++        }
++        #expect(client.stateQueue.sync { client.ptySubscriptions[key] == nil })
++        #expect(budget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
++        deliveryGate.signal()
++        #expect(terminal.wait(timeout: .now() + 2) == .success)
++        #expect(budget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
++    }
+ }
+ 
+ private let fieldworkBoundedDeliveryEnabled =
