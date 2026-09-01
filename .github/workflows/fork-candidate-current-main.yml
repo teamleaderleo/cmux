@@ -12,7 +12,7 @@ permissions:
 env:
   UPSTREAM_BASE_SHA: 6b425641ae4d474e77854da535442af2a0d0a475
   RED_SHA: 4719143f4a21ab2442397efe70643435c1f604f6
-  GREEN_SHA: 1563ad3cf24d53f792e7eb54b85dcc1a9d12f013
+  GREEN_SHA: a732c5994bb2a698a7330bb0516210411d9ca298
   SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
   CMUX_SKIP_ZIG_BUILD: "1"
 
@@ -109,6 +109,9 @@ jobs:
               -only-testing:cmuxTests/RemoteTmuxAuthTests/sendKeysRejectsOverBudgetLogicalInputWithoutPartialDelivery \
               -only-testing:cmuxTests/RemoteTmuxAuthTests/sendKeysAcceptsRawAdmissionLimitWithProductionWriterBudget \
               test
+
+      - name: Run package framing tests
+        run: swift test --package-path Packages/macOS/CmuxRemoteSession --filter RemoteTmuxSendKeysBatchBuilderTests
 
       - name: Run package tests
         run: swift test --package-path Packages/macOS/CmuxRemoteSession
