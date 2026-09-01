@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BASE_SHA: eaa899cb20bd411019744fbd2bdedeb397f3070b
-  RED_SHA: f1a91ab9090295f04d6b8fffef7bf6a4cfdd0371
-  GREEN_SHA: 6cb48b5d96a9c2ce36cd699c5be3ca64050d52a0
+  BASE_SHA: 2ead47750ab2f47c13972d0709d99cdcbaa8ad73
+  RED_SHA: 80c54e08917a02ae91436a1495fe6296ea6c2bda
+  GREEN_SHA: 3f11ef644ce14d43e8086edb346dc4659a3e0c32
 
 jobs:
   verify:
