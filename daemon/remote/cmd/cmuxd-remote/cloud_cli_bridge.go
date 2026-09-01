@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const defaultCloudCLIBridgeSocketPath = "/tmp/cmux-cloud-cli.sock"
@@ -50,6 +52,66 @@ func defaultCloudCLIBridgeSocketIfExists() string {
 	return ""
 }
 
+func acquireCloudCLIBridgeSocketLock(socketPath string) (*os.File, error) {
+	lockPath := socketPath + ".lock"
+	fd, err := unix.Open(
+		lockPath,
+		unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0o600,
+	)
+	if err != nil {
+		return nil, err
+	}
+	lockFile := os.NewFile(uintptr(fd), lockPath)
+	if lockFile == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed to wrap cloud CLI bridge lock %q", lockPath)
+	}
+	closeWithError := func(err error) (*os.File, error) {
+		_ = lockFile.Close()
+		return nil, err
+	}
+
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return closeWithError(err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return closeWithError(fmt.Errorf("cloud CLI bridge lock %q is not a regular file", lockPath))
+	}
+	if stat.Nlink != 1 {
+		return closeWithError(fmt.Errorf("cloud CLI bridge lock %q has unexpected hard links", lockPath))
+	}
+	if stat.Uid != uint32(os.Geteuid()) {
+		return closeWithError(fmt.Errorf("cloud CLI bridge lock %q is owned by another user", lockPath))
+	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		return closeWithError(err)
+	}
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return closeWithError(err)
+	}
+	if stat.Mode&0o077 != 0 {
+		return closeWithError(fmt.Errorf("cloud CLI bridge lock %q is not private", lockPath))
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+			return nil, fmt.Errorf("cloud CLI bridge socket %q is already owned", socketPath)
+		}
+		return nil, err
+	}
+	return lockFile, nil
+}
+
+func releaseCloudCLIBridgeSocketLock(lockFile *os.File) {
+	if lockFile == nil {
+		return
+	}
+	_ = unix.Flock(int(lockFile.Fd()), unix.LOCK_UN)
+	_ = lockFile.Close()
+}
+
 func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io.Writer) error {
 	if b == nil {
 		return nil
@@ -58,6 +120,17 @@ func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		return err
 	}
+	socketLock, err := acquireCloudCLIBridgeSocketLock(socketPath)
+	if err != nil {
+		return err
+	}
+	lockOwned := true
+	defer func() {
+		if lockOwned {
+			releaseCloudCLIBridgeSocketLock(socketLock)
+		}
+	}()
+
 	_ = os.Remove(socketPath)
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -76,11 +149,13 @@ func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	go b.acceptLoop(listener, socketPath, stderr)
+	go b.acceptLoop(listener, socketPath, stderr, socketLock)
+	lockOwned = false
 	return nil
 }
 
-func (b *cloudCLIBridge) acceptLoop(listener net.Listener, socketPath string, stderr io.Writer) {
+func (b *cloudCLIBridge) acceptLoop(listener net.Listener, socketPath string, stderr io.Writer, socketLock *os.File) {
+	defer releaseCloudCLIBridgeSocketLock(socketLock)
 	defer os.Remove(socketPath)
 	for {
 		conn, err := listener.Accept()
