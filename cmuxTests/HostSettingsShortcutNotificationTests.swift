@@ -1,3 +1,4 @@
+import CMUXAgentLaunch
 import Foundation
 import Testing
 
@@ -146,6 +147,60 @@ struct ComputerUseCrossGenerationIdentityTests {
             surfaceID: surfaceID.uuidString,
             agentSessionID: logicalAgentSessionID
         ) == expectedDriverSessionID)
+
+        let staleReusedPIDIdentity = AgentPIDProcessIdentity(
+            pid: generationBIdentity.pid,
+            startSeconds: generationBIdentity.startSeconds - 1,
+            startMicroseconds: generationBIdentity.startMicroseconds
+        )
+        #expect(projection.driverSessionID(
+            surfaceID: surfaceID.uuidString,
+            agentSessionID: logicalAgentSessionID,
+            hookProcessID: Int(generationBProcessID),
+            hookProcessIdentity: generationBIdentity
+        ) == expectedDriverSessionID)
+        #expect(projection.driverSessionID(
+            surfaceID: surfaceID.uuidString,
+            agentSessionID: logicalAgentSessionID,
+            hookProcessID: Int(generationBProcessID),
+            hookProcessIdentity: staleReusedPIDIdentity
+        ) == nil)
+
+        let invocationAt = Date(timeIntervalSince1970: 100)
+        let completion = WorkstreamEvent(
+            sessionId: logicalAgentSessionID,
+            hookEventName: .stop,
+            source: "codex",
+            surfaceId: surfaceID.uuidString,
+            ppid: Int(generationBProcessID),
+            receivedAt: Date(timeIntervalSince1970: 101)
+        )
+        let acceptedInvocation = ComputerUseAcceptedInvocationIdentity(
+            surfaceID: surfaceID,
+            agentSessionID: logicalAgentSessionID,
+            processIdentity: generationBIdentity,
+            receivedAt: invocationAt
+        )
+        #expect(acceptedInvocation.matchesCompletion(
+            completion,
+            processIdentity: generationBIdentity
+        ))
+        #expect(!acceptedInvocation.matchesCompletion(
+            completion,
+            processIdentity: staleReusedPIDIdentity
+        ))
+
+        let ingressEvent = WorkstreamEvent(
+            sessionId: logicalAgentSessionID,
+            hookEventName: .preToolUse,
+            source: "codex",
+            surfaceId: surfaceID.uuidString,
+            ppid: Int(generationBProcessID)
+        )
+        let ingressGeneration = try #require(
+            ingressEvent.feedIngressProcessGenerationEvent
+        )
+        #expect(ingressGeneration.processIdentity == generationBIdentity)
     }
 }
 
