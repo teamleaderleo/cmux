@@ -1,0 +1,44 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+@@ -222,7 +222,23 @@ struct RemoteDaemonBoundedDeliveryLoadTests {
+             }
+         }
+         let submitMillis = Int(started.duration(to: .now).components.attoseconds / 1_000_000_000_000_000)
+-        let snapshot = streamSubscription?.snapshot() ?? ptySubscription!.snapshot()
++        let snapshot: (
++            pendingBytes: Int,
++            pendingEvents: Int,
++            queuedEvents: Int,
++            acceptingEvents: Bool
++        )
++        if let streamSubscription {
++            let value = streamSubscription.snapshot()
++            snapshot = (
++                value.pendingBytes,
++                value.pendingEvents,
++                value.queuedEvents,
++                value.acceptingEvents
++            )
++        } else {
++            let value = ptySubscription!.snapshot()
++            snapshot = (value.pendingBytes, value.pendingEvents, value.queuedEvents, value.acceptingEvents)
++        }
+         let processSnapshot = RemoteDaemonEventDeliveryBudget.shared.snapshot()
+         printEventDeliveryJSON([
+             "kind": kind,
+@@ -294,12 +310,12 @@ private final class LockedIntValue: @unchecked Sendable {
+     func increment() { lock.withLock { stored += 1 } }
+ }
+ 
+-private func matchesEnqueued<Event>(_ result: RemoteDaemonEventDeliveryQueue<Event>.EnqueueResult) -> Bool {
++private func matchesEnqueued<Event: Sendable>(_ result: RemoteDaemonEventDeliveryQueue<Event>.EnqueueResult) -> Bool {
+     if case .enqueued = result { return true }
+     return false
+ }
+ 
+-private func matchesOverflow<Event>(_ result: RemoteDaemonEventDeliveryQueue<Event>.EnqueueResult) -> Bool {
++private func matchesOverflow<Event: Sendable>(_ result: RemoteDaemonEventDeliveryQueue<Event>.EnqueueResult) -> Bool {
+     if case .overflow = result { return true }
+     return false
+ }
