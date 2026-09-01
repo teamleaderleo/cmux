@@ -1,0 +1,4 @@
+Current-main Computer Use generation verifier, attempt 2.
+Base: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+Red: d13e9a7cb3a3712f9f7a7f507c13d3a312c41d20
+Green: fbc7742dc04a5e7d14172a48aa43066296d24ac6
