@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/fieldwork-rpc-event-delivery-candidate.yml
       - scripts/fieldwork/cmux-resource-collapse/apply_rpc_event_delivery_budget_candidate.py
+      - scripts/fieldwork/cmux-resource-collapse/rpc_event_delivery_budget_probe.patch
   workflow_dispatch:
 
 permissions:
@@ -15,17 +16,19 @@ permissions:
 jobs:
   rpc-event-delivery-candidate:
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain and revision
         run: |
           swift --version
           git rev-parse HEAD
-      - name: Apply guarded candidate
+      - name: Apply guarded candidate and measurement probe
         run: |
           set -euo pipefail
           python3 scripts/fieldwork/cmux-resource-collapse/apply_rpc_event_delivery_budget_candidate.py
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/rpc_event_delivery_budget_probe.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/rpc_event_delivery_budget_probe.patch
           git diff --check
           git status --short
       - name: Focused delivery-budget tests
@@ -38,3 +41,71 @@ jobs:
           swift test \
             --skip-build \
             --package-path Packages/macOS/CmuxRemoteDaemon
+      - name: Healthy 200 MiB stream and PTY controls
+        env:
+          CMUX_FIELDWORK_EVENT_BUDGET_PROBE: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_BLOCKED: "0"
+          CMUX_FIELDWORK_EVENT_BUDGET_TOTAL_BYTES: "209715200"
+          CMUX_FIELDWORK_EVENT_BUDGET_PAYLOAD_BYTES: "32768"
+        run: |
+          set -euo pipefail
+          mkdir -p rpc-event-delivery-candidate-results
+          for mode in stream pty; do
+            echo "=== healthy mode=${mode} ===" | tee -a rpc-event-delivery-candidate-results/healthy.log
+            CMUX_FIELDWORK_EVENT_BUDGET_MODE="$mode" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteDaemon \
+                --filter RemoteDaemonRPCClientEventDeliveryBudgetProbeTests \
+              2>&1 | tee -a rpc-event-delivery-candidate-results/healthy.log
+          done
+      - name: Blocked 200 MiB stream and PTY ceilings
+        env:
+          CMUX_FIELDWORK_EVENT_BUDGET_PROBE: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_BLOCKED: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_TOTAL_BYTES: "209715200"
+          CMUX_FIELDWORK_EVENT_BUDGET_PAYLOAD_BYTES: "32768"
+        run: |
+          set -euo pipefail
+          for mode in stream pty; do
+            echo "=== blocked mode=${mode} ===" | tee -a rpc-event-delivery-candidate-results/blocked.log
+            CMUX_FIELDWORK_EVENT_BUDGET_MODE="$mode" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteDaemon \
+                --filter RemoteDaemonRPCClientEventDeliveryBudgetProbeTests \
+              2>&1 | tee -a rpc-event-delivery-candidate-results/blocked.log
+          done
+      - name: Fragmented send-count ceiling
+        env:
+          CMUX_FIELDWORK_EVENT_BUDGET_PROBE: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_MODE: "stream"
+          CMUX_FIELDWORK_EVENT_BUDGET_BLOCKED: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_TOTAL_BYTES: "67108864"
+          CMUX_FIELDWORK_EVENT_BUDGET_PAYLOAD_BYTES: "1024"
+        run: |
+          set -euo pipefail
+          echo "=== blocked fragmented stream ===" | tee rpc-event-delivery-candidate-results/fragmented.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientEventDeliveryBudgetProbeTests \
+            2>&1 | tee -a rpc-event-delivery-candidate-results/fragmented.log
+      - name: Aggregate global ceiling
+        env:
+          CMUX_FIELDWORK_EVENT_BUDGET_PROBE: "1"
+          CMUX_FIELDWORK_EVENT_BUDGET_MODE: "global"
+        run: |
+          set -euo pipefail
+          echo "=== aggregate global ceiling ===" | tee rpc-event-delivery-candidate-results/global.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientEventDeliveryBudgetProbeTests \
+            2>&1 | tee -a rpc-event-delivery-candidate-results/global.log
+      - name: Preserve candidate measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpc-event-delivery-candidate-results
+          path: rpc-event-delivery-candidate-results/*.log
