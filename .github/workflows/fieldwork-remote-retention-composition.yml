@@ -15,6 +15,7 @@ on:
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_snapshot_repair.patch
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_candidate_subscription_retirement_repair.patch
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_candidate_pty_retirement_test.patch
+      - scripts/fieldwork/cmux-resource-collapse/timeout_isolation_harness_repair.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
@@ -51,7 +52,8 @@ jobs:
             event_delivery_budget_candidate_tests_repair.patch \
             event_delivery_budget_candidate_tests_snapshot_repair.patch \
             event_delivery_candidate_subscription_retirement_repair.patch \
-            event_delivery_candidate_pty_retirement_test.patch; do
+            event_delivery_candidate_pty_retirement_test.patch \
+            timeout_isolation_harness_repair.patch; do
             git apply --check --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
             git apply --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
           done
