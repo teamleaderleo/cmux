@@ -272,12 +272,35 @@ import Testing
         #expect(RemoteTmuxHost.controlModeLineSafeName("work\nbad") == nil)
     }
 
-    @Test func sendKeysHexArgumentsAreLowercaseSpaceSeparatedBytes() {
-        #expect(RemoteTmuxControlConnection.hexByteArguments(Data([0x00, 0x0f, 0x10, 0xff])) == "00 0f 10 ff")
-        #expect(RemoteTmuxControlConnection.hexByteArguments(Data()) == "")
+    @Test @MainActor func sendKeysRejectsOverBudgetLogicalInputWithoutPartialDelivery() async throws {
+        let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
+        let writerBudget = 30_000
+
+        let emission = try await captureSendKeysWire(
+            paneId: 7,
+            data: data,
+            maxPendingBytes: writerBudget
+        )
+
+        #expect(!emission.accepted)
+        #expect(emission.commands.isEmpty)
     }
 
-    @Test @MainActor func sendKeysChunksBoundaryPasteIntoControlSafeCommands() async throws {
+    @Test @MainActor func sendKeysAcceptsRawAdmissionLimitWithProductionWriterBudget() async throws {
+        let rawAdmissionLimit = RemoteTmuxPaneInputForwarder.defaultMaximumPendingBytes
+        let data = Data((0 ..< rawAdmissionLimit).map { UInt8($0 % 251) })
+
+        let emission = try await captureSendKeysWire(
+            paneId: 7,
+            data: data,
+            maxPendingBytes: RemoteTmuxControlConnection.maxPendingStdinBytes
+        )
+
+        #expect(emission.accepted)
+        #expect(try decodeHexArguments(from: emission.commands, paneId: 7) == data)
+    }
+
+    @Test @MainActor func boundaryPasteIsSplitIntoControlSafeCommands() async throws {
         let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
         let emission = try await captureSendKeysWire(
             paneId: 7,
