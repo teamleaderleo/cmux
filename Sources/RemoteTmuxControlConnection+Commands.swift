@@ -6,6 +6,11 @@ extension RemoteTmuxControlConnection {
     /// (or reconnected) mirror surface. Clamped by the remote pane's `history-limit`.
     private static let scrollbackCaptureLines = 5_000
 
+    /// `send-keys -H` expands each input byte to two hex digits plus a separator.
+    /// Keep each control command under the smaller tmux CLI command ceiling as well
+    /// as the ~30k control-mode cliff observed in issue #10943.
+    private static let sendKeysChunkBytes = 4 * 1024
+
     /// Sends a tmux command on the control stream (newline-terminated).
     @discardableResult
     func send(_ command: String) -> Bool {
@@ -444,12 +449,23 @@ extension RemoteTmuxControlConnection {
     }
 
     /// Sends literal key bytes to a pane via tmux `send-keys -H` (hex-encoded),
-    /// which is binary-safe and needs no shell quoting.
+    /// which is binary-safe and needs no shell quoting. Large payloads are split
+    /// into bounded commands so one paste cannot cross tmux's control-command cap.
     @discardableResult
     func sendKeys(paneId: Int, data: Data) -> Bool {
         guard !data.isEmpty else { return true }
-        let hex = Self.hexByteArguments(data)
-        return sendInternal("send-keys -t %\(paneId) -H \(hex)", kind: .other)
+
+        var commands: [String] = []
+        commands.reserveCapacity((data.count + Self.sendKeysChunkBytes - 1) / Self.sendKeysChunkBytes)
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + Self.sendKeysChunkBytes, data.count)
+            let hex = Self.hexByteArguments(data.subdata(in: offset..<end))
+            commands.append("send-keys -t %\(paneId) -H \(hex)")
+            offset = end
+        }
+
+        return sendBatchInternal(commands, kinds: commands.map { _ in .other })
     }
 
     /// Sends a physical named key and lets tmux encode it for the target pane's
