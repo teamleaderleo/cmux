@@ -1,0 +1,396 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientEventDeliveryBudgetProbeTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientEventDeliveryBudgetProbeTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientEventDeliveryBudgetProbeTests.swift
+@@ -0,0 +1,354 @@
++import Darwin
++import Dispatch
++import Foundation
++import Testing
++import CmuxCore
++@testable import CmuxRemoteDaemon
++
++private let fieldworkDeliveryBudgetProbeEnabled =
++    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_EVENT_BUDGET_PROBE"] == "1"
++
++@Suite(
++    "RemoteDaemonRPCClient event delivery budget probe",
++    .serialized,
++    .enabled(if: fieldworkDeliveryBudgetProbeEnabled)
++)
++struct RemoteDaemonRPCClientEventDeliveryBudgetProbeTests {
++    @Test("configured delivery budgets bound healthy and blocked event fan-out")
++    func configuredDeliveryBudget() {
++        let env = ProcessInfo.processInfo.environment
++        let mode = env["CMUX_FIELDWORK_EVENT_BUDGET_MODE"] ?? "stream"
++        if mode == "global" {
++            runGlobalAggregateProbe()
++            return
++        }
++
++        let payloadBytes = max(1, Int(env["CMUX_FIELDWORK_EVENT_BUDGET_PAYLOAD_BYTES"] ?? "32768") ?? 32 * 1024)
++        let totalBytes = max(payloadBytes, Int(env["CMUX_FIELDWORK_EVENT_BUDGET_TOTAL_BYTES"] ?? "209715200") ?? 200 * 1024 * 1024)
++        let blocked = env["CMUX_FIELDWORK_EVENT_BUDGET_BLOCKED"] == "1"
++        switch mode {
++        case "stream":
++            runStreamProbe(payloadBytes: payloadBytes, totalBytes: totalBytes, blocked: blocked)
++        case "pty":
++            runPTYProbe(payloadBytes: payloadBytes, totalBytes: totalBytes, blocked: blocked)
++        default:
++            Issue.record("unknown event budget probe mode: \(mode)")
++        }
++    }
++
++    private func runStreamProbe(payloadBytes: Int, totalBytes: Int, blocked: Bool) {
++        let client = makeEventBudgetProbeClient()
++        let queue = DispatchQueue(label: "com.cmux.fieldwork.event-budget.stream")
++        let gate = DispatchSemaphore(value: 0)
++        let recorder = EventBudgetRecorder()
++        if blocked { queue.async { gate.wait() } }
++        let localBudget = makeProductionLocalBudget()
++        let streamID = "fieldwork-stream"
++        client.stateQueue.sync {
++            client.streamSubscriptions[streamID] = .init(
++                queue: queue,
++                handler: { recorder.record($0) },
++                deliveryBudget: localBudget
++            )
++        }
++
++        let encoded = Data(repeating: 0x73, count: payloadBytes).base64EncodedString()
++        let payload: [String: Any] = [
++            "event": "proxy.stream.data",
++            "stream_id": streamID,
++            "data_base64": encoded,
++        ]
++        let eventCount = max(1, (totalBytes + payloadBytes - 1) / payloadBytes)
++        let baselineRSS = eventBudgetRSSKiB()
++        let started = ContinuousClock.now
++        client.stateQueue.sync {
++            for _ in 0..<eventCount {
++                client.consumeEventPayload(payload)
++            }
++        }
++        let submitMillis = eventBudgetMillis(started.duration(to: .now))
++        let local = localBudget.snapshot()
++        let global = client.eventDeliveryBudget.snapshot()
++        let active = client.stateQueue.sync { client.streamSubscriptions.keys.contains(streamID) }
++        let snapshot = recorder.snapshot()
++        printEventBudgetJSON([
++            "mode": "stream",
++            "blocked": blocked,
++            "payload_bytes": payloadBytes,
++            "offered_events": eventCount,
++            "offered_bytes": eventCount * payloadBytes,
++            "submit_millis": submitMillis,
++            "baseline_rss_kib": baselineRSS,
++            "loaded_rss_kib": eventBudgetRSSKiB(),
++            "active_subscription": active,
++            "handled_data_events": snapshot.dataEvents,
++            "handled_errors": snapshot.errors,
++            "local_pending_bytes": local.pendingBytes,
++            "local_pending_events": local.pendingEvents,
++            "global_pending_bytes": global.pendingBytes,
++            "global_pending_events": global.pendingEvents,
++        ])
++
++        if blocked {
++            let expectedAdmitted = expectedAdmissionCount(payloadBytes: payloadBytes)
++            #expect(!active)
++            #expect(local.pendingEvents == expectedAdmitted)
++            #expect(local.pendingBytes == expectedAdmitted * payloadBytes)
++            #expect(global == local)
++            gate.signal()
++            #expect(waitForEventBudget(timeout: 10) {
++                let value = recorder.snapshot()
++                return value.dataEvents == expectedAdmitted && value.errors == 1
++            })
++        } else {
++            #expect(active)
++            #expect(waitForEventBudget(timeout: 10) { recorder.snapshot().dataEvents == eventCount })
++            #expect(recorder.snapshot().errors == 0)
++        }
++
++        #expect(waitForEventBudget(timeout: 10) {
++            localBudget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0)
++                && client.eventDeliveryBudget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0)
++        })
++        client.stateQueue.sync { _ = client.streamSubscriptions.removeValue(forKey: streamID) }
++        printEventBudgetJSON([
++            "mode": "stream",
++            "blocked": blocked,
++            "phase": "cleanup",
++            "cleanup_rss_kib": eventBudgetRSSKiB(),
++            "local_pending_bytes": localBudget.snapshot().pendingBytes,
++            "global_pending_bytes": client.eventDeliveryBudget.snapshot().pendingBytes,
++        ])
++    }
++
++    private func runPTYProbe(payloadBytes: Int, totalBytes: Int, blocked: Bool) {
++        let client = makeEventBudgetProbeClient()
++        let queue = DispatchQueue(label: "com.cmux.fieldwork.event-budget.pty")
++        let gate = DispatchSemaphore(value: 0)
++        let recorder = EventBudgetRecorder()
++        if blocked { queue.async { gate.wait() } }
++        let localBudget = makeProductionLocalBudget()
++        let sessionID = "fieldwork-session"
++        let attachmentID = "fieldwork-attachment"
++        let token = "fieldwork-token"
++        let key = RemoteDaemonRPCClient.ptySubscriptionKey(
++            sessionID: sessionID,
++            attachmentID: attachmentID,
++            attachmentToken: token
++        )
++        client.stateQueue.sync {
++            client.ptySubscriptions[key] = .init(
++                queue: queue,
++                handler: { recorder.record($0) },
++                deliveryBudget: localBudget
++            )
++        }
++
++        let encoded = Data(repeating: 0x70, count: payloadBytes).base64EncodedString()
++        let payload: [String: Any] = [
++            "event": "pty.data",
++            "session_id": sessionID,
++            "attachment_id": attachmentID,
++            "attachment_token": token,
++            "data_base64": encoded,
++        ]
++        let eventCount = max(1, (totalBytes + payloadBytes - 1) / payloadBytes)
++        let baselineRSS = eventBudgetRSSKiB()
++        let started = ContinuousClock.now
++        client.stateQueue.sync {
++            for _ in 0..<eventCount {
++                _ = client.consumePTYEventPayload(payload)
++            }
++        }
++        let submitMillis = eventBudgetMillis(started.duration(to: .now))
++        let local = localBudget.snapshot()
++        let global = client.eventDeliveryBudget.snapshot()
++        let active = client.stateQueue.sync { client.ptySubscriptions.keys.contains(key) }
++        let snapshot = recorder.snapshot()
++        printEventBudgetJSON([
++            "mode": "pty",
++            "blocked": blocked,
++            "payload_bytes": payloadBytes,
++            "offered_events": eventCount,
++            "offered_bytes": eventCount * payloadBytes,
++            "submit_millis": submitMillis,
++            "baseline_rss_kib": baselineRSS,
++            "loaded_rss_kib": eventBudgetRSSKiB(),
++            "active_subscription": active,
++            "handled_data_events": snapshot.dataEvents,
++            "handled_errors": snapshot.errors,
++            "local_pending_bytes": local.pendingBytes,
++            "local_pending_events": local.pendingEvents,
++            "global_pending_bytes": global.pendingBytes,
++            "global_pending_events": global.pendingEvents,
++        ])
++
++        if blocked {
++            let expectedAdmitted = expectedAdmissionCount(payloadBytes: payloadBytes)
++            #expect(!active)
++            #expect(local.pendingEvents == expectedAdmitted)
++            #expect(local.pendingBytes == expectedAdmitted * payloadBytes)
++            #expect(global == local)
++            gate.signal()
++            #expect(waitForEventBudget(timeout: 10) {
++                let value = recorder.snapshot()
++                return value.dataEvents == expectedAdmitted && value.errors == 1
++            })
++        } else {
++            #expect(active)
++            #expect(waitForEventBudget(timeout: 10) { recorder.snapshot().dataEvents == eventCount })
++            #expect(recorder.snapshot().errors == 0)
++        }
++
++        #expect(waitForEventBudget(timeout: 10) {
++            localBudget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0)
++                && client.eventDeliveryBudget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0)
++        })
++        client.stateQueue.sync { _ = client.ptySubscriptions.removeValue(forKey: key) }
++        printEventBudgetJSON([
++            "mode": "pty",
++            "blocked": blocked,
++            "phase": "cleanup",
++            "cleanup_rss_kib": eventBudgetRSSKiB(),
++            "local_pending_bytes": localBudget.snapshot().pendingBytes,
++            "global_pending_bytes": client.eventDeliveryBudget.snapshot().pendingBytes,
++        ])
++    }
++
++    private func runGlobalAggregateProbe() {
++        let client = makeEventBudgetProbeClient()
++        let recorder = EventBudgetRecorder()
++        var queues: [DispatchQueue] = []
++        var gates: [DispatchSemaphore] = []
++        var localBudgets: [RemoteDaemonEventDeliveryBudget] = []
++        for index in 0..<9 {
++            let queue = DispatchQueue(label: "com.cmux.fieldwork.event-budget.global.\(index)")
++            let gate = DispatchSemaphore(value: 0)
++            queue.async { gate.wait() }
++            let budget = makeProductionLocalBudget()
++            let streamID = "stream-\(index)"
++            client.stateQueue.sync {
++                client.streamSubscriptions[streamID] = .init(
++                    queue: queue,
++                    handler: { recorder.record($0) },
++                    deliveryBudget: budget
++                )
++            }
++            queues.append(queue)
++            gates.append(gate)
++            localBudgets.append(budget)
++        }
++
++        let payloadBytes = 32 * 1024
++        let encoded = Data(repeating: 0x67, count: payloadBytes).base64EncodedString()
++        let baselineRSS = eventBudgetRSSKiB()
++        client.stateQueue.sync {
++            for index in 0..<8 {
++                let payload: [String: Any] = [
++                    "event": "proxy.stream.data",
++                    "stream_id": "stream-\(index)",
++                    "data_base64": encoded,
++                ]
++                for _ in 0..<256 {
++                    client.consumeEventPayload(payload)
++                }
++            }
++            client.consumeEventPayload([
++                "event": "proxy.stream.data",
++                "stream_id": "stream-8",
++                "data_base64": encoded,
++            ])
++        }
++
++        let global = client.eventDeliveryBudget.snapshot()
++        let activeCount = client.stateQueue.sync { client.streamSubscriptions.count }
++        printEventBudgetJSON([
++            "mode": "global",
++            "baseline_rss_kib": baselineRSS,
++            "loaded_rss_kib": eventBudgetRSSKiB(),
++            "active_subscriptions": activeCount,
++            "global_pending_bytes": global.pendingBytes,
++            "global_pending_events": global.pendingEvents,
++        ])
++        #expect(global.pendingBytes == RemoteDaemonRPCClient.maxEventDeliveryBytesGlobal)
++        #expect(global.pendingEvents == 2_048)
++        #expect(activeCount == 8)
++        #expect(localBudgets[8].snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
++
++        gates.forEach { $0.signal() }
++        #expect(waitForEventBudget(timeout: 10) {
++            client.eventDeliveryBudget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0)
++                && recorder.snapshot().errors == 1
++        })
++        client.stateQueue.sync { client.streamSubscriptions.removeAll() }
++        printEventBudgetJSON([
++            "mode": "global",
++            "phase": "cleanup",
++            "cleanup_rss_kib": eventBudgetRSSKiB(),
++            "global_pending_bytes": client.eventDeliveryBudget.snapshot().pendingBytes,
++        ])
++        _ = queues
++    }
++
++    private func makeProductionLocalBudget() -> RemoteDaemonEventDeliveryBudget {
++        RemoteDaemonEventDeliveryBudget(
++            maxPendingBytes: RemoteDaemonRPCClient.maxEventDeliveryBytesPerSubscription,
++            maxPendingEvents: RemoteDaemonRPCClient.maxEventDeliveryEventsPerSubscription
++        )
++    }
++
++    private func expectedAdmissionCount(payloadBytes: Int) -> Int {
++        min(
++            RemoteDaemonRPCClient.maxEventDeliveryEventsPerSubscription,
++            RemoteDaemonRPCClient.maxEventDeliveryBytesPerSubscription / max(1, payloadBytes)
++        )
++    }
++}
++
++private final class EventBudgetRecorder: @unchecked Sendable {
++    struct Snapshot { let dataEvents: Int; let errors: Int }
++    private let lock = NSLock()
++    private var dataEvents = 0
++    private var errors = 0
++
++    func record(_ event: RemoteDaemonStreamEvent) {
++        lock.lock()
++        switch event {
++        case .data: dataEvents += 1
++        case .error: errors += 1
++        case .eof: break
++        }
++        lock.unlock()
++    }
++
++    func record(_ event: RemoteDaemonPTYEvent) {
++        lock.lock()
++        switch event {
++        case .data: dataEvents += 1
++        case .error: errors += 1
++        case .ready, .inputAck, .exit: break
++        }
++        lock.unlock()
++    }
++
++    func snapshot() -> Snapshot {
++        lock.lock()
++        defer { lock.unlock() }
++        return Snapshot(dataEvents: dataEvents, errors: errors)
++    }
++}
++
++private func makeEventBudgetProbeClient() -> RemoteDaemonRPCClient {
++    RemoteDaemonRPCClient(
++        configuration: WorkspaceRemoteConfiguration(
++            destination: "user@example-host",
++            port: nil,
++            identityFile: nil,
++            sshOptions: [],
++            localProxyPort: nil,
++            relayPort: nil,
++            relayID: nil,
++            relayToken: nil,
++            localSocketPath: nil,
++            terminalStartupCommand: nil
++        ),
++        remotePath: "/usr/local/bin/cmuxd-remote",
++        strings: RemoteDaemonStrings(
++            missingPersistentPTYCapability: "missing persistent PTY",
++            missingRequiredFunctionality: "missing required functionality"
++        ),
++        onUnexpectedTermination: { _ in }
++    )
++}
++
++private func waitForEventBudget(timeout: TimeInterval, condition: () -> Bool) -> Bool {
++    let deadline = Date().addingTimeInterval(timeout)
++    while Date() < deadline {
++        if condition() { return true }
++        Thread.sleep(forTimeInterval: 0.005)
++    }
++    return condition()
++}
++
++private func eventBudgetRSSKiB() -> Int {
++    var info = mach_task_basic_info()
++    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
++    let result = withUnsafeMutablePointer(to: &info) { pointer in
++        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
++            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
++        }
++    }
++    return result == KERN_SUCCESS ? Int(info.resident_size / 1024) : -1
++}
++
++private func eventBudgetMillis(_ duration: Duration) -> Int {
++    Int(duration.components.attoseconds / 1_000_000_000_000_000)
++}
++
++private func printEventBudgetJSON(_ object: [String: Any]) {
++    let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
++    print("FIELDWORK_EVENT_BUDGET \(String(decoding: data, as: UTF8.self))")
++}
