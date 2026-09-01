@@ -1,0 +1,15 @@
+name: Fieldwork write permission probe
+
+on:
+  push:
+    branches:
+      - fieldwork/blaxel-create-response-loss-repair-carrier-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo write-permission-workflow-admitted
