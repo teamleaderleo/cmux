@@ -1,0 +1,150 @@
+name: Fieldwork current terminal input owner ack
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/terminal-input-owner-ack-current-refine-base
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-current-terminal-input-owner-ack-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_SHA: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+  CLEAN_SHA: fcccdb386dcd6545300997bdb5c8c8d564b859e4
+  CANONICAL_BRANCH: fix/terminal-input-owner-ack
+  CANONICAL_EXPECTED_SHA: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+
+jobs:
+  refine-test-and-publish:
+    name: Refine and test current terminal input owner ack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout refinement carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify starting generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$CLEAN_SHA^")" = "$UPSTREAM_SHA"
+          git merge-base --is-ancestor "$CLEAN_SHA" HEAD
+          git diff --check "$UPSTREAM_SHA" "$CLEAN_SHA"
+
+      - name: Apply reviewed refinement
+        run: python3 .github/fieldwork/refine_terminal_input_owner_ack.py
+
+      - name: Verify refinement scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only "$CLEAN_SHA" -- \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs \
+            cmux-tui/spec/terminal-host.md | sort)
+          expected=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/spec/terminal-host.md
+          )
+          test "${changed[*]}" = "${expected[*]}"
+          grep -F 'if request_id == 0 {' cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          grep -F 'std::io::ErrorKind::Unsupported' cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          grep -F '`supports_input_ack` is an additive boolean capability' cmux-tui/spec/terminal-host.md
+
+      - name: Initialize Ghostty
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils clang libclang-dev pkg-config
+
+      - name: Resolve Ghostty Zig version
+        id: ghostty-zig-version
+        shell: bash
+        run: echo "version=$(bash ./scripts/ghostty-zig-version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # v2.0.5
+        with:
+          version: ${{ steps.ghostty-zig-version.outputs.version }}
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Format and diff check
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+
+      - name: Run focused terminal-host tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib terminal_host
+
+      - name: Run focused resource-router content tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib resource_router::content::tests
+
+      - name: Run full core library tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib
+
+      - name: Compile CLI compatibility tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui --test cli --no-run
+
+      - name: Publish tested clean current-main product commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          product_paths=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+            cmux-tui/crates/cmux-tui/tests/cli.rs
+            cmux-tui/spec/inventory.json
+            cmux-tui/spec/terminal-host.md
+          )
+          git diff --binary "$UPSTREAM_SHA" -- "${product_paths[@]}" > /tmp/terminal-input-owner-ack.patch
+          test -s /tmp/terminal-input-owner-ack.patch
+          git reset --hard "$UPSTREAM_SHA"
+          git apply /tmp/terminal-input-owner-ack.patch
+          mapfile -t final_paths < <(git diff --name-only | sort)
+          expected=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+            cmux-tui/crates/cmux-tui/tests/cli.rs
+            cmux-tui/spec/inventory.json
+            cmux-tui/spec/terminal-host.md
+          )
+          test "${final_paths[*]}" = "${expected[*]}"
+          git diff --check
+          git config user.name "Fieldwork"
+          git config user.email "fieldwork@users.noreply.github.com"
+          git add -- "${product_paths[@]}"
+          git commit -m "fix(cmux-tui): acknowledge receipted terminal input"
+          test "$(git rev-parse HEAD^)" = "$UPSTREAM_SHA"
+          git push --force-with-lease=refs/heads/$CANONICAL_BRANCH:$CANONICAL_EXPECTED_SHA origin HEAD:refs/heads/$CANONICAL_BRANCH
+          echo "PUBLISHED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Report tested generation
+        run: |
+          echo "upstream=$UPSTREAM_SHA"
+          echo "starting_candidate=$CLEAN_SHA"
+          echo "published=$PUBLISHED_SHA"
