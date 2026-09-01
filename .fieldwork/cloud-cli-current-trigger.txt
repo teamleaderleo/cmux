@@ -1,0 +1,4 @@
+Current-main cloud CLI socket verifier.
+Base: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+Red: 441fb2036d3248a4013da7c638d53984760f779a
+Green: 8678eb4f1b3f6021d04d68276ff00e1955abcac9
