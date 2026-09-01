@@ -988,6 +988,11 @@ fn pending_pool_would_overflow(pool: &PoolState, record_bytes: usize) -> bool {
 }
 
 #[cfg(unix)]
+fn pending_threshold_reached(records: usize, bytes: usize) -> bool {
+    records >= MAX_BATCH_RECORDS || bytes >= MAX_BATCH_BODY_BYTES
+}
+
+#[cfg(unix)]
 async fn enqueue_pending_with_backpressure(
     shared: &Shared,
     session_name: &str,
@@ -1071,8 +1076,7 @@ fn enqueue_pending(
     }
     pool.pending_records = pool.pending_records.saturating_add(1);
     pool.pending_bytes = pool.pending_bytes.saturating_add(record_bytes);
-    let threshold_reached =
-        pool.pending_records >= MAX_BATCH_RECORDS || pool.pending_bytes >= MAX_BATCH_BODY_BYTES;
+    let threshold_reached = pending_threshold_reached(pool.pending_records, pool.pending_bytes);
     if !threshold_reached {
         // During an in-flight POST the completion path re-arms the debounce
         // for any leftover pending records (flush_cycle reads the total under
@@ -1192,15 +1196,16 @@ async fn flush_cycle(
             }
         };
         let delivered = post_with_retry(shared, batches).await;
-        let (again, total) = match shared.pool.lock() {
+        let (again, total, pending_bytes) = match shared.pool.lock() {
             Ok(mut pool) => {
                 pool.flushing = false;
                 (
                     std::mem::take(&mut pool.flush_again),
                     pool.pending_records,
+                    pool.pending_bytes,
                 )
             }
-            Err(_) => (false, 0),
+            Err(_) => (false, 0, 0),
         };
         shared.pool_capacity_wake.notify_waiters();
         if !delivered {
@@ -1209,7 +1214,7 @@ async fn flush_cycle(
         if !again && total == 0 {
             return true;
         }
-        if total >= MAX_BATCH_RECORDS {
+        if pending_threshold_reached(total, pending_bytes) {
             continue;
         }
         if total > 0 && !*armed {
@@ -1543,6 +1548,15 @@ mod tests {
             parse_journal_line(r#"{"type":"stream_item"}"#).expect("valid envelope")["type"],
             "stream_item"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_threshold_considers_record_and_byte_limits() {
+        assert!(!pending_threshold_reached(MAX_BATCH_RECORDS - 1, MAX_BATCH_BODY_BYTES - 1));
+        assert!(pending_threshold_reached(MAX_BATCH_RECORDS, 0));
+        assert!(pending_threshold_reached(1, MAX_BATCH_BODY_BYTES));
+        assert!(pending_threshold_reached(MAX_BATCH_RECORDS, MAX_BATCH_BODY_BYTES));
     }
 
     #[cfg(unix)]
