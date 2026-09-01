@@ -19,9 +19,9 @@ describe("cmux-tui install materialization guard", () => {
   test("guard is valid POSIX shell and resolves the reserved token through the one-shot rekey", () => {
     const guard = cmuxTuiInstallMaterializationGuardCommand();
     expect(guard).toContain(`\${${CMUX_TUI_MATERIALIZATION_ID_ENV}:-}`);
-    expect(guard).toContain(`${CMUX_TUI_BINARY_PATH} __materialize-new-machine`);
-    expect(guard).toContain("--workspace-state-root /root/.local/state/cmux-tui/sessions");
-    expect(guard).toContain("--remote-state-dir /root/.local/state/cmux/remote");
+    expect(guard).toContain(`'${CMUX_TUI_BINARY_PATH}' __materialize-new-machine`);
+    expect(guard).toContain("--workspace-state-root '/root/.local/state/cmux-tui/sessions'");
+    expect(guard).toContain("--remote-state-dir '/root/.local/state/cmux/remote'");
     expect(guard).toContain(`--materialization-id \"$${CMUX_TUI_MATERIALIZATION_ID_ENV}\"`);
     expect(guard).toContain('"$cmux_materialize_attempt" -ge 5');
 
@@ -32,7 +32,7 @@ describe("cmux-tui install materialization guard", () => {
 
   test("install cannot succeed before the new-machine guard is evaluated", () => {
     const command = cmuxTuiInstallCommand(source);
-    const versionIndex = command.indexOf(`${CMUX_TUI_BINARY_PATH} --version`);
+    const versionIndex = command.indexOf(`'${CMUX_TUI_BINARY_PATH}' --version`);
     const guardIndex = command.indexOf("__materialize-new-machine");
     expect(versionIndex).toBeGreaterThanOrEqual(0);
     expect(guardIndex).toBeGreaterThan(versionIndex);
