@@ -50,10 +50,6 @@ replace_once(
 )
 
 content = "cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs"
-# The four receipted input sites all use the same delivery classifier. A host
-# that advertises no InputAck support rejects before bytes are sent, so that
-# Unsupported error is a durable known failure. Transport/write/ack failures
-# remain indeterminate because delivery may have begun.
 insert_before = '''fn terminal_write(surface: &Surface, fields: &Map<String, Value>) -> Result<(), ActionFailure> {\n'''
 helper = '''fn confirmed_terminal_write(
     surface: &Surface,
@@ -109,5 +105,23 @@ replace_once(
         .map_err(|error| ActionFailure::Indeterminate(error.to_string()))
 ''',
     '''    confirmed_terminal_write(surface, bytes, "terminal.input.focus")
+''',
+)
+
+spec = "cmux-tui/spec/terminal-host.md"
+replace_once(
+    spec,
+    '''Discovery records use JSON `record_version:4`. Terminal and incarnation are
+32-character lowercase UUIDv4 hex, owner token and process nonce are
+64-character lowercase hex, the Unix-socket path is canonical, and the host
+PID is nonzero. Record directories are mode `0700`; records and sockets are
+''',
+    '''Discovery records use JSON `record_version:4`. Terminal and incarnation are
+32-character lowercase UUIDv4 hex, owner token and process nonce are
+64-character lowercase hex, the Unix-socket path is canonical, and the host
+PID is nonzero. `supports_input_ack` is an additive boolean capability; a
+missing or false value means receipted API input must fail before sending while
+legacy fire-and-forget input remains available. Record directories are mode
+`0700`; records and sockets are
 ''',
 )
