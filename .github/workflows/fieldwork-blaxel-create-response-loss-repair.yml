@@ -37,8 +37,9 @@ jobs:
           test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "web/tests/vm-blaxel-create-response-loss-repair.test.ts"
 
       - name: Materialize production repair
-        shell: python
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -277,6 +278,7 @@ function ambiguousSandboxCreateFailure(error: unknown): boolean {
               "preserve metadata without home volume",
           )
           blaxel.write_text(text)
+          PY
 
       - name: Verify production diff fence
         shell: bash
