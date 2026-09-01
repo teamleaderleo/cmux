@@ -1,2 +1,3 @@
 Execution carrier for Fieldwork scout teamleaderleo/fieldwork#931.
 The verifier checks canonical red f1a91ab9090295f04d6b8fffef7bf6a4cfdd0371 and green 6cb48b5d96a9c2ce36cd699c5be3ca64050d52a0.
+Verifier runner: macos-15.
