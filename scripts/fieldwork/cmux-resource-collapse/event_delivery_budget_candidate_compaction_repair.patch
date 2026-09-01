@@ -1,0 +1,20 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+@@ -1,6 +1,7 @@
+ internal import Foundation
+ 
+ private let remoteDaemonEventDeliveryDrainBatchSize = 16
++private let remoteDaemonEventDeliveryCompactionThreshold = 1_024
+ 
+ struct RemoteDaemonEventDeliveryLimits: Sendable {
+@@ -218,6 +219,10 @@ final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendabl
+                 let entry = entries[head]
+                 entries[head] = nil
+                 head += 1
++                if head >= remoteDaemonEventDeliveryCompactionThreshold {
++                    entries.removeFirst(head)
++                    head = 0
++                }
+                 next = (entry, nil)
+             } else if let failureTerminal {
