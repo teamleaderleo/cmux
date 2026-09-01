@@ -7,6 +7,9 @@ use cmux_tui_core::ProviderWorkspaceAuthority;
 use cmux_tui_core::provider_management::{self, ClientError};
 use zeroize::Zeroize;
 
+#[path = "materialization_cli.rs"]
+mod materialization_cli;
+
 const UPGRADE_REQUIRED_EXIT: i32 = 78;
 const MAX_AUTHORITY_FILE_BYTES: u64 = 513;
 
@@ -26,8 +29,10 @@ struct InstallArgs {
 }
 
 pub fn try_run(args: &[String]) -> Option<i32> {
-    if args.first().map(String::as_str) != Some("__provider-authority") {
-        return None;
+    match args.first().map(String::as_str) {
+        Some("__materialize-new-machine") => return Some(materialization_cli::run(&args[1..])),
+        Some("__provider-authority") => {}
+        _ => return None,
     }
     Some(match run(args) {
         Ok(()) => 0,

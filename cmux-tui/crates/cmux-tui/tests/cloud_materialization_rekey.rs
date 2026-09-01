@@ -57,8 +57,9 @@ fn materialize(
     materialization_id: &str,
     inherit_enrollments: bool,
 ) -> serde_json::Value {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cmux-tui-materialize"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cmux-tui"));
     command
+        .arg("__materialize-new-machine")
         .arg("--workspace-state-root")
         .arg(workspace_state)
         .arg("--remote-state-dir")
@@ -76,6 +77,18 @@ fn materialize(
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn materialization_help_does_not_require_or_mutate_state() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cmux-tui"))
+        .args(["__materialize-new-machine", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("__materialize-new-machine"));
+    assert!(stdout.contains("--materialization-id"));
 }
 
 #[tokio::test]
