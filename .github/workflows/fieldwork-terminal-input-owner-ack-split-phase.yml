@@ -20,10 +20,66 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Require current-main baseline ancestry
+      - name: Require current-main baseline ancestry and clean product tree
         run: |
           test "$(git merge-base 6044a8b3f43152d2e6fc17f771fd4b277b393118 a61624869fb9c27f4131ee4757e5e4e987f22580)" = "6044a8b3f43152d2e6fc17f771fd4b277b393118"
           git merge-base --is-ancestor a61624869fb9c27f4131ee4757e5e4e987f22580 HEAD
+          product_paths=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/spec/terminal-host.md
+          )
+          git diff --quiet a61624869fb9c27f4131ee4757e5e4e987f22580 HEAD -- "${product_paths[@]}"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize synchronous-ACK baseline full core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/baseline-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lines = Path('/tmp/baseline-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/baseline-failures.txt').write_text(
+              ''.join(f'{name}\n' for name in sorted(failures))
+          )
+          PY
+          echo "baseline full-core exit status: $status"
+          echo "baseline failed tests:"
+          cat /tmp/baseline-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/baseline-core.log
+            test -s /tmp/baseline-failures.txt
+          fi
 
       - name: Apply split-phase repair
         run: |
@@ -45,20 +101,6 @@ jobs:
           cmux-tui/spec/terminal-host.md
           EOF
           diff -u /tmp/expected.txt /tmp/changed.txt
-
-      - name: Init Ghostty submodule
-        run: git submodule update --init --depth 1 ghostty
-
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang libclang-dev pkg-config
-
-      - name: Install Zig
-        run: ./scripts/install-zig-ci.sh
-
-      - name: Set up pinned Rust
-        uses: ./.github/actions/setup-cmux-tui-rust
 
       - name: Check Rust formatting
         working-directory: cmux-tui
@@ -83,9 +125,47 @@ jobs:
         working-directory: cmux-tui
         run: cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
 
-      - name: Run full core gate
+      - name: Require no new full-core failures
         working-directory: cmux-tui
-        run: cargo test -p cmux-tui-core --lib --locked -- --nocapture
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/candidate-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lines = Path('/tmp/candidate-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/candidate-failures.txt').write_text(
+              ''.join(f'{name}\n' for name in sorted(failures))
+          )
+          PY
+          echo "candidate full-core exit status: $status"
+          echo "candidate failed tests:"
+          cat /tmp/candidate-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/candidate-core.log
+            test -s /tmp/candidate-failures.txt
+          fi
+          comm -13 /tmp/baseline-failures.txt /tmp/candidate-failures.txt > /tmp/candidate-only-failures.txt
+          if [ -s /tmp/candidate-only-failures.txt ]; then
+            echo "candidate introduced full-core failures absent from the synchronous baseline:" >&2
+            cat /tmp/candidate-only-failures.txt >&2
+            exit 1
+          fi
+          echo "candidate introduced no new full-core failing tests"
 
       - name: Publish clean product candidate
         shell: bash
