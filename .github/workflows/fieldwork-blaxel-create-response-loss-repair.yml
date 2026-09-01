@@ -6,7 +6,7 @@ on:
       - fieldwork/blaxel-create-response-loss-repair-carrier-20260901
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fieldwork-blaxel-create-response-loss-repair-${{ github.ref }}
@@ -15,25 +15,275 @@ concurrency:
 env:
   BASE_SHA: 950371857bb8774c59f40046e5605c6bdf002181
   RED_SHA: e34a515f307b6a1c5f94395d1045b3bd4f8f633e
+  CANDIDATE_BRANCH: fieldwork/blaxel-create-response-loss-repair-20260901
 
 jobs:
-  prove-red:
+  build-green:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
-      - name: Checkout exact RED commit
+      - name: Checkout canonical RED branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.RED_SHA }}
+          ref: ${{ env.CANDIDATE_BRANCH }}
           fetch-depth: 0
 
-      - name: Verify test-only RED diff
+      - name: Verify exact test-only RED head
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RED_SHA"
           test "$(git merge-base "$BASE_SHA" "$RED_SHA")" = "$BASE_SHA"
           test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "web/tests/vm-blaxel-create-response-loss-repair.test.ts"
-          git diff --check "$BASE_SHA" "$RED_SHA"
+
+      - name: Materialize production repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          repo = Path("web/services/vms/repository.ts")
+          text = repo.read_text()
+          text = replace_once(
+              text,
+              'import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";\n',
+              'import { randomUUID } from "node:crypto";\nimport { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";\n',
+              "repository crypto import",
+          )
+          text = replace_once(
+              text,
+              '''      try: async () => {
+                const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+                const db = cloudDb();
+                try {
+''',
+              '''      try: async () => {
+                const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+                let createIdentity = input.provider === "blaxel" ? randomUUID() : undefined;
+                const db = cloudDb();
+                try {
+''',
+              "beginCreate identity initialization",
+          )
+          text = replace_once(
+              text,
+              '''              if (existing) {
+                if (!isRetryableFailedCreate(existing, new Date())) {
+                  return { inserted: false as const, vm: existing };
+                }
+                await tx
+                  .update(cloudVms)
+                  .set({ idempotencyKey: null, updatedAt: new Date() })
+                  .where(eq(cloudVms.id, existing.id));
+              }
+''',
+              '''              if (existing) {
+                if (!isRetryableFailedCreate(existing, new Date())) {
+                  return { inserted: false as const, vm: existing };
+                }
+                if (
+                  input.provider === "blaxel" &&
+                  existing.provider === "blaxel" &&
+                  existing.failureCode === PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE
+                ) {
+                  const previousCreateIdentity = existing.providerMetadata?.createIdentity;
+                  if (typeof previousCreateIdentity === "string" && previousCreateIdentity.trim()) {
+                    createIdentity = previousCreateIdentity.trim();
+                  }
+                }
+                await tx
+                  .update(cloudVms)
+                  .set({ idempotencyKey: null, updatedAt: new Date() })
+                  .where(eq(cloudVms.id, existing.id));
+              }
+''',
+              "retry generation identity transfer",
+          )
+          text = replace_once(
+              text,
+              '''                status: "provisioning",
+                idempotencyKey,
+              })
+''',
+              '''                status: "provisioning",
+                idempotencyKey,
+                ...(createIdentity ? { providerMetadata: { createIdentity } } : {}),
+              })
+''',
+              "create identity persistence",
+          )
+          repo.write_text(text)
+
+          blaxel = Path("web/services/vms/drivers/blaxel.ts")
+          text = blaxel.read_text()
+          text = replace_once(
+              text,
+              'import { randomBytes } from "node:crypto";\n',
+              'import { createHash, randomBytes } from "node:crypto";\n',
+              "blaxel crypto import",
+          )
+          text = replace_once(
+              text,
+              '''export function friendlyVmName(withSuffix = false): string {
+  const pick = (list: readonly string[]) => list[randomBytes(1)[0] % list.length];
+  const base = `${pick(NAME_ADJECTIVES)}-${pick(NAME_ANIMALS)}`;
+  if (!withSuffix) return base;
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const suffix = Array.from(randomBytes(4), (byte) => alphabet[byte % alphabet.length]).join("");
+  return `${base}-${suffix}`;
+}
+''',
+              '''export function friendlyVmName(withSuffix = false): string {
+  const pick = (list: readonly string[]) => list[randomBytes(1)[0] % list.length];
+  const base = `${pick(NAME_ADJECTIVES)}-${pick(NAME_ANIMALS)}`;
+  if (!withSuffix) return base;
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const suffix = Array.from(randomBytes(4), (byte) => alphabet[byte % alphabet.length]).join("");
+  return `${base}-${suffix}`;
+}
+
+function vmNameForCreateIdentity(createIdentity: string): string {
+  const digest = createHash("sha256").update(createIdentity).digest();
+  const adjective = NAME_ADJECTIVES[digest[0] % NAME_ADJECTIVES.length];
+  const animal = NAME_ANIMALS[digest[1] % NAME_ANIMALS.length];
+  const suffix = digest.toString("hex").slice(0, 16);
+  return `${adjective}-${animal}-${suffix}`;
+}
+
+function ambiguousSandboxCreateFailure(error: unknown): boolean {
+  if (!(error instanceof ProviderError)) return true;
+  const statusMatch = /-> (\\d{3})/.exec(error.message);
+  if (!statusMatch) return true;
+  const status = Number(statusMatch[1]);
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+''',
+              "deterministic create identity helpers",
+          )
+          text = replace_once(
+              text,
+              '''          const resolveHomeVolume = (machineName: string): string | undefined =>
+            homeVolumeSpec?.replace("{machine}", machineName);
+          let name = friendlyVmName();
+          let homeVolume = resolveHomeVolume(name);
+''',
+              '''          const resolveHomeVolume = (machineName: string): string | undefined =>
+            homeVolumeSpec?.replace("{machine}", machineName);
+          const createIdentity = typeof options.providerMetadata?.createIdentity === "string"
+            ? options.providerMetadata.createIdentity.trim() || undefined
+            : undefined;
+          let name = createIdentity ? vmNameForCreateIdentity(createIdentity) : friendlyVmName();
+          let homeVolume = resolveHomeVolume(name);
+''',
+              "deterministic create name selection",
+          )
+          text = replace_once(
+              text,
+              '''            } catch (err) {
+              // A per-machine volume this call just created for a sandbox that never
+              // came to exist is already orphaned — a retried create picks a fresh
+              // name, so nothing ever reattaches it. Delete it before moving on. A
+              // pre-existing volume (409 on ensure) is left alone: it may belong to
+              // the live sandbox this name conflicted with.
+              if (homeVolume && perMachineHomeVolume && volumeCreated) {
+                const volume = homeVolume;
+                await this.deleteHomeVolume(volume).catch((cleanupErr) => {
+                  console.error(`[blaxel] create cleanup failed; volume ${volume} may be orphaned`, cleanupErr);
+                });
+              }
+              const conflict = err instanceof ProviderError && /-> 409/.test(err.message);
+              if (!conflict || attempt === 3) throw err;
+              name = friendlyVmName(attempt >= 1);
+              homeVolume = resolveHomeVolume(name);
+            }
+''',
+              '''            } catch (err) {
+              if (createIdentity && ambiguousSandboxCreateFailure(err)) {
+                try {
+                  const recovered = await timedStep("recover_ambiguous_create", () => this.getSandbox(name));
+                  const recoveredName = recovered.metadata?.name?.trim();
+                  if (recoveredName && recoveredName !== name) {
+                    throw new ProviderError(
+                      "blaxel",
+                      `recovered sandbox identity mismatch: expected ${name}, got ${recoveredName}`,
+                    );
+                  }
+                  const recoveredImage = recovered.spec?.runtime?.image?.trim();
+                  if (recoveredImage && recoveredImage !== image) {
+                    throw new ProviderError(
+                      "blaxel",
+                      `recovered sandbox ${name} uses unexpected image ${recoveredImage}`,
+                    );
+                  }
+                  created = recovered;
+                  break;
+                } catch (recoveryErr) {
+                  // A failed or stale read is not proof that the POST had no effect.
+                  // Preserve any just-created per-machine volume; the same-key retry
+                  // reuses this create identity, sandbox name, and volume name.
+                  if (!(recoveryErr instanceof ProviderError && /-> 404/.test(recoveryErr.message))) {
+                    console.warn(`[blaxel] ambiguous create recovery for ${name} failed`, recoveryErr);
+                  }
+                  throw err;
+                }
+              }
+
+              // For a definite failed create, a per-machine volume made by this call
+              // has no owner and can be removed. Ambiguous deterministic creates exit
+              // above without cleanup so a committed-but-unobserved sandbox keeps its
+              // durable home intact.
+              if (homeVolume && perMachineHomeVolume && volumeCreated) {
+                const volume = homeVolume;
+                await this.deleteHomeVolume(volume).catch((cleanupErr) => {
+                  console.error(`[blaxel] create cleanup failed; volume ${volume} may be orphaned`, cleanupErr);
+                });
+              }
+              const conflict = err instanceof ProviderError && /-> 409/.test(err.message);
+              if (createIdentity || !conflict || attempt === 3) throw err;
+              name = friendlyVmName(attempt >= 1);
+              homeVolume = resolveHomeVolume(name);
+            }
+''',
+              "ambiguous create recovery",
+          )
+          text = replace_once(
+              text,
+              '''            providerMetadata: homeVolume
+              ? {
+                  sandboxUrl,
+                  previewUrl,
+                  homeVolume,
+''',
+              '''            providerMetadata: homeVolume
+              ? {
+                  ...(options.providerMetadata ?? {}),
+                  sandboxUrl,
+                  previewUrl,
+                  homeVolume,
+''',
+              "preserve metadata with home volume",
+          )
+          text = replace_once(
+              text,
+              '''              : { sandboxUrl, previewUrl, image, memoryMb },
+''',
+              '''              : { ...(options.providerMetadata ?? {}), sandboxUrl, previewUrl, image, memoryMb },
+''',
+              "preserve metadata without home volume",
+          )
+          blaxel.write_text(text)
+
+      - name: Verify production diff fence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = $'web/services/vms/drivers/blaxel.ts\nweb/services/vms/repository.ts'
+          git diff --check
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -42,20 +292,16 @@ jobs:
         working-directory: web
         run: bun install --frozen-lockfile
 
-      - name: Prove real Blaxel driver response-loss recovery is RED
+      - name: Prove driver repair green
         working-directory: web
-        shell: bash
+        run: bun test tests/vm-blaxel-create-response-loss-repair.test.ts -t 'Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous create'
+
+      - name: Run Blaxel retry and provider controls
+        working-directory: web
         run: |
           set -euo pipefail
-          set +e
-          bun test tests/vm-blaxel-create-response-loss-repair.test.ts \
-            -t 'Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous create' \
-            2>&1 | tee /tmp/blaxel-driver-red.log
-          status=${PIPESTATUS[0]}
-          set -e
-          test "$status" -ne 0
-          grep -F 'Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous create' /tmp/blaxel-driver-red.log
-          echo "observed expected driver RED exit: $status"
+          bun test tests/vm-blaxel-fetch-retry.test.ts
+          bun test tests/vm-blaxel-provider.test.ts
 
       - name: Start and migrate isolated test database
         working-directory: web
@@ -71,7 +317,7 @@ jobs:
           ./scripts/db-local.sh up
           bunx drizzle-kit migrate --config drizzle.config.ts
 
-      - name: Prove same-key provider create identity continuity is RED
+      - name: Prove workflow identity repair green
         working-directory: web
         env:
           CMUX_DB_TEST: "1"
@@ -80,19 +326,10 @@ jobs:
           CMUX_DB_NAME: cmux_test
           DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
           DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
-        shell: bash
         run: |
           set -euo pipefail
-          set +e
-          bun test --max-concurrency=1 \
-            tests/vm-blaxel-create-response-loss-repair.test.ts \
-            -t 'same-key retry preserves one provider create identity across an ambiguous first create' \
-            2>&1 | tee /tmp/blaxel-workflow-red.log
-          status=${PIPESTATUS[0]}
-          set -e
-          test "$status" -ne 0
-          grep -F 'same-key retry preserves one provider create identity across an ambiguous first create' /tmp/blaxel-workflow-red.log
-          echo "observed expected workflow RED exit: $status"
+          bun test --max-concurrency=1 tests/vm-blaxel-create-response-loss-repair.test.ts -t 'same-key retry preserves one provider create identity across an ambiguous first create'
+          bun test --max-concurrency=1 tests/vm-workflows.test.ts -t 'transient provider create failure does not poison the idempotency key'
 
       - name: Tear down test database
         if: always()
@@ -102,3 +339,17 @@ jobs:
           CMUX_DB_PORT_OFFSET: "30000"
           CMUX_DB_NAME: cmux_test
         run: ./scripts/db-local.sh down || true
+
+      - name: Commit and push canonical GREEN
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork'
+          git config user.email 'fieldwork@users.noreply.github.com'
+          git add web/services/vms/repository.ts web/services/vms/drivers/blaxel.ts
+          git commit -m 'fix: reconcile ambiguous Blaxel creates by durable identity'
+          test "$(git rev-list --count "$BASE_SHA"..HEAD)" = "2"
+          test "$(git rev-parse HEAD^1)" = "$RED_SHA"
+          test "$(git diff --name-only "$BASE_SHA" HEAD | sort)" = $'web/services/vms/drivers/blaxel.ts\nweb/services/vms/repository.ts\nweb/tests/vm-blaxel-create-response-loss-repair.test.ts'
+          git push origin HEAD:"$CANDIDATE_BRANCH"
