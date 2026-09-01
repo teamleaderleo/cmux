@@ -311,6 +311,12 @@ extension RemoteDaemonRPCClient {
         ])
     }
 
+    private static func writeLivenessError(method: String) -> NSError {
+        NSError(domain: "cmux.remote.daemon.rpc", code: 16, userInfo: [
+            NSLocalizedDescriptionKey: "failed writing daemon RPC \(method): write timed out",
+        ])
+    }
+
     func call(method: String, params: [String: Any], timeout: TimeInterval) throws -> [String: Any] {
         let pendingCall = pendingCalls.register()
         let payload: Data
@@ -444,8 +450,16 @@ extension RemoteDaemonRPCClient {
             ])
         }
 
-        try writeQueue.sync {
-            try writePayload(payload)
+        if configuration.transport == .websocket {
+            try writeQueue.sync {
+                try writePayload(payload)
+            }
+            return
+        }
+
+        guard try writePayloadWithinLivenessBudget(payload) else {
+            stop(suppressTerminationCallback: false)
+            throw Self.writeLivenessError(method: method)
         }
     }
 
