@@ -384,7 +384,10 @@ again, and consumes a fresh `Snapshot` plus same-boundary `Colors`.
 Discovery records use JSON `record_version:4`. Terminal and incarnation are
 32-character lowercase UUIDv4 hex, owner token and process nonce are
 64-character lowercase hex, the Unix-socket path is canonical, and the host
-PID is nonzero. Record directories are mode `0700`; records and sockets are
+PID is nonzero. `supports_input_ack` is an additive boolean capability; a
+missing or false value means receipted API input must fail before sending while
+legacy fire-and-forget input remains available. Record directories are mode
+`0700`; records and sockets are
 mode `0600`.
 
 ## Durability boundary

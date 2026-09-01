@@ -410,6 +410,12 @@ impl std::fmt::Display for CellPixelRequestDeadlineElapsed {
 
 impl std::error::Error for CellPixelRequestDeadlineElapsed {}
 
+#[derive(Debug)]
+pub(crate) enum InputAckBeginFailure {
+    Known(std::io::Error),
+    Ambiguous(std::io::Error),
+}
+
 #[cfg(unix)]
 mod unix {
     use std::collections::{HashMap, HashSet, VecDeque};
@@ -439,6 +445,14 @@ mod unix {
 
     static RECORD_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
     const HOST_TERMINATE_GRACE: Duration = Duration::from_millis(250);
+    // Match the remote PTY bridge's bounded outstanding-write precedent.
+    // This protects the local control-response waiter table from an unbounded
+    // burst of durable API input without serializing every receipt.
+    const MAX_PENDING_INPUT_ACKS: usize = 256;
+    // Keep the total outstanding receipted payload bounded too. Using the
+    // existing frame-payload ceiling preserves admission for one maximum-sized
+    // legal Input while preventing 256 such frames from accumulating.
+    const MAX_PENDING_INPUT_ACK_BYTES: usize = MAX_FRAME_PAYLOAD;
     const HOST_KILL_WAIT: Duration = Duration::from_secs(2);
     const HOST_PTY_DRAIN_GRACE: Duration = Duration::from_millis(250);
     const HOST_FORCED_DRAIN_WINDOW: Duration = Duration::from_millis(100);
@@ -739,10 +753,17 @@ mod unix {
     pub(crate) type DeferredCellPixelHandler =
         Arc<dyn Fn(u64, (u16, u16), DeferredCellPixelResolution) + Send + Sync + 'static>;
 
+    #[derive(Default)]
+    struct PendingInputAckWindow {
+        writes: usize,
+        bytes: usize,
+    }
+
     pub(crate) struct ControlResponses {
         waiters: Mutex<HashMap<u64, ControlResponseWaiter>>,
         deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,
         latest_cell_pixel_ack: AtomicU64,
+        pending_input_acks: Mutex<PendingInputAckWindow>,
     }
 
     impl ControlResponses {
@@ -751,6 +772,7 @@ mod unix {
                 waiters: Mutex::new(HashMap::new()),
                 deferred_cell_pixel_handler: Mutex::new(None),
                 latest_cell_pixel_ack: AtomicU64::new(0),
+                pending_input_acks: Mutex::new(PendingInputAckWindow::default()),
             }
         }
 
@@ -810,6 +832,35 @@ mod unix {
             }
         }
 
+        fn try_reserve_input_ack(&self, bytes: usize) -> bool {
+            if bytes > MAX_PENDING_INPUT_ACK_BYTES {
+                return false;
+            }
+            let mut pending = self.pending_input_acks.lock().unwrap();
+            if pending.writes >= MAX_PENDING_INPUT_ACKS
+                || bytes > MAX_PENDING_INPUT_ACK_BYTES.saturating_sub(pending.bytes)
+            {
+                return false;
+            }
+            pending.writes += 1;
+            pending.bytes += bytes;
+            true
+        }
+
+        fn release_input_ack(&self, bytes: usize) {
+            let mut pending = self.pending_input_acks.lock().unwrap();
+            debug_assert!(pending.writes > 0, "terminal input ACK reservation underflow");
+            debug_assert!(pending.bytes >= bytes, "terminal input ACK byte reservation underflow");
+            pending.writes = pending.writes.saturating_sub(1);
+            pending.bytes = pending.bytes.saturating_sub(bytes);
+        }
+
+        #[cfg(test)]
+        fn pending_input_acks_for_test(&self) -> (usize, usize) {
+            let pending = self.pending_input_acks.lock().unwrap();
+            (pending.writes, pending.bytes)
+        }
+
         fn defer_cell_pixel(&self, request_id: u64, expected: (u16, u16)) -> bool {
             let mut waiters = self.waiters.lock().unwrap();
             let Some(waiter) = waiters.get_mut(&request_id) else { return false };
@@ -850,6 +901,65 @@ mod unix {
 
         pub(crate) fn latest_cell_pixel_ack(&self) -> u64 {
             self.latest_cell_pixel_ack.load(Ordering::Acquire)
+        }
+    }
+
+    pub(crate) struct InputAckReceipt {
+        request_id: u64,
+        receiver: Option<Receiver<Frame>>,
+        control_responses: Arc<ControlResponses>,
+        writer: Arc<Mutex<UnixStream>>,
+        bytes: usize,
+        active: bool,
+    }
+
+    impl InputAckReceipt {
+        fn complete(&mut self) {
+            if self.active {
+                self.control_responses.release_input_ack(self.bytes);
+                self.active = false;
+            }
+        }
+
+        pub(crate) fn wait(mut self) -> std::io::Result<()> {
+            let receiver = self.receiver.take().expect("input ACK receiver is present");
+            let response = receiver.recv_timeout(CONTROL_RESPONSE_TIMEOUT);
+            match response {
+                Ok(frame) => {
+                    if !frame.payload.is_empty() {
+                        let _ = self.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
+                        self.complete();
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "terminal host returned a malformed input acknowledgement",
+                        ));
+                    }
+                    self.complete();
+                    Ok(())
+                }
+                Err(error) => {
+                    self.control_responses.waiters.lock().unwrap().remove(&self.request_id);
+                    let _ = self.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
+                    self.complete();
+                    let kind = match error {
+                        RecvTimeoutError::Timeout => std::io::ErrorKind::TimedOut,
+                        RecvTimeoutError::Disconnected => std::io::ErrorKind::ConnectionAborted,
+                    };
+                    Err(std::io::Error::new(
+                        kind,
+                        format!("terminal host did not acknowledge receipted input: {error}"),
+                    ))
+                }
+            }
+        }
+    }
+
+    impl Drop for InputAckReceipt {
+        fn drop(&mut self) {
+            if self.active {
+                self.control_responses.waiters.lock().unwrap().remove(&self.request_id);
+                self.complete();
+            }
         }
     }
 
@@ -962,24 +1072,72 @@ mod unix {
             result
         }
 
-        pub(crate) fn send_input_confirmed(&self, payload: &[u8]) -> std::io::Result<()> {
+        pub(crate) fn begin_input_confirmed(
+            &self,
+            payload: &[u8],
+        ) -> Result<InputAckReceipt, InputAckBeginFailure> {
             if !self.record.supports_input_ack {
-                return Err(std::io::Error::new(
+                return Err(InputAckBeginFailure::Known(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "terminal host cannot acknowledge receipted input",
-                ));
+                )));
             }
-            let response = self
-                .send_control_request(MessageKind::Input, MessageKind::InputAck, payload.to_vec())
-                .map_err(|failure| std::io::Error::other(failure.into_error()))?;
-            if !response.is_empty() {
-                self.disconnect();
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "terminal host returned a malformed input acknowledgement",
-                ));
+            if !self.control_responses.try_reserve_input_ack(payload.len()) {
+                return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "terminal host receipted-input window is full",
+                )));
             }
-            Ok(())
+
+            let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
+            if request_id == 0 {
+                self.control_responses.release_input_ack(payload.len());
+                return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "terminal host input request id exhausted",
+                )));
+            }
+            let (sender, receiver) = sync_channel(1);
+            {
+                let mut waiters = self.control_responses.waiters.lock().unwrap();
+                if waiters.contains_key(&request_id) {
+                    self.control_responses.release_input_ack(payload.len());
+                    return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "terminal host input request id collision",
+                    )));
+                }
+                waiters.insert(
+                    request_id,
+                    ControlResponseWaiter::Blocking { kind: MessageKind::InputAck, sender },
+                );
+            }
+
+            let mut frame = Frame::new(MessageKind::Input, payload.to_vec());
+            frame.version = self.protocol_version;
+            frame.request_id = request_id;
+            let write_result = {
+                let mut writer = self.writer.lock().unwrap();
+                let result = write_frame(&mut *writer, &frame).map_err(protocol_io_error);
+                if result.is_err() {
+                    let _ = writer.shutdown(std::net::Shutdown::Both);
+                }
+                result
+            };
+            if let Err(error) = write_result {
+                self.control_responses.waiters.lock().unwrap().remove(&request_id);
+                self.control_responses.release_input_ack(payload.len());
+                return Err(InputAckBeginFailure::Ambiguous(error));
+            }
+
+            Ok(InputAckReceipt {
+                request_id,
+                receiver: Some(receiver),
+                control_responses: self.control_responses.clone(),
+                writer: self.writer.clone(),
+                bytes: payload.len(),
+                active: true,
+            })
         }
 
         /// Update the authoritative parser defaults on a feature-advertising
@@ -3663,18 +3821,20 @@ mod unix {
         }
 
         fn write_input(&self, payload: &[u8], request_id: u64, target: &HostTap) -> bool {
-            {
+            let delivered = {
                 let mut writer = self.writer.lock().unwrap();
-                if writer.write_all(payload).and_then(|()| writer.flush()).is_err() {
-                    return false;
-                }
-            }
+                writer.write_all(payload).and_then(|()| writer.flush()).is_ok()
+            };
+            // Interactive input has always been best-effort. Only a nonzero
+            // request id asks the authoritative host to certify delivery.
             if request_id == 0 {
                 return true;
             }
+            if !delivered {
+                return false;
+            }
             let mut response = Frame::new(MessageKind::InputAck, Vec::new());
             response.request_id = request_id;
-            let _broadcast = self.broadcast_lock.lock().unwrap();
             target.try_send(response)
         }
 
@@ -6947,7 +7107,7 @@ mod unix {
                 assert!(control_responses.resolve(&response));
             });
 
-            attachment.send_input_confirmed(b"owner-ack").unwrap();
+            attachment.begin_input_confirmed(b"owner-ack").unwrap().wait().unwrap();
             responder.join().unwrap();
 
             drop(attachment);
@@ -6989,7 +7149,13 @@ mod unix {
                 launch_activation_pending: false,
             };
 
-            let error = attachment.send_input_confirmed(b"must-not-send").unwrap_err();
+            let error = match attachment.begin_input_confirmed(b"must-not-send") {
+                Ok(_) => panic!("legacy host accepted a receipted input request"),
+                Err(InputAckBeginFailure::Known(error)) => error,
+                Err(InputAckBeginFailure::Ambiguous(error)) => {
+                    panic!("legacy-host rejection became ambiguous: {error}")
+                }
+            };
             assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
             let mut byte = [0u8; 1];
             let read_error = host.read(&mut byte).unwrap_err();
@@ -7001,6 +7167,110 @@ mod unix {
             drop(attachment);
             drop(lease);
             let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn receipted_input_requests_can_pipeline_before_the_first_ack() {
+            let (record_path, record, lease) = record_fixture("input-ack-pipeline");
+            let root = record_path.parent().unwrap().to_path_buf();
+            let (client, mut host) = UnixStream::pair().unwrap();
+            let control_responses = Arc::new(ControlResponses::new());
+            let attachment = HostAttachment {
+                record,
+                record_path,
+                snapshot: HostSnapshot {
+                    cols: 80,
+                    rows: 24,
+                    cell_pixels: DEFAULT_CELL_PIXELS,
+                    replay: Vec::new(),
+                    kitty_image_aliases: Vec::new(),
+                    kitty_state: test_kitty_state(),
+                    sequence_boundary: 0,
+                    colors: TerminalColorOverrides::default(),
+                    pid: None,
+                    command: Vec::new(),
+                    cwd: None,
+                },
+                protocol_version: PROTOCOL_VERSION,
+                smart_renderer: true,
+                reader: None,
+                writer: Arc::new(Mutex::new(client)),
+                control_responses: control_responses.clone(),
+                next_request: AtomicU64::new(2),
+                viewer_size: Mutex::new(None),
+                launch_process: None,
+                launch_activation_pending: false,
+            };
+
+            let first = attachment.begin_input_confirmed(b"a").unwrap();
+            let first_request = read_frame(&mut host, MAX_FRAME_PAYLOAD).unwrap().unwrap();
+            assert_eq!(first_request.kind, MessageKind::Input);
+            assert_eq!(first_request.payload, b"a");
+
+            // The second request must enter the host channel before the first
+            // receipt is acknowledged. A stop-and-wait implementation cannot
+            // reach this point without resolving first_request.
+            let second = attachment.begin_input_confirmed(b"b").unwrap();
+            let second_request = read_frame(&mut host, MAX_FRAME_PAYLOAD).unwrap().unwrap();
+            assert_eq!(second_request.kind, MessageKind::Input);
+            assert_eq!(second_request.payload, b"b");
+            assert_ne!(first_request.request_id, second_request.request_id);
+
+            let mut second_ack = Frame::new(MessageKind::InputAck, Vec::new());
+            second_ack.request_id = second_request.request_id;
+            assert!(control_responses.resolve(&second_ack));
+            let mut first_ack = Frame::new(MessageKind::InputAck, Vec::new());
+            first_ack.request_id = first_request.request_id;
+            assert!(control_responses.resolve(&first_ack));
+
+            second.wait().unwrap();
+            first.wait().unwrap();
+            assert_eq!(control_responses.pending_input_acks_for_test(), (0, 0));
+
+            drop(attachment);
+            drop(lease);
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn receipted_input_window_is_bounded() {
+            let responses = ControlResponses::new();
+            for _ in 0..MAX_PENDING_INPUT_ACKS {
+                assert!(responses.try_reserve_input_ack(1));
+            }
+            assert!(!responses.try_reserve_input_ack(1));
+            assert_eq!(
+                responses.pending_input_acks_for_test(),
+                (MAX_PENDING_INPUT_ACKS, MAX_PENDING_INPUT_ACKS)
+            );
+            responses.release_input_ack(1);
+            assert!(responses.try_reserve_input_ack(1));
+            for _ in 0..MAX_PENDING_INPUT_ACKS {
+                responses.release_input_ack(1);
+            }
+            assert_eq!(responses.pending_input_acks_for_test(), (0, 0));
+
+            assert!(responses.try_reserve_input_ack(MAX_PENDING_INPUT_ACK_BYTES));
+            assert!(!responses.try_reserve_input_ack(1));
+            responses.release_input_ack(MAX_PENDING_INPUT_ACK_BYTES);
+            assert_eq!(responses.pending_input_acks_for_test(), (0, 0));
+            assert!(!responses.try_reserve_input_ack(MAX_PENDING_INPUT_ACK_BYTES + 1));
+        }
+
+        #[test]
+        fn interactive_input_keeps_fire_and_forget_semantics() {
+            let host = test_host_shared();
+            let (pty_writer, mut pty_reader) = UnixStream::pair().unwrap();
+            *host.writer.lock().unwrap() = Box::new(pty_writer);
+            let (target_socket, _target_peer) = UnixStream::pair().unwrap();
+            let (target_tx, target_rx) = mpsc_channel();
+            let target = HostTap::new(target_tx, Arc::new(target_socket), usize::MAX);
+
+            assert!(host.write_input(b"x", 0, &target));
+            let mut byte = [0u8; 1];
+            pty_reader.read_exact(&mut byte).unwrap();
+            assert_eq!(&byte, b"x");
+            assert!(target_rx.recv_timeout(Duration::from_millis(20)).is_err());
         }
 
         #[test]
