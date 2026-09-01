@@ -1,0 +1,41 @@
+name: Fieldwork promote journal byte threshold
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-promote-journal-byte-threshold.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote-journal-byte-threshold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Guard landed journal source and promote tested byte-threshold patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_path=cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          expected_blob=1612a94000303493ede291d462594c32b679d16f
+          actual_blob=$(git hash-object "$source_path")
+          if [[ "$actual_blob" != "$expected_blob" ]]; then
+            echo "journal source blob is $actual_blob; expected $expected_blob" >&2
+            exit 1
+          fi
+
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_byte_threshold.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_byte_threshold.patch
+          git diff --check
+
+          git config user.name "Fieldwork automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add "$source_path"
+          git commit -m "fix(relay): flush byte-full journal backlog immediately"
+          git push origin HEAD:fieldwork/nonlinear-resource-collapse
