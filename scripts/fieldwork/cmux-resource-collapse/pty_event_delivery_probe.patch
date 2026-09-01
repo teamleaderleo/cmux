@@ -1,0 +1,178 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientPTYDeliveryQueueProbeTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientPTYDeliveryQueueProbeTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientPTYDeliveryQueueProbeTests.swift
+@@ -0,0 +1,158 @@
++import Darwin
++import Dispatch
++import Foundation
++import Testing
++import CmuxCore
++@testable import CmuxRemoteDaemon
++
++private let fieldworkPTYDeliveryProbeEnabled =
++    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_PTY_DELIVERY"] == "1"
++
++@Suite(
++    "RemoteDaemonRPCClient PTY delivery queue probe",
++    .serialized,
++    .enabled(if: fieldworkPTYDeliveryProbeEnabled)
++)
++struct RemoteDaemonRPCClientPTYDeliveryQueueProbeTests {
++    @Test("PTY data delivery exposes callback-queue occupancy")
++    func ptyDeliveryQueueOccupancy() {
++        let environment = ProcessInfo.processInfo.environment
++        let payloadBytes = max(
++            1,
++            Int(environment["CMUX_FIELDWORK_PTY_DELIVERY_PAYLOAD_BYTES"] ?? "32768") ?? 32 * 1024
++        )
++        let totalBytes = max(
++            payloadBytes,
++            Int(environment["CMUX_FIELDWORK_PTY_DELIVERY_TOTAL_BYTES"] ?? "1048576") ?? 1_048_576
++        )
++        let blocked = environment["CMUX_FIELDWORK_PTY_DELIVERY_BLOCKED"] == "1"
++        let eventCount = max(1, (totalBytes + payloadBytes - 1) / payloadBytes)
++        let client = makeClient()
++        let deliveryQueue = DispatchQueue(label: "com.cmux.fieldwork.pty-delivery")
++        let releaseGate = DispatchSemaphore(value: 0)
++        let handled = LockedPTYInt()
++        if blocked {
++            deliveryQueue.async {
++                releaseGate.wait()
++            }
++        }
++
++        let sessionID = "fieldwork-session"
++        let attachmentID = "fieldwork-attachment"
++        let attachmentToken = "fieldwork-token"
++        let key = RemoteDaemonRPCClient.ptySubscriptionKey(
++            sessionID: sessionID,
++            attachmentID: attachmentID,
++            attachmentToken: attachmentToken
++        )
++        client.stateQueue.sync {
++            client.ptySubscriptions[key] = .init(
++                queue: deliveryQueue,
++                handler: { event in
++                    if case .data = event {
++                        handled.increment()
++                    }
++                }
++            )
++        }
++
++        let encoded = Data(repeating: 0x78, count: payloadBytes).base64EncodedString()
++        let payload: [String: Any] = [
++            "event": "pty.data",
++            "session_id": sessionID,
++            "attachment_id": attachmentID,
++            "attachment_token": attachmentToken,
++            "data_base64": encoded,
++        ]
++        let baselineRSS = currentPTYRSSKiB()
++        let started = ContinuousClock.now
++        client.stateQueue.sync {
++            for _ in 0..<eventCount {
++                _ = client.consumePTYEventPayload(payload)
++            }
++        }
++        let submitMillis = Int(started.duration(to: .now).components.attoseconds / 1_000_000_000_000_000)
++        let handledAfterSubmit = handled.value
++        let pendingAfterSubmit = max(0, eventCount - handledAfterSubmit)
++        let loaded: [String: Any] = [
++            "blocked": blocked,
++            "payload_bytes": payloadBytes,
++            "event_count": eventCount,
++            "offered_bytes": eventCount * payloadBytes,
++            "submit_millis": submitMillis,
++            "handled_after_submit": handledAfterSubmit,
++            "pending_after_submit": pendingAfterSubmit,
++            "baseline_rss_kib": baselineRSS,
++            "loaded_rss_kib": currentPTYRSSKiB(),
++        ]
++        print("FIELDWORK_PTY_DELIVERY \(ptyJSONLine(loaded))")
++
++        if blocked {
++            #expect(handledAfterSubmit == 0)
++            #expect(pendingAfterSubmit == eventCount)
++            releaseGate.signal()
++        }
++        #expect(waitForPTYDelivery(timeout: 10) { handled.value == eventCount })
++        client.stateQueue.sync {
++            _ = client.ptySubscriptions.removeValue(forKey: key)
++        }
++        Thread.sleep(forTimeInterval: 0.1)
++        let cleanup: [String: Any] = [
++            "blocked": blocked,
++            "phase": "cleanup",
++            "handled": handled.value,
++            "cleanup_rss_kib": currentPTYRSSKiB(),
++        ]
++        print("FIELDWORK_PTY_DELIVERY \(ptyJSONLine(cleanup))")
++    }
++
++    private func makeClient() -> RemoteDaemonRPCClient {
++        RemoteDaemonRPCClient(
++            configuration: WorkspaceRemoteConfiguration(
++                destination: "user@example-host",
++                port: nil,
++                identityFile: nil,
++                sshOptions: [],
++                localProxyPort: nil,
++                relayPort: nil,
++                relayID: nil,
++                relayToken: nil,
++                localSocketPath: nil,
++                terminalStartupCommand: nil
++            ),
++            remotePath: "/usr/local/bin/cmuxd-remote",
++            strings: RemoteDaemonStrings(
++                missingPersistentPTYCapability: "missing persistent PTY",
++                missingRequiredFunctionality: "missing required functionality"
++            ),
++            onUnexpectedTermination: { _ in }
++        )
++    }
++}
++
++private final class LockedPTYInt: @unchecked Sendable {
++    private let lock = NSLock()
++    private var stored = 0
++
++    var value: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return stored
++    }
++
++    func increment() {
++        lock.lock()
++        stored += 1
++        lock.unlock()
++    }
++}
++
++private func waitForPTYDelivery(timeout: TimeInterval, condition: () -> Bool) -> Bool {
++    let deadline = Date().addingTimeInterval(timeout)
++    while Date() < deadline {
++        if condition() { return true }
++        Thread.sleep(forTimeInterval: 0.005)
++    }
++    return condition()
++}
++
++private func currentPTYRSSKiB() -> Int {
++    var info = mach_task_basic_info()
++    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
++    let result = withUnsafeMutablePointer(to: &info) { pointer in
++        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
++            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
++        }
++    }
++    return result == KERN_SUCCESS ? Int(info.resident_size / 1024) : -1
++}
++
++private func ptyJSONLine(_ object: [String: Any]) -> String {
++    guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return "{}" }
++    return String(decoding: data, as: UTF8.self)
++}
