@@ -29,6 +29,7 @@ jobs:
         with:
           ref: ${{ env.GREEN_SHA }}
           fetch-depth: 0
+          submodules: recursive
 
       - name: Verify candidate ancestry and diff
         shell: bash
@@ -40,6 +41,7 @@ jobs:
           expected=$'Sources/App/ComputerUseLiveSessionProjection.swift\ncmuxTests/HostSettingsShortcutNotificationTests.swift'
           test "$(git diff --name-only "$BASE_SHA" "$GREEN_SHA")" = "$expected"
           git diff --check "$BASE_SHA" "$GREEN_SHA"
+          test -f vendor/bonsplit/Package.swift
 
       - name: Select repository Xcode
         run: ./scripts/select-ci-xcode.sh
@@ -57,15 +59,19 @@ jobs:
             echo "expected the test-only commit to fail"
             exit 1
           fi
+          grep -F "Test run started" /tmp/computer-use-generation-red.log
+          grep -F "Computer Use cross-generation identity" /tmp/computer-use-generation-red.log
           grep -F "delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession" /tmp/computer-use-generation-red.log
-          echo "observed expected red test exit: $status"
+          echo "observed executed red test exit: $status"
 
       - name: Prove repair commit is green
         shell: bash
         run: |
           set -euo pipefail
           git checkout --detach "$GREEN_SHA"
-          ./scripts/test-unit.sh test -only-testing:"$TEST_ID"
+          ./scripts/test-unit.sh test -only-testing:"$TEST_ID" 2>&1 | tee /tmp/computer-use-generation-green.log
+          grep -F "Test run started" /tmp/computer-use-generation-green.log
+          grep -F "Computer Use cross-generation identity" /tmp/computer-use-generation-green.log
 
       - name: Run adjacent current-generation control
         shell: bash
