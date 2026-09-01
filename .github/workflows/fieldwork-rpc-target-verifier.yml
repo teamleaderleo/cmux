@@ -21,7 +21,55 @@ env:
   CMUX_SKIP_ZIG_BUILD: "1"
 
 jobs:
-  verify:
+  parser-discriminator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Verify exact ancestry
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$UPSTREAM_BASE_SHA" HEAD
+          echo "candidate=$(git rev-parse HEAD)"
+
+      - name: Compile real parser sources and prove current alias outcome
+        run: |
+          set -euo pipefail
+          cat > /tmp/cmux-rpc-alias-probe.swift <<'SWIFT'
+          import Foundation
+
+          @main
+          struct CmuxRPCAliasProbe {
+              static func main() {
+                  let line = #"{"id":7,"method":"terminal.input","params":{"surfaceId":"00000000-0000-0000-0000-000000000001","text":"marker"}}"#
+                  switch ControlRequestParser().request(fromLine: line) {
+                  case .success:
+                      print("accepted")
+                  case .failure:
+                      print("rejected")
+                  }
+              }
+          }
+          SWIFT
+
+          swiftc \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/JSONValue.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequest.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParseError.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParser.swift \
+            /tmp/cmux-rpc-alias-probe.swift \
+            -o /tmp/cmux-rpc-alias-probe
+
+          outcome="$(/tmp/cmux-rpc-alias-probe)"
+          echo "parser_outcome=$outcome"
+          test "$outcome" = "accepted"
+
+  app-host-regression:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
