@@ -1,0 +1,39 @@
+name: Fieldwork event delivery candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-event-delivery-candidate.yml
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  event-delivery-candidate:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply event-delivery candidate
+        run: |
+          set -euo pipefail
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          if [[ -f scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch ]]; then
+            git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+            git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+          fi
+          git diff --check
+      - name: Run full remote-daemon package
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon
