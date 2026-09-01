@@ -277,6 +277,20 @@ import Testing
         #expect(RemoteTmuxControlConnection.hexByteArguments(Data()) == "")
     }
 
+    @Test @MainActor func sendKeysChunksBoundaryPasteIntoControlSafeCommands() async throws {
+        let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
+        let emission = try await captureSendKeysWire(
+            paneId: 7,
+            data: data,
+            maxPendingBytes: 1 << 20
+        )
+
+        #expect(emission.accepted)
+        #expect(emission.commands.count >= 2)
+        #expect(emission.commands.allSatisfy { $0.utf8.count < 30_000 })
+        #expect(try decodeHexArguments(from: emission.commands, paneId: 7) == data)
+    }
+
     @Test @MainActor func pastePaneRejectsDisconnectedControlStream() {
         let connection = RemoteTmuxControlConnection(host: RemoteTmuxHost(destination: "user@host"), sessionName: "work")
         #expect(connection.pastePane(paneId: 1, text: "/tmp/image.png") == false)
@@ -436,6 +450,70 @@ import Testing
         let argv = host.interactiveAuthInvocation()
         #expect(consecutive(argv, "-p", "2222"))
         #expect(consecutive(argv, "-i", "/keys/id"))
+    }
+
+    @MainActor
+    private func captureSendKeysWire(
+        paneId: Int,
+        data: Data,
+        maxPendingBytes: Int
+    ) async throws -> (accepted: Bool, commands: [String]) {
+        let connection = RemoteTmuxControlConnection(
+            host: RemoteTmuxHost(destination: "user@input-transport"),
+            sessionName: "input-transport"
+        )
+        let bootstrapPipe = Pipe()
+        let bootstrapWriter = RemoteTmuxControlPipeWriter(
+            handle: bootstrapPipe.fileHandleForWriting,
+            label: "remote-tmux-send-keys-bootstrap-test",
+            maxPendingBytes: 1 << 16,
+            onFailure: {}
+        )
+        let pipe = Pipe()
+        let writer = RemoteTmuxControlPipeWriter(
+            handle: pipe.fileHandleForWriting,
+            label: "remote-tmux-send-keys-wire-test",
+            maxPendingBytes: maxPendingBytes,
+            onFailure: {}
+        )
+        defer {
+            bootstrapWriter.close()
+            try? bootstrapPipe.fileHandleForReading.close()
+            writer.close()
+            try? pipe.fileHandleForReading.close()
+        }
+
+        connection.installStdinWriterForTesting(bootstrapWriter)
+        connection.handleMessageForTesting(.enter)
+        connection.handleMessageForTesting(.commandResult(commandNumber: 0, lines: [], isError: false))
+        connection.installStdinWriterForTesting(writer)
+
+        let accepted = connection.sendKeys(paneId: paneId, data: data)
+        writer.close()
+        var lineData = Data()
+        var commands: [String] = []
+        for try await byte in pipe.fileHandleForReading.bytes {
+            guard byte == UInt8(ascii: "\n") else {
+                lineData.append(byte)
+                continue
+            }
+            commands.append(String(decoding: lineData, as: UTF8.self))
+            lineData.removeAll(keepingCapacity: true)
+        }
+        #expect(lineData.isEmpty)
+        return (accepted, commands)
+    }
+
+    private func decodeHexArguments(from commands: [String], paneId: Int) throws -> Data {
+        let prefix = "send-keys -t %\(paneId) -H "
+        var decoded = Data()
+        for command in commands {
+            #expect(command.hasPrefix(prefix))
+            for argument in command.dropFirst(prefix.count).split(separator: " ") {
+                decoded.append(try #require(UInt8(argument, radix: 16)))
+            }
+        }
+        return decoded
     }
 
     /// True when `a` is immediately followed by `b` in `args` — i.e. an ssh
