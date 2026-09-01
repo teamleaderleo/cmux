@@ -102,9 +102,10 @@ final class ComputerUseLiveSessionProjection {
     /// match the live projection.
     ///
     /// Some agents expose different identifiers to the process scanner and hook
-    /// protocol. In that case the generation-validated hook parent process is
-    /// the authority. A delayed Stop from a replaced process cannot match the
-    /// successor's live process tree, so it cannot hide newer pane activity.
+    /// protocol. When a hook carries a process id, that generation-validated
+    /// parent process is the authority even if the logical agent session id is
+    /// unchanged across a resume. Hooks without a process id may still use the
+    /// matching logical session id as their compatibility fallback.
     func driverSessionID(
         surfaceID rawSurfaceID: String?,
         agentSessionID: String,
@@ -125,18 +126,20 @@ final class ComputerUseLiveSessionProjection {
         else {
             return nil
         }
-        if record.agentSessionID == agentSessionID {
+        if let hookProcessID {
+            guard
+                let processID = pid_t(exactly: hookProcessID),
+                let hookProcessIdentity = AgentPIDProcessIdentity(pid: processID),
+                ComputerUseCuaState.process(
+                    hookProcessIdentity,
+                    belongsToProcessTree: record.session.rootProcessIdentities
+                )
+            else {
+                return nil
+            }
             return driverSessionID
         }
-        guard
-            let hookProcessID,
-            let processID = pid_t(exactly: hookProcessID),
-            let hookProcessIdentity = AgentPIDProcessIdentity(pid: processID),
-            ComputerUseCuaState.process(
-                hookProcessIdentity,
-                belongsToProcessTree: record.session.rootProcessIdentities
-            )
-        else {
+        guard record.agentSessionID == agentSessionID else {
             return nil
         }
         return driverSessionID
