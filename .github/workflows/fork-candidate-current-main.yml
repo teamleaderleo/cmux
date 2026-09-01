@@ -18,7 +18,7 @@ env:
 
 jobs:
   verify-candidate:
-    runs-on: macos-15
+    runs-on: macos-14
     timeout-minutes: 45
     steps:
       - name: Checkout exact green candidate
