@@ -276,18 +276,16 @@ extension RemoteDaemonRPCClient {
         }
     }
 
-    /// Runs one physical daemon write under the caller's absolute RPC deadline.
-    ///
-    /// `writeQueue.async` lets the synchronous caller own a deadline even while
-    /// an earlier writer holds the serial queue. A timeout returns without
-    /// waiting for that writer; the caller then stops the transport, which
-    /// closes the physical handle and releases every queued write. The send
-    /// error box remains alive in the queued closure after a timeout, so a late
-    /// write completion cannot touch caller stack state.
-    private func writePayload(
-        _ payload: Data,
-        before deadline: DispatchTime
-    ) throws -> Bool {
+    /// Separate liveness budget for the serialized non-WebSocket write lane.
+    /// The existing RPC `timeout` remains a response deadline that starts only
+    /// after a healthy write completes; this budget exists solely to prevent a
+    /// queued or physically blocked stdio write from waiting forever before the
+    /// response timeout owner can run.
+    private static var daemonWriteLivenessTimeout: TimeInterval { 1.0 }
+
+    /// Runs one physical non-WebSocket daemon write under the write-liveness
+    /// budget without consuming the caller's response timeout.
+    private func writePayloadWithinLivenessBudget(_ payload: Data) throws -> Bool {
         let completion = DispatchSemaphore(value: 0)
         let sendErrorBox = RemoteDaemonSendErrorBox()
         writeQueue.async { [self] in
@@ -298,19 +296,13 @@ extension RemoteDaemonRPCClient {
                 sendErrorBox.error = error
             }
         }
-        guard completion.wait(timeout: deadline) == .success else {
+        guard completion.wait(timeout: .now() + Self.daemonWriteLivenessTimeout) == .success else {
             return false
         }
         if let error = sendErrorBox.error {
             throw error
         }
         return true
-    }
-
-    private static func remainingTimeout(until deadline: DispatchTime) -> TimeInterval {
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard deadline.uptimeNanoseconds > now else { return 0 }
-        return Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
     }
 
     private static func timeoutError(method: String) -> NSError {
@@ -320,7 +312,6 @@ extension RemoteDaemonRPCClient {
     }
 
     func call(method: String, params: [String: Any], timeout: TimeInterval) throws -> [String: Any] {
-        let deadline = DispatchTime.now() + max(0, timeout)
         let pendingCall = pendingCalls.register()
         let payload: Data
         do {
@@ -330,28 +321,31 @@ extension RemoteDaemonRPCClient {
             throw error
         }
 
-        let writeCompleted: Bool
         do {
-            writeCompleted = try writePayload(payload, before: deadline)
+            if configuration.transport == .websocket {
+                try writeQueue.sync {
+                    try writePayload(payload)
+                }
+            } else {
+                guard try writePayloadWithinLivenessBudget(payload) else {
+                    // The request is either still queued or physically blocked.
+                    // Retire the single-lane transport so every queued caller
+                    // can unwind instead of accumulating behind stale work.
+                    pendingCalls.remove(pendingCall)
+                    stop(suppressTerminationCallback: false)
+                    throw Self.timeoutError(method: method)
+                }
+            }
         } catch {
             pendingCalls.remove(pendingCall)
             throw error
-        }
-        guard writeCompleted else {
-            // This request is either still queued or physically blocked. It is
-            // unsafe to preserve a transport whose single write lane cannot
-            // honor an RPC deadline: remove this unanswered call first so the
-            // stop path cannot signal a semaphore the caller will never wait.
-            pendingCalls.remove(pendingCall)
-            stop(suppressTerminationCallback: false)
-            throw Self.timeoutError(method: method)
         }
 
         return try waitForCall(
             pendingCall,
             method: method,
             params: params,
-            timeout: Self.remainingTimeout(until: deadline)
+            timeout: timeout
         )
     }
 
