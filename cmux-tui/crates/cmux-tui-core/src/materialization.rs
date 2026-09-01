@@ -48,7 +48,11 @@ pub fn install_materialized_machine_id(
     })?;
 
     let path = root.join(MACHINE_ID_FILE);
-    let temporary = root.join(format!(".machine-id.materialize-{}", machine_id.as_str()));
+    let temporary = root.join(format!(
+        ".machine-id.materialize-{}-{:016x}",
+        machine_id.as_str(),
+        random_u64()?
+    ));
     let result = (|| {
         let mut options = OpenOptions::new();
         options.create_new(true).write(true);
@@ -83,4 +87,11 @@ pub fn install_materialized_machine_id(
     }
     let _ = FileExt::unlock(&lock);
     result
+}
+
+fn random_u64() -> anyhow::Result<u64> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("generate materialization staging suffix: {error}"))?;
+    Ok(u64::from_le_bytes(bytes))
 }
