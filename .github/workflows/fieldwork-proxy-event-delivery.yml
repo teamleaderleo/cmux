@@ -1,0 +1,78 @@
+name: Fieldwork proxy event delivery queue
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-proxy-event-delivery.yml
+      - scripts/fieldwork/cmux-resource-collapse/proxy_event_delivery_probe.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy-event-delivery:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply measurement-only event delivery probe
+        run: |
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_event_delivery_probe.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_event_delivery_probe.patch
+          git diff --check
+      - name: Build probe
+        env:
+          CMUX_FIELDWORK_STREAM_DELIVERY: "1"
+          CMUX_FIELDWORK_STREAM_DELIVERY_TOTAL_BYTES: "1048576"
+          CMUX_FIELDWORK_STREAM_DELIVERY_PAYLOAD_BYTES: "32768"
+          CMUX_FIELDWORK_STREAM_DELIVERY_BLOCKED: "0"
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientStreamDeliveryQueueProbeTests
+      - name: Healthy delivery scaling
+        env:
+          CMUX_FIELDWORK_STREAM_DELIVERY: "1"
+          CMUX_FIELDWORK_STREAM_DELIVERY_PAYLOAD_BYTES: "32768"
+          CMUX_FIELDWORK_STREAM_DELIVERY_BLOCKED: "0"
+        run: |
+          mkdir -p proxy-event-delivery-results
+          for mib in 1 10 50 200; do
+            bytes=$((mib * 1024 * 1024))
+            echo "=== healthy mib=${mib} ===" | tee -a proxy-event-delivery-results/healthy.log
+            CMUX_FIELDWORK_STREAM_DELIVERY_TOTAL_BYTES="$bytes" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteDaemon \
+                --filter RemoteDaemonRPCClientStreamDeliveryQueueProbeTests \
+              2>&1 | tee -a proxy-event-delivery-results/healthy.log
+          done
+      - name: Blocked delivery scaling
+        env:
+          CMUX_FIELDWORK_STREAM_DELIVERY: "1"
+          CMUX_FIELDWORK_STREAM_DELIVERY_PAYLOAD_BYTES: "32768"
+          CMUX_FIELDWORK_STREAM_DELIVERY_BLOCKED: "1"
+        run: |
+          for mib in 1 10 50 200; do
+            bytes=$((mib * 1024 * 1024))
+            echo "=== blocked mib=${mib} ===" | tee -a proxy-event-delivery-results/blocked.log
+            CMUX_FIELDWORK_STREAM_DELIVERY_TOTAL_BYTES="$bytes" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteDaemon \
+                --filter RemoteDaemonRPCClientStreamDeliveryQueueProbeTests \
+              2>&1 | tee -a proxy-event-delivery-results/blocked.log
+          done
+      - name: Preserve event-delivery measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-event-delivery-results
+          path: proxy-event-delivery-results/*.log
