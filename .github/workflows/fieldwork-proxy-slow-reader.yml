@@ -1,0 +1,76 @@
+name: Fieldwork proxy slow-reader probe
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-proxy-slow-reader.yml
+      - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy-slow-reader:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Pin revision
+        run: git rev-parse HEAD
+      - name: Apply measurement-only proxy probe
+        run: |
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+          git diff --check
+      - name: Build probe
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "1048576"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests
+      - name: Active-reader controls
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "1048576"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+        run: |
+          mkdir -p proxy-slow-reader-results
+          for sessions in 1 10 50 200; do
+            echo "=== drain sessions=${sessions} ===" | tee -a proxy-slow-reader-results/drain.log
+            CMUX_FIELDWORK_PROXY_SESSIONS="${sessions}" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteWorkspace \
+                --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+              2>&1 | tee -a proxy-slow-reader-results/drain.log
+          done
+      - name: Slow-reader scaling
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "1048576"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+        run: |
+          for sessions in 1 10 50 200; do
+            echo "=== slow sessions=${sessions} ===" | tee -a proxy-slow-reader-results/slow.log
+            CMUX_FIELDWORK_PROXY_SESSIONS="${sessions}" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteWorkspace \
+                --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+              2>&1 | tee -a proxy-slow-reader-results/slow.log
+          done
+      - name: Preserve proxy measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-slow-reader-results
+          path: proxy-slow-reader-results/*.log
