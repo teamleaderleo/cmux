@@ -1,0 +1,102 @@
+name: Fieldwork terminal input ACK repair diagnostic
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-review-repair-diagnostic-run]
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Preserve repair recipe and reset candidate
+        run: |
+          cp .github/workflows/fieldwork-terminal-input-owner-ack-review-repair.yml /tmp/repair.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/repair.yml').read_text()
+          block = text.split('      - name: Apply repair\n        run: |\n', 1)[1]
+          block = block.split('\n      - name: Require scoped product delta', 1)[0]
+          lines = []
+          for line in block.splitlines():
+              if line:
+                  if not line.startswith('          '):
+                      raise SystemExit(f'unexpected repair indentation: {line!r}')
+                  line = line[10:]
+              lines.append(line)
+          Path('/tmp/apply-repair.sh').write_text('\n'.join(lines) + '\n')
+          PY
+          git checkout --detach a7fba4766f359963a375b67c6c62818240f53dda
+
+      - name: Init build dependencies
+        run: |
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Apply repair recipe
+        run: bash /tmp/apply-repair.sh
+
+      - name: ACK routing regression
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib hosted_input_ack_is_a_targeted_control_response --locked -- --nocapture > /tmp/test.log 2>&1
+          status=$?
+          set -e
+          tail -n 160 /tmp/test.log
+          exit $status
+
+      - name: Receipted input regressions
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture > /tmp/test.log 2>&1
+          status=$?
+          set -e
+          tail -n 160 /tmp/test.log
+          exit $status
+
+      - name: Historical receipt quarantine regression
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed --locked -- --nocapture > /tmp/test.log 2>&1
+          status=$?
+          set -e
+          tail -n 200 /tmp/test.log
+          exit $status
+
+      - name: Legacy record compatibility regression
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib legacy_record_is_adoptable_shape_but_never_unsafely_reaped --locked -- --nocapture > /tmp/test.log 2>&1
+          status=$?
+          set -e
+          tail -n 160 /tmp/test.log
+          exit $status
+
+      - name: Resource router regression
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture > /tmp/test.log 2>&1
+          status=$?
+          set -e
+          tail -n 160 /tmp/test.log
+          exit $status
