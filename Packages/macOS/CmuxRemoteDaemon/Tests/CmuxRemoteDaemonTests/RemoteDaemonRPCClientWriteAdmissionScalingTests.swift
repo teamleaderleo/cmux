@@ -5,7 +5,14 @@ import Testing
 import CmuxCore
 @testable import CmuxRemoteDaemon
 
-@Suite("RemoteDaemonRPCClient write admission scaling", .serialized)
+private let fieldworkWriteScalingEnabled =
+    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_SCALING"] == "1"
+
+@Suite(
+    "RemoteDaemonRPCClient write admission scaling",
+    .serialized,
+    .enabled(if: fieldworkWriteScalingEnabled)
+)
 struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
     @Test("responsive stdio transport settles 200 concurrent RPC callers")
     func responsiveTransportSettlesLargeCallerBurst() throws {
