@@ -12,7 +12,7 @@ permissions:
 
 env:
   CANDIDATE_BRANCH: fieldwork/rpc-target-keys-10910
-  UPSTREAM_BASE_SHA: 6b425641ae4d474e77854da535442af2a0d0a475
+  UPSTREAM_BASE_SHA: eaa899cb20bd411019744fbd2bdedeb397f3070b
   SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
   CMUX_SKIP_ZIG_BUILD: "1"
 
