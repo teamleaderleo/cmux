@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -243,7 +243,11 @@ fn atomic_marker(path: &Path, marker: &MaterializationMarker) -> anyhow::Result<
     let parent = path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("materialization marker has no parent"))?;
-    let temporary = parent.join(format!(".{MARKER_FILE}.tmp-{}", std::process::id()));
+    let temporary = parent.join(format!(
+        ".{MARKER_FILE}.tmp-{}-{:016x}",
+        std::process::id(),
+        random_u64()?
+    ));
     let data = serde_json::to_vec_pretty(marker)?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -264,6 +268,14 @@ fn atomic_marker(path: &Path, marker: &MaterializationMarker) -> anyhow::Result<
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+#[cfg(unix)]
+fn random_u64() -> anyhow::Result<u64> {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("generate materialization staging suffix: {error}"))?;
+    Ok(u64::from_le_bytes(bytes))
 }
 
 #[cfg(unix)]
