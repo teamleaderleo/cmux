@@ -1,0 +1,99 @@
+name: Fieldwork terminal input split-phase ACK
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-split-phase-run
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          ref: ${{ github.sha }}
+          submodules: false
+
+      - name: Require current-main baseline ancestry
+        run: |
+          test "$(git merge-base 6044a8b3f43152d2e6fc17f771fd4b277b393118 a61624869fb9c27f4131ee4757e5e4e987f22580)" = "6044a8b3f43152d2e6fc17f771fd4b277b393118"
+          git merge-base --is-ancestor a61624869fb9c27f4131ee4757e5e4e987f22580 HEAD
+
+      - name: Apply split-phase repair
+        run: python3 .fieldwork/refine_terminal_input_owner_ack_split_phase.py
+
+      - name: Require exact product delta
+        run: |
+          git diff --check
+          git diff --name-only | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/spec/terminal-host.md
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Run focused terminal input ACK tests
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_the_pty_write --locked -- --nocapture
+
+      - name: Run focused resource-router tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Characterize full core gate
+        id: full_core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/full-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "full core exit status: $status"
+
+      - name: Publish clean product candidate
+        shell: bash
+        run: |
+          product_paths=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/spec/terminal-host.md
+          )
+          git diff --binary -- "${product_paths[@]}" > /tmp/split-phase.patch
+          test -s /tmp/split-phase.patch
+          git checkout --detach a61624869fb9c27f4131ee4757e5e4e987f22580
+          git apply /tmp/split-phase.patch
+          git diff --check
+          git add "${product_paths[@]}"
+          git config user.name "Fieldwork"
+          git config user.email "fieldwork@users.noreply.github.com"
+          git commit -m "fix(cmux-tui): pipeline receipted terminal input acknowledgements"
+          candidate=$(git rev-parse HEAD)
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-split-phase --force
+          echo "candidate=$candidate"
+          echo "full_core_status=${{ steps.full_core.outputs.status }}"
