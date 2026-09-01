@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/fieldwork-reachability-overlap.yml
       - scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
+      - scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe_fix.patch
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,8 @@ jobs:
         run: |
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe_fix.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe_fix.patch
           git diff --check
       - name: Build and run 1-probe control
         env:
@@ -33,6 +36,7 @@ jobs:
           CMUX_FIELDWORK_REACHABILITY_PROBES: "1"
           CMUX_FIELDWORK_REACHABILITY_HOLD_MS: "2000"
         run: |
+          set -o pipefail
           mkdir -p reachability-overlap-results
           swift test \
             --package-path Packages/macOS/CmuxRemoteSession \
@@ -43,6 +47,7 @@ jobs:
           CMUX_FIELDWORK_REACHABILITY_OVERLAP: "1"
           CMUX_FIELDWORK_REACHABILITY_HOLD_MS: "2000"
         run: |
+          set -o pipefail
           for probes in 10 50 200; do
             echo "=== probes=${probes} ===" | tee -a reachability-overlap-results/scaling.log
             CMUX_FIELDWORK_REACHABILITY_PROBES="${probes}" \
