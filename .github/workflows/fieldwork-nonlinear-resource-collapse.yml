@@ -20,7 +20,7 @@ jobs:
       - name: Verify journal source remains upstream-pinned
         run: |
           test "$(git rev-parse HEAD:cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs)" = \
-            "$(git rev-parse 8ef183f1e5de765b183aec9d1799f17a0848ae84:cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs)"
+            "9b4551770e807084c48c2cdbe94f15f2cf2358e0"
       - name: Build live journal harness
         run: |
           cargo build \
