@@ -7,226 +7,34 @@ on:
       - .github/workflows/fork-candidate-current-main.yml
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   UPSTREAM_BASE_SHA: 6b425641ae4d474e77854da535442af2a0d0a475
-  BASE_BRANCH: fieldwork/upstream-main-6b425641
-  CANDIDATE_BRANCH: fix/ssh-tmux-sendkeys-current-main
-  SNAPSHOT_BRANCH: fieldwork/sendkeys-snapshot-64055249
+  RED_SHA: 4719143f4a21ab2442397efe70643435c1f604f6
+  GREEN_SHA: 1563ad3cf24d53f792e7eb54b85dcc1a9d12f013
   SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
   CMUX_SKIP_ZIG_BUILD: "1"
 
 jobs:
-  construct-candidate:
-    runs-on: ubuntu-latest
-    outputs:
-      red_sha: ${{ steps.construct.outputs.red_sha }}
-      green_sha: ${{ steps.construct.outputs.green_sha }}
-    steps:
-      - name: Checkout exact upstream base carrier
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.BASE_BRANCH }}
-          fetch-depth: 0
-
-      - name: Construct exact red and green commits
-        id: construct
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$UPSTREAM_BASE_SHA"
-          git config user.name "teamleaderleo"
-          git config user.email "cheerleaderleo@outlook.com"
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("cmuxTests/RemoteTmuxAuthTests.swift")
-          text = path.read_text()
-          test_anchor = "    @Test @MainActor func pastePaneRejectsDisconnectedControlStream() {"
-          if "boundaryPasteIsSplitIntoControlSafeCommands" in text:
-              raise SystemExit("boundary regression already present on exact base")
-          if test_anchor not in text:
-              raise SystemExit("pastePane test anchor drifted")
-          regression = '''    @Test @MainActor func boundaryPasteIsSplitIntoControlSafeCommands() async throws {
-              let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
-              let emission = try await captureSendKeysWire(
-                  paneId: 7,
-                  data: data,
-                  maxPendingBytes: 1 << 20
-              )
-
-              #expect(emission.accepted)
-              #expect(emission.commands.count >= 2)
-              #expect(emission.commands.allSatisfy { $0.utf8.count < 30_000 })
-              #expect(try decodeHexArguments(from: emission.commands, paneId: 7) == data)
-          }
-
-          '''
-          text = text.replace(test_anchor, regression + test_anchor, 1)
-
-          helper_anchor = "    /// True when `a` is immediately followed by `b` in `args` — i.e. an ssh"
-          if helper_anchor not in text:
-              raise SystemExit("helper insertion anchor drifted")
-          helpers = '''    @MainActor
-          private func captureSendKeysWire(
-              paneId: Int,
-              data: Data,
-              maxPendingBytes: Int
-          ) async throws -> (accepted: Bool, commands: [String]) {
-              let connection = RemoteTmuxControlConnection(
-                  host: RemoteTmuxHost(destination: "user@input-transport"),
-                  sessionName: "input-transport"
-              )
-              let bootstrapPipe = Pipe()
-              let bootstrapWriter = RemoteTmuxControlPipeWriter(
-                  handle: bootstrapPipe.fileHandleForWriting,
-                  label: "remote-tmux-send-keys-bootstrap-test",
-                  maxPendingBytes: 1 << 16,
-                  onFailure: {}
-              )
-              let pipe = Pipe()
-              let writer = RemoteTmuxControlPipeWriter(
-                  handle: pipe.fileHandleForWriting,
-                  label: "remote-tmux-send-keys-wire-test",
-                  maxPendingBytes: maxPendingBytes,
-                  onFailure: {}
-              )
-              defer {
-                  bootstrapWriter.close()
-                  try? bootstrapPipe.fileHandleForReading.close()
-                  writer.close()
-                  try? pipe.fileHandleForReading.close()
-              }
-
-              connection.installStdinWriterForTesting(bootstrapWriter)
-              connection.handleMessageForTesting(.enter)
-              connection.handleMessageForTesting(.commandResult(commandNumber: 0, lines: [], isError: false))
-              connection.installStdinWriterForTesting(writer)
-
-              let accepted = connection.sendKeys(paneId: paneId, data: data)
-              writer.close()
-              var lineData = Data()
-              var commands: [String] = []
-              for try await byte in pipe.fileHandleForReading.bytes {
-                  guard byte == UInt8(ascii: "\\n") else {
-                      lineData.append(byte)
-                      continue
-                  }
-                  commands.append(String(decoding: lineData, as: UTF8.self))
-                  lineData.removeAll(keepingCapacity: true)
-              }
-              #expect(lineData.isEmpty)
-              return (accepted, commands)
-          }
-
-          private func decodeHexArguments(from commands: [String], paneId: Int) throws -> Data {
-              let prefix = "send-keys -t %\\(paneId) -H "
-              var decoded = Data()
-              for command in commands {
-                  #expect(command.hasPrefix(prefix))
-                  for argument in command.dropFirst(prefix.count).split(separator: " ") {
-                      decoded.append(try #require(UInt8(argument, radix: 16)))
-                  }
-              }
-              return decoded
-          }
-
-          '''
-          text = text.replace(helper_anchor, helpers + helper_anchor, 1)
-          path.write_text(text)
-          PY
-
-          git add cmuxTests/RemoteTmuxAuthTests.swift
-          git commit -m "test: prove ssh-tmux paste command boundary"
-          RED_SHA=$(git rev-parse HEAD)
-
-          git fetch origin "$SNAPSHOT_BRANCH:refs/remotes/origin/$SNAPSHOT_BRANCH"
-          git checkout "origin/$SNAPSHOT_BRANCH" -- \
-            Packages/macOS/CmuxRemoteSession/Sources/CmuxRemoteSession/RemoteTmux/RemoteTmuxSendKeysBatchBuilder.swift \
-            Sources/RemoteTmuxControlConnection+Commands.swift \
-            Sources/RemoteTmuxControlConnection.swift \
-            Sources/RemoteTmuxPaneInputForwarder.swift
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("cmuxTests/RemoteTmuxAuthTests.swift")
-          text = path.read_text()
-          old = '''    @Test func sendKeysHexArgumentsAreLowercaseSpaceSeparatedBytes() {
-              #expect(RemoteTmuxControlConnection.hexByteArguments(Data([0x00, 0x0f, 0x10, 0xff])) == "00 0f 10 ff")
-              #expect(RemoteTmuxControlConnection.hexByteArguments(Data()) == "")
-          }
-
-          '''
-          new = '''    @Test @MainActor func sendKeysRejectsOverBudgetLogicalInputWithoutPartialDelivery() async throws {
-              let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
-              let writerBudget = 30_000
-
-              let emission = try await captureSendKeysWire(
-                  paneId: 7,
-                  data: data,
-                  maxPendingBytes: writerBudget
-              )
-
-              #expect(!emission.accepted)
-              #expect(emission.commands.isEmpty)
-          }
-
-          @Test @MainActor func sendKeysAcceptsRawAdmissionLimitWithProductionWriterBudget() async throws {
-              let rawAdmissionLimit = RemoteTmuxPaneInputForwarder.defaultMaximumPendingBytes
-              let data = Data((0 ..< rawAdmissionLimit).map { UInt8($0 % 251) })
-
-              let emission = try await captureSendKeysWire(
-                  paneId: 7,
-                  data: data,
-                  maxPendingBytes: RemoteTmuxControlConnection.maxPendingStdinBytes
-              )
-
-              #expect(emission.accepted)
-              #expect(try decodeHexArguments(from: emission.commands, paneId: 7) == data)
-          }
-
-          '''
-          if old not in text:
-              raise SystemExit("hex helper test anchor drifted")
-          path.write_text(text.replace(old, new, 1))
-          PY
-
-          git add \
-            Packages/macOS/CmuxRemoteSession/Sources/CmuxRemoteSession/RemoteTmux/RemoteTmuxSendKeysBatchBuilder.swift \
-            Sources/RemoteTmuxControlConnection+Commands.swift \
-            Sources/RemoteTmuxControlConnection.swift \
-            Sources/RemoteTmuxPaneInputForwarder.swift \
-            cmuxTests/RemoteTmuxAuthTests.swift
-          git commit -m "fix: bound ssh-tmux send-key batches"
-          GREEN_SHA=$(git rev-parse HEAD)
-          git push --force origin "HEAD:$CANDIDATE_BRANCH"
-
-          echo "red_sha=$RED_SHA" >> "$GITHUB_OUTPUT"
-          echo "green_sha=$GREEN_SHA" >> "$GITHUB_OUTPUT"
-
   verify-candidate:
-    needs: construct-candidate
     runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout exact green candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.construct-candidate.outputs.green_sha }}
+          ref: ${{ env.GREEN_SHA }}
           fetch-depth: 0
           submodules: recursive
 
-      - name: Verify candidate ancestry
-        env:
-          RED_SHA: ${{ needs.construct-candidate.outputs.red_sha }}
-          GREEN_SHA: ${{ needs.construct-candidate.outputs.green_sha }}
+      - name: Verify candidate ancestry and diff
         run: |
           set -euo pipefail
           test "$(git rev-parse "$RED_SHA^")" = "$UPSTREAM_BASE_SHA"
           test "$(git rev-parse "$GREEN_SHA^")" = "$RED_SHA"
+          test "$(git diff --name-only "$UPSTREAM_BASE_SHA" "$RED_SHA" | wc -l | tr -d ' ')" = "1"
+          test "$(git diff --name-only "$UPSTREAM_BASE_SHA" "$RED_SHA")" = "cmuxTests/RemoteTmuxAuthTests.swift"
 
       - name: Select Xcode
         run: ./scripts/select-ci-xcode.sh
@@ -262,8 +70,6 @@ jobs:
 
       - name: Prove regression commit is red at the assertion
         shell: bash
-        env:
-          RED_SHA: ${{ needs.construct-candidate.outputs.red_sha }}
         run: |
           set -euo pipefail
           git checkout --detach "$RED_SHA"
@@ -276,7 +82,7 @@ jobs:
               -disableAutomaticPackageResolution \
               -destination "platform=macOS" \
               EXCLUDED_SOURCE_FILE_NAMES="BrowserPanelTests.swift BrowserPanelViewIdentityTests.swift" \
-              -only-testing:cmuxTests/RemoteTmuxAuthTests/boundaryPasteIsSplitIntoControlSafeCommands \
+              -only-testing:cmuxTests/RemoteTmuxAuthTests/sendKeysChunksBoundaryPasteIntoControlSafeCommands \
               test 2>&1 | tee /tmp/red.log
           RED_STATUS=${PIPESTATUS[0]}
           set -e
@@ -284,12 +90,10 @@ jobs:
             echo "expected the test-only commit to fail"
             exit 1
           fi
-          grep -F "boundaryPasteIsSplitIntoControlSafeCommands" /tmp/red.log
+          grep -F "sendKeysChunksBoundaryPasteIntoControlSafeCommands" /tmp/red.log
           grep -F "Expectation failed" /tmp/red.log
 
       - name: Prove fix commit is green
-        env:
-          GREEN_SHA: ${{ needs.construct-candidate.outputs.green_sha }}
         run: |
           set -euo pipefail
           git checkout --detach "$GREEN_SHA"
@@ -310,8 +114,6 @@ jobs:
         run: swift test --package-path Packages/macOS/CmuxRemoteSession
 
       - name: Repository guards
-        env:
-          GREEN_SHA: ${{ needs.construct-candidate.outputs.green_sha }}
         run: |
           set -euo pipefail
           git diff --check "$UPSTREAM_BASE_SHA" "$GREEN_SHA"
