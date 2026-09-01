@@ -14,8 +14,8 @@ concurrency:
 
 env:
   BASE_SHA: 2ead47750ab2f47c13972d0709d99cdcbaa8ad73
-  RED_SHA: 665b1771caa5c4833e5d44ee734cdeeef8047c29
-  GREEN_SHA: ec050357a2e2a594c89fb563508cc96bc88a6745
+  RED_SHA: 7ee8e84e4e0efe14e78e07bb735438ae30413271
+  GREEN_SHA: b6133588800111f99f17333b8fd1450ba5bcc036
 
 jobs:
   verify:
@@ -59,13 +59,15 @@ jobs:
           grep -F "second bridge took over the socket while the first owner was still alive" /tmp/cloud-cli-red.log
           echo "observed expected red test exit: $status"
 
-      - name: Prove fix commit is green
+      - name: Prove fix commit is green repeatedly
         working-directory: daemon/remote
         shell: bash
         run: |
           set -euo pipefail
           git checkout --detach "$GREEN_SHA"
-          go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1
+          for iteration in $(seq 1 25); do
+            go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1
+          done
 
       - name: Run full remote daemon package tests
         working-directory: daemon/remote
