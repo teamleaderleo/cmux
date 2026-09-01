@@ -24,6 +24,11 @@ jobs:
           grep -q 'post_completion_handoff_keeps_the_next_ready_batch_exact' \
             cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
           git diff --check
+      - name: Apply recovery measurement harness
+        run: |
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_recovery_harness.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_recovery_harness.patch
+          git diff --check
       - name: Run journal-forwarder unit tests
         run: |
           cargo test \
@@ -66,6 +71,20 @@ jobs:
               > "journal-source-results/stall-${sessions}.json"
             cat "journal-source-results/stall-${sessions}.json"
           done
+      - name: Run stall-stop-recover settle probe
+        run: |
+          cargo run --quiet \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog -- \
+            --mode recover \
+            --sessions 128 \
+            --records-per-session 1000000 \
+            --payload-bytes 1024 \
+            --load-millis 1500 \
+            --settle-millis 100 \
+            > journal-source-results/recover-128.json
+          cat journal-source-results/recover-128.json
       - name: Preserve landed-source measurements
         uses: actions/upload-artifact@v4
         with:
