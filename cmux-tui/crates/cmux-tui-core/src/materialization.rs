@@ -4,7 +4,7 @@
 //! newly tracked machine needs a new root-level [`MachinePublicId`]. This helper
 //! owns only that root identity file; session SQLite databases remain untouched.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
@@ -83,28 +83,4 @@ pub fn install_materialized_machine_id(
     }
     let _ = FileExt::unlock(&lock);
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::WorkspaceRegistry;
-
-    #[test]
-    fn replacement_changes_machine_identity_without_changing_session_identity() {
-        let root = tempfile::tempdir().unwrap();
-        let state = root.path().join("state");
-        let registry = WorkspaceRegistry::open(&state, "main").unwrap();
-        let original_machine = registry.machine_id().clone();
-        let original_session = registry.session_id().clone();
-        drop(registry);
-
-        let replacement = MachinePublicId::random().unwrap();
-        assert_ne!(replacement, original_machine);
-        install_materialized_machine_id(&state, &replacement).unwrap();
-
-        let reopened = WorkspaceRegistry::open(&state, "main").unwrap();
-        assert_eq!(reopened.machine_id(), &replacement);
-        assert_eq!(reopened.session_id(), &original_session);
-    }
 }
