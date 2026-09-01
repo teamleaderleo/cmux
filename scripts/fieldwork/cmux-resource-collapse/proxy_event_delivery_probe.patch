@@ -2,7 +2,7 @@ diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteD
 new file mode 100644
 --- /dev/null
 +++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientStreamDeliveryQueueProbeTests.swift
-@@ -0,0 +1,151 @@
+@@ -0,0 +1,153 @@
 +import Darwin
 +import Dispatch
 +import Foundation
@@ -70,8 +70,18 @@ new file mode 100644
 +        let handledAfterSubmit = handled.value
 +        let pendingAfterSubmit = max(0, eventCount - handledAfterSubmit)
 +        let loadedRSS = currentRSSKiB()
-+
-+        print("FIELDWORK_STREAM_DELIVERY \(jsonLine([\n+            \"blocked\": blocked,\n+            \"payload_bytes\": payloadBytes,\n+            \"event_count\": eventCount,\n+            \"offered_bytes\": eventCount * payloadBytes,\n+            \"submit_millis\": submitMillis,\n+            \"handled_after_submit\": handledAfterSubmit,\n+            \"pending_after_submit\": pendingAfterSubmit,\n+            \"baseline_rss_kib\": baselineRSS,\n+            \"loaded_rss_kib\": loadedRSS,\n+        ]))")
++        let loaded: [String: Any] = [
++            "blocked": blocked,
++            "payload_bytes": payloadBytes,
++            "event_count": eventCount,
++            "offered_bytes": eventCount * payloadBytes,
++            "submit_millis": submitMillis,
++            "handled_after_submit": handledAfterSubmit,
++            "pending_after_submit": pendingAfterSubmit,
++            "baseline_rss_kib": baselineRSS,
++            "loaded_rss_kib": loadedRSS,
++        ]
++        print("FIELDWORK_STREAM_DELIVERY \(jsonLine(loaded))")
 +
 +        if blocked {
 +            #expect(handledAfterSubmit == 0)
@@ -83,7 +93,13 @@ new file mode 100644
 +            client.streamSubscriptions.removeValue(forKey: "fieldwork-stream")
 +        }
 +        Thread.sleep(forTimeInterval: 0.1)
-+        print("FIELDWORK_STREAM_DELIVERY \(jsonLine([\n+            \"blocked\": blocked,\n+            \"phase\": \"cleanup\",\n+            \"handled\": handled.value,\n+            \"cleanup_rss_kib\": currentRSSKiB(),\n+        ]))")
++        let cleanup: [String: Any] = [
++            "blocked": blocked,
++            "phase": "cleanup",
++            "handled": handled.value,
++            "cleanup_rss_kib": currentRSSKiB(),
++        ]
++        print("FIELDWORK_STREAM_DELIVERY \(jsonLine(cleanup))")
 +    }
 +
 +    private func makeClient() -> RemoteDaemonRPCClient {
