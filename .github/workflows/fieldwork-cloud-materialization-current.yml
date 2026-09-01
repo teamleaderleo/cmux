@@ -29,6 +29,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 3
           submodules: false
 
       - name: Require exact candidate ancestry
@@ -66,6 +67,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 3
 
       - name: Require exact candidate ancestry
         run: |
