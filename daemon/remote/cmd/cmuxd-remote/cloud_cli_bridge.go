@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -50,6 +51,30 @@ func defaultCloudCLIBridgeSocketIfExists() string {
 	return ""
 }
 
+func acquireCloudCLIBridgeSocketLock(socketPath string) (*os.File, error) {
+	lockPath := socketPath + ".lock"
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return nil, fmt.Errorf("cloud CLI bridge socket %q is already owned", socketPath)
+		}
+		return nil, err
+	}
+	return lockFile, nil
+}
+
+func releaseCloudCLIBridgeSocketLock(lockFile *os.File) {
+	if lockFile == nil {
+		return
+	}
+	_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	_ = lockFile.Close()
+}
+
 func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io.Writer) error {
 	if b == nil {
 		return nil
@@ -58,6 +83,17 @@ func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
 		return err
 	}
+	socketLock, err := acquireCloudCLIBridgeSocketLock(socketPath)
+	if err != nil {
+		return err
+	}
+	lockOwned := true
+	defer func() {
+		if lockOwned {
+			releaseCloudCLIBridgeSocketLock(socketLock)
+		}
+	}()
+
 	_ = os.Remove(socketPath)
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
@@ -76,11 +112,13 @@ func (b *cloudCLIBridge) start(ctx context.Context, socketPath string, stderr io
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	go b.acceptLoop(listener, socketPath, stderr)
+	go b.acceptLoop(listener, socketPath, stderr, socketLock)
+	lockOwned = false
 	return nil
 }
 
-func (b *cloudCLIBridge) acceptLoop(listener net.Listener, socketPath string, stderr io.Writer) {
+func (b *cloudCLIBridge) acceptLoop(listener net.Listener, socketPath string, stderr io.Writer, socketLock *os.File) {
+	defer releaseCloudCLIBridgeSocketLock(socketLock)
 	defer os.Remove(socketPath)
 	for {
 		conn, err := listener.Accept()
