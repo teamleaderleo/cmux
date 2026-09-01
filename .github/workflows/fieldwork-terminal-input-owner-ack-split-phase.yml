@@ -31,6 +31,7 @@ jobs:
           python3 .fieldwork/refine_terminal_input_owner_ack_split_phase_controls.py
           python3 .fieldwork/refine_terminal_input_owner_ack_delivery_classification.py
           python3 .fieldwork/refine_terminal_input_owner_ack_rustfmt.py
+          python3 .fieldwork/refine_terminal_input_owner_ack_interactive_control.py
 
       - name: Require exact product delta
         run: |
@@ -75,6 +76,7 @@ jobs:
         run: |
           cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
           cargo test -p cmux-tui-core --lib host_input_receipt_follows_the_pty_write --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
 
       - name: Run focused resource-router tests
         working-directory: cmux-tui
