@@ -1,0 +1,311 @@
+diff --git a/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs b/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+index 9b455177..00000000 100644
+--- a/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
++++ b/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+@@ -36,6 +36,10 @@ use crate::config::ManagedEvents;
+ pub const JOURNAL_KIND_FILTERS: [&str; 2] = ["agent.*", "plugin.chatmux.*"];
+ pub const MAX_BATCH_RECORDS: usize = 100;
+ pub const MAX_BATCH_BODY_BYTES: usize = 4 * 1024 * 1024;
++#[cfg(unix)]
++const MAX_PENDING_RECORDS: usize = MAX_BATCH_RECORDS;
++#[cfg(unix)]
++const MAX_PENDING_BYTES: usize = MAX_BATCH_BODY_BYTES;
+ const MAX_JOURNAL_LINE_BYTES: usize = 1 << 20;
+ const DEFAULT_FLUSH_DEBOUNCE: Duration = Duration::from_millis(500);
+ const DEFAULT_MIN_BACKOFF: Duration = Duration::from_secs(1);
+@@ -272,6 +276,10 @@ struct Shared {
+     /// queue of redundant debounce wakes.
+     flush_wake: Arc<tokio::sync::Notify>,
++    /// Session readers wait here when the next pooled batch reaches its
++    /// record/byte budget while the current POST is still in flight.
++    pool_capacity_wake: Arc<tokio::sync::Notify>,
+ }
+ 
+ #[cfg(unix)]
+@@ -280,6 +288,10 @@ struct PoolState {
+     /// Per-session record buffers awaiting the shared flush, in first-record
+     /// arrival order so pooled POST bodies are deterministic.
+     pending: Vec<PendingSession>,
++    /// Aggregate pending occupancy. These counters let producers stop before
++    /// one busy flusher turns every session socket into retained heap state.
++    pending_records: usize,
++    pending_bytes: usize,
+     /// A POST is in flight; a threshold flush defers to `flush_again`.
+     flushing: bool,
+@@ -301,6 +313,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
+         Ok(client) => client,
+         Err(error) => {
+             eprintln!("chatmux-relay: journal forwarder HTTP client failed: {error}");
+@@ -309,6 +322,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
+         }
+     };
+     let flush_wake = Arc::new(tokio::sync::Notify::new());
++    let pool_capacity_wake = Arc::new(tokio::sync::Notify::new());
+     let shared = Shared {
+         events,
+         client,
+@@ -319,6 +333,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
+         claims: Arc::new(Mutex::new(HashSet::new())),
+         pool: Arc::new(Mutex::new(PoolState::default())),
+         flush_wake,
++        pool_capacity_wake,
+     };
+     let flusher = tokio::spawn(run_flusher(shared.clone()));
+@@ -642,14 +657,17 @@ async fn run_session(
+                                 generation.get_or_insert_with(|| cursor.generation.clone());
+                                 last_delivered = Some(cursor);
+                             }
+-                            enqueue_pending(
++                            if !enqueue_pending_with_backpressure(
+                                 &shared,
+                                 wire_session_name.unwrap_or(&session_key),
+                                 &effective_session_key,
+                                 &generation,
+                                 envelope,
+-                            );
++                            )
++                            .await
++                            {
++                                return;
++                            }
+                         }
+                         Some("stream_end") => {
+@@ -694,6 +712,41 @@ async fn run_session(
+     }
+ }
+ 
++#[cfg(unix)]
++enum EnqueuePendingResult {
++    Enqueued,
++    Full(Value),
++}
++
++#[cfg(unix)]
++fn pending_record_bytes(record: &Value) -> usize {
++    serde_json::to_vec(record).map_or(MAX_PENDING_BYTES.saturating_add(1), |bytes| bytes.len())
++}
++
++#[cfg(unix)]
++async fn enqueue_pending_with_backpressure(
++    shared: &Shared,
++    session_name: &str,
++    cursor_key: &str,
++    generation: &Option<String>,
++    mut record: Value,
++) -> bool {
++    loop {
++        // Register before checking capacity so a completion wake cannot land
++        // in the gap between observing Full and beginning to wait.
++        let mut capacity = Box::pin(shared.pool_capacity_wake.notified());
++        capacity.as_mut().enable();
++        match enqueue_pending(shared, session_name, cursor_key, generation, record) {
++            EnqueuePendingResult::Enqueued => return true,
++            EnqueuePendingResult::Full(returned) => record = returned,
++        }
++        tokio::select! {
++            biased;
++            _ = shared.cancellation.cancelled() => return false,
++            _ = &mut capacity => {}
++        }
++    }
++}
++
+ /// Buffer one delivered record under its session in the forwarder-level
+ /// pooled buffers, then apply the Node forwarder's `#scheduleFlush` decision
+ /// synchronously: at the shared record threshold the buffers are drained on
+@@ -706,8 +759,17 @@ fn enqueue_pending(
+     cursor_key: &str,
+     generation: &Option<String>,
+     record: Value,
+-) {
+-    let Ok(mut pool) = shared.pool.lock() else { return };
++) -> EnqueuePendingResult {
++    let record_bytes = pending_record_bytes(&record);
++    let Ok(mut pool) = shared.pool.lock() else { return EnqueuePendingResult::Enqueued };
++    if pool.flushing
++        && (pool.pending_records >= MAX_PENDING_RECORDS
++            || pool.pending_bytes.saturating_add(record_bytes) > MAX_PENDING_BYTES)
++    {
++        return EnqueuePendingResult::Full(record);
++    }
+     let index = match pool.pending.iter().position(|entry| entry.cursor_key == cursor_key) {
+         Some(index) => index,
+@@ -721,22 +783,27 @@ fn enqueue_pending(
+             pool.pending.len() - 1
+         }
+     };
+-    if let Some(entry) = pool.pending.get_mut(index) {
++    {
++        let Some(entry) = pool.pending.get_mut(index) else { return EnqueuePendingResult::Enqueued };
+         if entry.generation.is_none() {
+             entry.generation = generation.clone();
+         }
+         entry.records.push(record);
+     }
+-    let total = pool.pending.iter().map(|entry| entry.records.len()).sum::<usize>();
+-    if total < MAX_BATCH_RECORDS {
++    pool.pending_records = pool.pending_records.saturating_add(1);
++    pool.pending_bytes = pool.pending_bytes.saturating_add(record_bytes);
++    let threshold_reached =
++        pool.pending_records >= MAX_BATCH_RECORDS || pool.pending_bytes >= MAX_BATCH_BODY_BYTES;
++    if !threshold_reached {
+         // During an in-flight POST the completion path re-arms the debounce
+         // for any leftover pending records (flush_cycle reads the total under
+         // the same lock that clears `flushing`), so waking here would only
+         // store a spurious permit — the exact wake the deferral pin forbids.
+         if pool.flushing {
+-            return;
++            return EnqueuePendingResult::Enqueued;
+         }
+         drop(pool);
+         shared.flush_wake.notify_one();
+-        return;
++        return EnqueuePendingResult::Enqueued;
+     }
+     if pool.flushing {
+         pool.flush_again = true;
+-        return;
++        return EnqueuePendingResult::Enqueued;
+     }
+     let entries = std::mem::take(&mut pool.pending);
++    pool.pending_records = 0;
++    pool.pending_bytes = 0;
+     let batches = batch_records(&entries);
+     if batches.is_empty() {
+-        return;
++        return EnqueuePendingResult::Enqueued;
+     }
+     pool.flushing = true;
+     pool.ready = Some(batches);
+     drop(pool);
+     shared.flush_wake.notify_one();
++    EnqueuePendingResult::Enqueued
+ }
+@@ -799,6 +866,8 @@ async fn flush_cycle(
+                         return true;
+                     }
+                     let entries = std::mem::take(&mut pool.pending);
++                    pool.pending_records = 0;
++                    pool.pending_bytes = 0;
+                     let batches = batch_records(&entries);
+                     if batches.is_empty() {
+                         return true;
+@@ -817,9 +886,11 @@ async fn flush_cycle(
+             Ok(mut pool) => {
+                 pool.flushing = false;
+                 (
+                     std::mem::take(&mut pool.flush_again),
+-                    pool.pending.iter().map(|entry| entry.records.len()).sum::<usize>(),
++                    pool.pending_records,
+                 )
+             }
+             Err(_) => (false, 0),
+         };
++        shared.pool_capacity_wake.notify_waiters();
+         if !delivered {
+             return false;
+         }
+@@ -1267,6 +1338,7 @@ mod tests {
+             claims: Arc::new(Mutex::new(HashSet::new())),
+             pool: Arc::new(Mutex::new(PoolState::default())),
+             flush_wake,
++            pool_capacity_wake: Arc::new(tokio::sync::Notify::new()),
+         };
+         (shared, wake)
+     }
+@@ -1378,6 +1450,90 @@ mod tests {
+         remove_cursor_test_path(&root).await;
+     }
+ 
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn busy_pool_backpressures_after_one_bounded_pending_batch() {
++        let (root, path) = cursor_test_path("pool-backpressure-records").await;
++        let (shared, _wake) = test_shared(String::from("http://127.0.0.1:9"), path);
++        let generation = Some(String::from("gen_a"));
++        {
++            let mut pool = shared.pool.lock().expect("lock pool");
++            pool.flushing = true;
++        }
++        for sequence in 1..=MAX_PENDING_RECORDS {
++            assert!(matches!(
++                enqueue_pending(
++                    &shared,
++                    "alpha",
++                    "alpha",
++                    &generation,
++                    record("gen_a", &sequence.to_string()),
++                ),
++                EnqueuePendingResult::Enqueued
++            ));
++        }
++        let overflow = enqueue_pending(
++            &shared,
++            "alpha",
++            "alpha",
++            &generation,
++            record("gen_a", &(MAX_PENDING_RECORDS + 1).to_string()),
++        );
++        assert!(matches!(overflow, EnqueuePendingResult::Full(_)));
++        {
++            let pool = shared.pool.lock().expect("lock pool");
++            assert_eq!(pool.pending_records, MAX_PENDING_RECORDS);
++            assert_eq!(
++                pool.pending.iter().map(|entry| entry.records.len()).sum::<usize>(),
++                MAX_PENDING_RECORDS
++            );
++        }
++
++        let blocked_shared = shared.clone();
++        let blocked_generation = generation.clone();
++        let blocked = tokio::spawn(async move {
++            enqueue_pending_with_backpressure(
++                &blocked_shared,
++                "alpha",
++                "alpha",
++                &blocked_generation,
++                record("gen_a", "1000"),
++            )
++            .await
++        });
++        tokio::time::sleep(Duration::from_millis(20)).await;
++        assert!(!blocked.is_finished(), "the 101st busy record must wait for pool capacity");
++        shared.cancellation.cancel();
++        assert!(!blocked.await.expect("blocked producer task"));
++        remove_cursor_test_path(&root).await;
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn busy_pool_byte_budget_bounds_large_records() {
++        let (root, path) = cursor_test_path("pool-backpressure-bytes").await;
++        let (shared, _wake) = test_shared(String::from("http://127.0.0.1:9"), path);
++        let generation = Some(String::from("gen_a"));
++        {
++            let mut pool = shared.pool.lock().expect("lock pool");
++            pool.flushing = true;
++        }
++        let mut accepted = 0;
++        for sequence in 1..=10 {
++            let large = json!({
++                "type": "stream_item",
++                "sequence": sequence.to_string(),
++                "cursor": {"generation": "gen_a", "revision": sequence.to_string()},
++                "payload": {"blob": "x".repeat(900 * 1024)},
++            });
++            match enqueue_pending(&shared, "alpha", "alpha", &generation, large) {
++                EnqueuePendingResult::Enqueued => accepted += 1,
++                EnqueuePendingResult::Full(_) => break,
++            }
++        }
++        let pool = shared.pool.lock().expect("lock pool");
++        assert!(accepted > 0 && accepted < 10);
++        assert!(pool.pending_bytes <= MAX_PENDING_BYTES);
++        assert!(pool.pending_records <= MAX_PENDING_RECORDS);
++        drop(pool);
++        remove_cursor_test_path(&root).await;
++    }
++
+     #[cfg(unix)]
+     #[tokio::test]
+     async fn pooled_threshold_drains_an_exact_batch_and_defers_while_posting() {
