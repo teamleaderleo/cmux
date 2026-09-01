@@ -19,8 +19,8 @@ jobs:
         run: git rev-parse HEAD
       - name: Apply journal backpressure candidate
         run: |
-          git apply --check scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
-          git apply scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
           git diff --check
       - name: Run journal-forwarder unit tests
         run: |
