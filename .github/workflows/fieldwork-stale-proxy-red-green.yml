@@ -1,0 +1,88 @@
+name: Fieldwork stale proxy red-green verifier
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cmux-stale-proxy-green-execution-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-stale-proxy-red-green-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: eaa899cb20bd411019744fbd2bdedeb397f3070b
+  RED_SHA: f1a91ab9090295f04d6b8fffef7bf6a4cfdd0371
+  GREEN_SHA: 6cb48b5d96a9c2ce36cd699c5be3ca64050d52a0
+
+jobs:
+  verify:
+    name: Prove stale proxy red-green
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact green candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GREEN_SHA }}
+          fetch-depth: 0
+
+      - name: Verify candidate ancestry and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$RED_SHA^")" = "$BASE_SHA"
+          test "$(git rev-parse "$GREEN_SHA^")" = "$RED_SHA"
+          test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyBrokerStaleGenerationTests.swift"
+          git diff --check "$BASE_SHA" "$GREEN_SHA"
+
+      - name: Select repository Xcode
+        run: ./scripts/select-ci-xcode.sh
+
+      - name: Record toolchain
+        run: swift --version
+
+      - name: Prove regression commit is red at stale-owner failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$RED_SHA"
+          set +e
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteProxyBrokerStaleGenerationTests.staleFatalCallbackCannotStopSuccessor \
+            2>&1 | tee /tmp/stale-proxy-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected the test-only commit to fail"
+            exit 1
+          fi
+          grep -F "fatal callback from a replaced tunnel cannot stop its successor" /tmp/stale-proxy-red.log
+          grep -F "remote daemon tunnel is not ready" /tmp/stale-proxy-red.log
+          echo "observed expected red test exit: $status"
+
+      - name: Prove fix commit is green
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$GREEN_SHA"
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteProxyBrokerStaleGenerationTests.staleFatalCallbackCannotStopSuccessor
+
+      - name: Negative control current tunnel failure still restarts
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteProxyBrokerTests.fatalFailureRestarts
+
+      - name: Run full remote workspace package tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/macOS/CmuxRemoteWorkspace
