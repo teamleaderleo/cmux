@@ -45,22 +45,26 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
 
     @Test("physical stdio write stall does not strand queued RPC timeouts at scale")
     func physicalWriteStallMustBoundQueuedCallers() throws {
-        // FileHandle writes to a pipe whose peer is terminated during the
-        // cleanup control can raise SIGPIPE in a standalone Swift test host.
-        // Ignore it for this serialized probe so the write reports its error
-        // and every 1/10/50/200 case can finish. Restore the process handler
-        // after the suite case returns.
         let previousSIGPIPEHandler = Darwin.signal(SIGPIPE, SIG_IGN)
         defer { Darwin.signal(SIGPIPE, previousSIGPIPEHandler) }
 
-        // The response timeout remains deliberately tiny. The invariant under
-        // test is that callers cannot wait indefinitely before reaching that
-        // timeout owner merely because another physical write is wedged. The
-        // candidate gives the non-WebSocket write lane its own 1-second
-        // liveness budget while preserving the existing response-timeout
-        // semantics after a healthy write completes.
         for callers in [1, 10, 50, 200] {
             try runPhysicalWriteStallCase(callers: callers)
+        }
+    }
+
+    @Test("notification-only PTY writes do not strand bridge workers at scale")
+    func notificationOnlyPTYWritesMustBoundPhysicalStall() throws {
+        // One bridge write is capped at 256 KiB by RemotePTYBridgeInputFlow.
+        // That is still comfortably larger than a Darwin pipe's writable
+        // headroom after base64 + JSON framing, so it is a realistic payload
+        // for proving notification write liveness without inventing a giant
+        // out-of-contract message.
+        let previousSIGPIPEHandler = Darwin.signal(SIGPIPE, SIG_IGN)
+        defer { Darwin.signal(SIGPIPE, previousSIGPIPEHandler) }
+
+        for callers in [1, 10, 50, 200] {
+            try runNotificationWriteStallCase(callers: callers)
         }
     }
 
@@ -82,10 +86,6 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
             client.writeQueue.sync {
                 physicalWriteEntered.signal()
                 do {
-                    // Far above ordinary Darwin pipe capacity. The fake SSH
-                    // helper remains alive but stops reading after `hello`, so
-                    // this write should stay inside FileHandle.write until the
-                    // write-liveness owner retires the transport.
                     try client.writePayload(Data(repeating: 0x78, count: 4 * 1024 * 1024))
                 } catch {
                     // The transport retirement owns the expected write failure.
@@ -117,9 +117,6 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
             }
         }
 
-        // The production candidate uses a one-second write-liveness budget.
-        // Leave scheduler margin while still requiring the entire population
-        // to settle far before the fake helper's ten-second safety exit.
         let boundedDeadline: DispatchTime = .now() + 1.75
         let settledWithinBound = group.wait(timeout: boundedDeadline) == .success
         #expect(
@@ -128,9 +125,6 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
         )
 
         if !settledWithinBound {
-            // Explicit clean-shutdown control. A direct stop must break the
-            // physical writer and release every queued caller even though the
-            // fake helper would otherwise remain alive for ten seconds.
             client.stop()
             #expect(
                 group.wait(timeout: .now() + 1) == .success,
@@ -144,6 +138,61 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
             #expect(physicalWriteFinished.wait(timeout: .now() + 1) == .success)
         }
         #expect(completions.value == callers)
+    }
+
+    private func runNotificationWriteStallCase(callers: Int) throws {
+        let executable = try makeStallingTransport(stallSeconds: 10)
+        defer { removeTransport(at: executable) }
+
+        let client = makeClient()
+        defer { client.stop() }
+        client.transportExecutableOverride = executable
+        try client.start()
+
+        let payload = Data(repeating: 0x6e, count: 256 * 1024)
+        let group = DispatchGroup()
+        let completions = LockedCounter()
+        let errors = LockedCounter()
+
+        for index in 0..<callers {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                client.writePTY(
+                    sessionID: "fieldwork-session",
+                    attachmentID: "fieldwork-attachment-\(index)",
+                    attachmentToken: "fieldwork-token-\(index)",
+                    data: payload
+                ) { error in
+                    if error != nil {
+                        errors.increment()
+                    }
+                    completions.increment()
+                    group.leave()
+                }
+            }
+        }
+
+        // A notification has no response phase, so write liveness itself must
+        // own convergence. Leave the same scheduler margin as the RPC probe.
+        let settledWithinBound = group.wait(timeout: .now() + 1.75) == .success
+        #expect(
+            settledWithinBound,
+            "\(callers) PTY notification writers remained behind one physical write with no request/response owner to retire the transport"
+        )
+
+        if !settledWithinBound {
+            // Negative control: direct transport teardown must release the
+            // physical notification writer and every caller queued behind it.
+            client.stop()
+            #expect(
+                group.wait(timeout: .now() + 1) == .success,
+                "clean shutdown did not release \(callers) PTY notification writers"
+            )
+        }
+        #expect(completions.value == callers)
+        // A stalled transport should surface write/transport errors rather
+        // than silently treating every queued notification as delivered.
+        #expect(errors.value > 0)
     }
 
     private func makeClient() -> RemoteDaemonRPCClient {
@@ -193,8 +242,6 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
         else
           exit 1
         fi
-        # Stay alive while deliberately refusing every subsequent stdin byte.
-        # The finite sleep is only a test-process safety breaker.
         sleep \(stallSeconds)
         exit 0
         """)
