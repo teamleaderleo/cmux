@@ -4271,6 +4271,30 @@ impl Surface {
         }
     }
 
+    /// Write receipted input bytes and wait for the authoritative hosted PTY owner.
+    ///
+    /// Ordinary interactive input keeps using `write_bytes`; this path exists for
+    /// resource mutations whose durable success receipt must follow host delivery.
+    pub(crate) fn write_bytes_confirmed(&self, bytes: &[u8]) -> std::io::Result<()> {
+        let Some(pty) = self.as_pty() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "browser surface does not accept PTY bytes",
+            ));
+        };
+        let mut runtime = pty.runtime.lock().unwrap();
+        match &mut *runtime {
+            PtyRuntime::Local { writer, .. } => {
+                writer.write_all(bytes)?;
+                writer.flush()
+            }
+            #[cfg(unix)]
+            PtyRuntime::Hosted(host) => host.send_input_confirmed(bytes),
+            #[cfg(unix)]
+            PtyRuntime::ExitedHosted => Ok(()),
+        }
+    }
+
     /// Write a protocol input payload, conditionally applying bracketed-paste
     /// markers from a terminal-mode snapshot taken before the PTY write.
     pub fn write_paste(&self, bytes: &[u8]) -> std::io::Result<()> {
