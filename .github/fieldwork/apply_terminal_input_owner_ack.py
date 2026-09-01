@@ -10,6 +10,15 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+def replace_all(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count == 0:
+        raise SystemExit(f"{path}: expected at least one match: {old[:120]!r}")
+    p.write_text(text.replace(old, new))
+
+
 protocol = "cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs"
 replace_once(
     protocol,
@@ -28,11 +37,44 @@ replace_once(
 )
 
 runtime = "cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs"
-replace_once(runtime, "const HOST_RECORD_VERSION: u32 = 4;", "const HOST_RECORD_VERSION: u32 = 5;")
 replace_once(
     runtime,
-    "        if !matches!(record.record_version, 1 | 2 | 3 | HOST_RECORD_VERSION) {",
-    "        if !matches!(record.record_version, 1 | 2 | 3 | 4 | HOST_RECORD_VERSION) {",
+    '''    /// Additive control capability. Missing/false records belong to legacy
+    /// hosts whose fire-and-forget Terminate command has no receipt.
+    #[serde(default)]
+    pub supports_terminate_ack: bool,
+''',
+    '''    /// Additive control capability. Missing/false records belong to legacy
+    /// hosts whose fire-and-forget Terminate command has no receipt.
+    #[serde(default)]
+    pub supports_terminate_ack: bool,
+    /// Additive control capability. Missing/false records belong to hosts that
+    /// accept fire-and-forget input but cannot confirm PTY delivery.
+    #[serde(default)]
+    pub supports_input_ack: bool,
+''',
+)
+replace_once(
+    runtime,
+    '''            .field("supports_clear_history", &self.supports_clear_history)
+            .field("supports_terminate_ack", &self.supports_terminate_ack)
+            .finish()
+''',
+    '''            .field("supports_clear_history", &self.supports_clear_history)
+            .field("supports_terminate_ack", &self.supports_terminate_ack)
+            .field("supports_input_ack", &self.supports_input_ack)
+            .finish()
+''',
+)
+replace_all(
+    runtime,
+    "            supports_terminate_ack: true,\n",
+    "            supports_terminate_ack: true,\n            supports_input_ack: true,\n",
+)
+replace_once(
+    runtime,
+    "            legacy.supports_terminate_ack = false;\n",
+    "            legacy.supports_terminate_ack = false;\n            legacy.supports_input_ack = false;\n",
 )
 replace_once(
     runtime,
@@ -126,7 +168,7 @@ replace_once(
         }
 
         pub(crate) fn send_input_confirmed(&self, payload: &[u8]) -> std::io::Result<()> {
-            if self.record.record_version < HOST_RECORD_VERSION {
+            if !self.record.supports_input_ack {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "terminal host cannot acknowledge receipted input",
@@ -205,7 +247,7 @@ replace_once(
         fn receipted_input_never_reaches_a_legacy_host_without_ack_support() {
             let (record_path, mut record, lease) = record_fixture("input-ack-legacy");
             let root = record_path.parent().unwrap().to_path_buf();
-            record.record_version = 4;
+            record.supports_input_ack = false;
             let (client, mut host) = UnixStream::pair().unwrap();
             host.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
             let attachment = HostAttachment {
@@ -328,12 +370,24 @@ replace_once(
     "    surface\n        .write_bytes_confirmed(bytes)\n        .map_err(|error| ActionFailure::Indeterminate(error.to_string()))\n",
 )
 
+# Every explicit TerminalHostRecord literal outside the runtime must opt into
+# the additive field so older compatibility fixtures remain intentionally false.
+replace_all(
+    "cmux-tui/crates/cmux-tui/tests/cli.rs",
+    "        supports_terminate_ack: false,\n",
+    "        supports_terminate_ack: false,\n        supports_input_ack: false,\n",
+)
+replace_all(
+    "cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs",
+    "        supports_terminate_ack: false,\n",
+    "        supports_terminate_ack: false,\n        supports_input_ack: false,\n",
+)
+
 spec = "cmux-tui/spec/terminal-host.md"
-replace_once(spec, "Discovery records use JSON `record_version:4`.", "Discovery records use JSON `record_version:5`.")
 replace_once(
     spec,
     "| 22 | `DetachAck` | host to client | response | empty; final source-ordered frame for this client |\n| 100 | `Input` | client to host | `INPUT` | raw PTY bytes |",
-    "| 22 | `DetachAck` | host to client | response | empty; final source-ordered frame for this client |\n| 23 | `InputAck` | host to client | response | empty; confirms the authoritative PTY writer accepted and flushed `Input` |\n| 100 | `Input` | client to host | `INPUT` | raw PTY bytes; nonzero request ids require record-version 5 owner acknowledgement |",
+    "| 22 | `DetachAck` | host to client | response | empty; final source-ordered frame for this client |\n| 23 | `InputAck` | host to client | response | empty; confirms the authoritative PTY writer accepted and flushed `Input` |\n| 100 | `Input` | client to host | `INPUT` | raw PTY bytes; a nonzero request id asks a supporting host for `InputAck` |",
 )
 
 inventory = "cmux-tui/spec/inventory.json"
