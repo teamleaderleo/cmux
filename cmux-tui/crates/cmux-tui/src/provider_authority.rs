@@ -32,7 +32,18 @@ pub fn try_run(args: &[String]) -> Option<i32> {
     match args.first().map(String::as_str) {
         Some("__materialize-new-machine") => return Some(materialization_cli::run(&args[1..])),
         Some("__provider-authority") => {}
-        _ => return None,
+        _ => {
+            return match materialization_cli::try_run_server_start_from_environment(args) {
+                Ok(_) => None,
+                Err(error) => {
+                    crate::client_log::stderr_log!(
+                        "materialization",
+                        "cmux-tui Cloud materialization gate failed: {error:#}"
+                    );
+                    Some(1)
+                }
+            };
+        }
     }
     Some(match run(args) {
         Ok(()) => 0,
