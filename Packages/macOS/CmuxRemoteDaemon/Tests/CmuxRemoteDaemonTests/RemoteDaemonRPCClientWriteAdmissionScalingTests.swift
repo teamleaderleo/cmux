@@ -53,12 +53,12 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
         let previousSIGPIPEHandler = Darwin.signal(SIGPIPE, SIG_IGN)
         defer { Darwin.signal(SIGPIPE, previousSIGPIPEHandler) }
 
-        // The response timeout passed to `call` is deliberately tiny. The
-        // invariant under test is that callers cannot wait indefinitely before
-        // reaching the timeout owner merely because another physical write is
-        // wedged. Current main registers each call before `writeQueue.sync`
-        // and starts `waitForCall` only after the write returns, so this test is
-        // expected to be red until write admission itself has a deadline.
+        // The response timeout remains deliberately tiny. The invariant under
+        // test is that callers cannot wait indefinitely before reaching that
+        // timeout owner merely because another physical write is wedged. The
+        // candidate gives the non-WebSocket write lane its own 1-second
+        // liveness budget while preserving the existing response-timeout
+        // semantics after a healthy write completes.
         for callers in [1, 10, 50, 200] {
             try runPhysicalWriteStallCase(callers: callers)
         }
@@ -85,10 +85,10 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
                     // Far above ordinary Darwin pipe capacity. The fake SSH
                     // helper remains alive but stops reading after `hello`, so
                     // this write should stay inside FileHandle.write until the
-                    // explicit cleanup control stops the transport.
+                    // write-liveness owner retires the transport.
                     try client.writePayload(Data(repeating: 0x78, count: 4 * 1024 * 1024))
                 } catch {
-                    // The cleanup control owns the expected write failure.
+                    // The transport retirement owns the expected write failure.
                 }
                 physicalWriteFinished.signal()
             }
@@ -117,11 +117,14 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
             }
         }
 
-        let boundedDeadline: DispatchTime = .now() + 0.75
+        // The production candidate uses a one-second write-liveness budget.
+        // Leave scheduler margin while still requiring the entire population
+        // to settle far before the fake helper's ten-second safety exit.
+        let boundedDeadline: DispatchTime = .now() + 1.75
         let settledWithinBound = group.wait(timeout: boundedDeadline) == .success
         #expect(
             settledWithinBound,
-            "\(callers) queued RPC callers remained behind one physical write beyond their 50ms response timeout"
+            "\(callers) queued RPC callers remained behind one physical write past the write-liveness budget"
         )
 
         if !settledWithinBound {
