@@ -34,6 +34,7 @@ struct Options {
     payload_bytes: usize,
     mode: HttpMode,
     settle_millis: u64,
+    load_millis: Option<u64>,
 }
 
 impl Default for Options {
@@ -44,13 +45,14 @@ impl Default for Options {
             payload_bytes: 2_048,
             mode: HttpMode::Stall,
             settle_millis: 750,
+            load_millis: None,
         }
     }
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo run -p chatmux-relay --example fieldwork_journal_backlog -- \\\n         [--sessions N] [--records-per-session N] [--payload-bytes N] \\\n         [--mode ack|stall] [--settle-millis N]"
+        "usage: cargo run -p chatmux-relay --example fieldwork_journal_backlog -- \\\n         [--sessions N] [--records-per-session N] [--payload-bytes N] \\\n         [--mode ack|stall] [--settle-millis N] [--load-millis N]"
     );
     std::process::exit(2);
 }
@@ -77,6 +79,9 @@ fn parse_options() -> Options {
             }
             "--settle-millis" => {
                 options.settle_millis = value().parse().unwrap_or_else(|_| usage())
+            }
+            "--load-millis" => {
+                options.load_millis = Some(value().parse().unwrap_or_else(|_| usage()))
             }
             "-h" | "--help" => usage(),
             _ => usage(),
@@ -105,8 +110,6 @@ fn source_usize_constant(name: &str) -> usize {
     if let Ok(value) = expression.parse() {
         return value;
     }
-    // The pinned byte limit uses multiplication. Keep this evaluator tiny and
-    // fail closed on any expression more complicated than integer products.
     expression
         .split('*')
         .map(|part| part.trim().parse::<usize>().expect("integer product term"))
@@ -225,25 +228,23 @@ async fn run_fake_session(
 
     let payload = "x".repeat(payload_bytes);
     for sequence in 1..=records {
-        if cancellation.is_cancelled() {
-            return Ok(());
-        }
-        write_json_line(
-            &mut write_half,
-            &json!({
-                "protocol": PROTOCOL,
-                "type": "stream_item",
-                "stream_id": stream_id,
-                "cursor": {
-                    "generation": generation,
-                    "revision": sequence.to_string(),
-                },
-                "sequence": sequence.to_string(),
-                "kind": "agent.fieldwork",
-                "payload": {"blob": payload},
-            }),
-        )
-        .await?;
+        let envelope = json!({
+            "protocol": PROTOCOL,
+            "type": "stream_item",
+            "stream_id": stream_id,
+            "cursor": {
+                "generation": generation,
+                "revision": sequence.to_string(),
+            },
+            "sequence": sequence.to_string(),
+            "kind": "agent.fieldwork",
+            "payload": {"blob": payload},
+        });
+        let result = tokio::select! {
+            _ = cancellation.cancelled() => return Ok(()),
+            result = write_json_line(&mut write_half, &envelope) => result,
+        };
+        result?;
         generated.fetch_add(1, Ordering::Relaxed);
     }
     completed.fetch_add(1, Ordering::SeqCst);
@@ -371,9 +372,6 @@ async fn main() -> anyhow::Result<()> {
 
     let root = temporary_root()?;
     let previous_runtime = std::env::var_os("XDG_RUNTIME_DIR");
-    // Edition 2024 marks process-global environment mutation unsafe. This is
-    // a single-purpose example process; no other code reads this variable
-    // before the forwarder starts.
     unsafe { std::env::set_var("XDG_RUNTIME_DIR", &root) };
     let socket_dir = socket_directory(&root)?;
 
@@ -435,20 +433,26 @@ async fn main() -> anyhow::Result<()> {
     );
 
     wait_for_counter(&accepted, expected_active, Duration::from_secs(10), "accepted sessions").await?;
-    wait_for_counter(&completed, expected_active, Duration::from_secs(30), "completed producers").await?;
-    let expected_records = expected_active.saturating_mul(options.records_per_session);
-    wait_for_counter(&generated, expected_records, Duration::from_secs(2), "generated records").await?;
 
     if options.mode == HttpMode::Stall {
         wait_for_counter(&requests, 1, Duration::from_secs(10), "first HTTP POST").await?;
-    } else {
-        tokio::time::sleep(Duration::from_millis(options.settle_millis)).await;
     }
+
+    if let Some(load_millis) = options.load_millis {
+        tokio::time::sleep(Duration::from_millis(load_millis)).await;
+    } else {
+        wait_for_counter(&completed, expected_active, Duration::from_secs(30), "completed producers").await?;
+        let expected_records = expected_active.saturating_mul(options.records_per_session);
+        wait_for_counter(&generated, expected_records, Duration::from_secs(2), "generated records").await?;
+    }
+
     tokio::time::sleep(Duration::from_millis(options.settle_millis)).await;
 
     let loaded_rss_kib = current_rss_kib();
     let loaded_fds = current_fd_count();
     let http_requests = requests.load(Ordering::SeqCst);
+    let loaded_generated_records = generated.load(Ordering::SeqCst);
+    let loaded_completed_producers = completed.load(Ordering::SeqCst);
 
     cancellation.cancel();
     let _ = forwarder.await;
@@ -464,9 +468,11 @@ async fn main() -> anyhow::Result<()> {
         "requested_sessions": options.sessions,
         "source_discovered_session_cap": discovered_cap,
         "accepted_sessions": accepted.load(Ordering::SeqCst),
-        "records_per_session": options.records_per_session,
+        "records_per_session_limit": options.records_per_session,
         "payload_bytes": options.payload_bytes,
-        "generated_records": generated.load(Ordering::SeqCst),
+        "load_millis": options.load_millis,
+        "generated_records_at_measurement": loaded_generated_records,
+        "completed_producers_at_measurement": loaded_completed_producers,
         "http_requests": http_requests,
         "source_max_batch_records": batch_records,
         "source_max_batch_body_bytes": batch_body_bytes,
