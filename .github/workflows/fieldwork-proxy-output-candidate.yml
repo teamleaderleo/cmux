@@ -9,6 +9,7 @@ on:
       - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate_repair.patch
       - scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
   workflow_dispatch:
 
@@ -34,6 +35,8 @@ jobs:
           git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate_repair.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate_repair.patch
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
           git diff --check
