@@ -21,6 +21,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 3
 
       - name: Require exact hardening ancestry
         run: |
