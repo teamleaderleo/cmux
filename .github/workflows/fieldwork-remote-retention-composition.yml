@@ -1,0 +1,131 @@
+name: Fieldwork remote retention composition
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-remote-retention-composition.yml
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_runtime_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_storage_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_snapshot_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_candidate_subscription_retirement_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_candidate_pty_retirement_test.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate_repair.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-retention-composition:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply RPC event delivery candidate
+        run: |
+          set -euo pipefail
+          client_path=Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
+          git apply --check --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          git apply --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          for patch in \
+            event_delivery_client_candidate.patch \
+            event_delivery_budget_candidate_runtime_repair.patch \
+            event_delivery_budget_candidate_storage_repair.patch \
+            event_delivery_budget_candidate_tests.patch \
+            event_delivery_budget_candidate_tests_repair.patch \
+            event_delivery_budget_candidate_tests_snapshot_repair.patch \
+            event_delivery_candidate_subscription_retirement_repair.patch \
+            event_delivery_candidate_pty_retirement_test.patch; do
+            git apply --check --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+            git apply --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+          done
+      - name: Apply downstream proxy output candidate
+        run: |
+          set -euo pipefail
+          for patch in \
+            proxy_slow_reader_probe.patch \
+            proxy_probe_chunk_size.patch \
+            proxy_output_budget_candidate.patch \
+            proxy_output_budget_candidate_repair.patch \
+            proxy_candidate_probe_expectations.patch; do
+            git apply --check --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+            git apply --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+          done
+          git diff --check
+          git status --short
+      - name: Full remote-daemon package
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon
+      - name: Full remote-workspace package
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace
+      - name: Healthy aggregate proxy output
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "0"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "200"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "1048576"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "32768"
+        run: |
+          mkdir -p remote-retention-composition-results
+          echo "=== healthy downstream 200x1MiB ===" | tee remote-retention-composition-results/proxy.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a remote-retention-composition-results/proxy.log
+      - name: Slow-reader per-session breaker
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "134217728"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "32768"
+        run: |
+          echo "=== downstream per-session breaker 1x128MiB ===" | tee -a remote-retention-composition-results/proxy.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a remote-retention-composition-results/proxy.log
+      - name: Slow-reader process breaker
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "10"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "67108864"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "32768"
+        run: |
+          echo "=== downstream process breaker 10x64MiB ===" | tee -a remote-retention-composition-results/proxy.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a remote-retention-composition-results/proxy.log
+      - name: Preserve composition measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-retention-composition-results
+          path: remote-retention-composition-results/*.log
