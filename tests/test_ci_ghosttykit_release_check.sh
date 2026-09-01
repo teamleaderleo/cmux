@@ -103,3 +103,6 @@ if ! grep -Fq "simulated release not found" "$MISSING_OUTPUT"; then
 fi
 
 echo "PASS: GhosttyKit release guard verifies the derived release and rejects a missing one"
+
+# Fieldwork execution carrier: touching this CI-triggered guard makes the
+# repository route the accompanying daemon/remote change through Go CI.
