@@ -36,20 +36,19 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          from textwrap import dedent, indent
 
           path = Path("cmuxTests/RemoteTmuxAuthTests.swift")
           text = path.read_text()
-          test_marker = "sendKeysChunksBoundaryPasteIntoControlSafeCommands"
-          if test_marker in text:
+          test_name = "sendKeysChunksBoundaryPasteIntoControlSafeCommands"
+          if test_name in text:
               raise SystemExit("boundary regression already present before red commit")
 
-          existing = '''    @Test func sendKeysHexArgumentsAreLowercaseSpaceSeparatedBytes() {
-              #expect(RemoteTmuxControlConnection.hexByteArguments(Data([0x00, 0x0f, 0x10, 0xff])) == "00 0f 10 ff")
-              #expect(RemoteTmuxControlConnection.hexByteArguments(Data()) == "")
-          }
-
-          '''
-          regression = '''    @Test @MainActor func sendKeysChunksBoundaryPasteIntoControlSafeCommands() async throws {
+          test_anchor = "    @Test @MainActor func pastePaneRejectsDisconnectedControlStream() {"
+          if test_anchor not in text:
+              raise SystemExit("pastePane test insertion anchor drifted")
+          regression = indent(dedent('''\
+          @Test @MainActor func sendKeysChunksBoundaryPasteIntoControlSafeCommands() async throws {
               let data = Data((0 ..< 9_995).map { UInt8($0 % 251) })
               let emission = try await captureSendKeysWire(
                   paneId: 7,
@@ -63,14 +62,14 @@ jobs:
               #expect(try decodeHexArguments(from: emission.commands, paneId: 7) == data)
           }
 
-          '''
-          if existing not in text:
-              raise SystemExit("sendKeys hex test insertion anchor drifted")
-          text = text.replace(existing, existing + regression, 1)
+          '''), "    ")
+          text = text.replace(test_anchor, regression + test_anchor, 1)
 
-          helper_anchor = '''    /// True when `a` is immediately followed by `b` in `args` — i.e. an ssh
-          '''
-          helpers = '''    @MainActor
+          helper_anchor = "    /// True when `a` is immediately followed by `b` in `args` — i.e. an ssh"
+          if helper_anchor not in text:
+              raise SystemExit("helper insertion anchor drifted")
+          helpers = indent(dedent('''\
+          @MainActor
           private func captureSendKeysWire(
               paneId: Int,
               data: Data,
@@ -134,9 +133,7 @@ jobs:
               return decoded
           }
 
-          '''
-          if helper_anchor not in text:
-              raise SystemExit("helper insertion anchor drifted")
+          '''), "    ")
           text = text.replace(helper_anchor, helpers + helper_anchor, 1)
           path.write_text(text)
           PY
