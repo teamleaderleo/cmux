@@ -5,6 +5,7 @@ import {
   type ExecResult,
   type ProviderId,
 } from "./types";
+import { CMUX_TUI_MATERIALIZATION_ID_ENV } from "./cmuxTuiMaterialization";
 import { shellQuote } from "./wsLease";
 
 // cmux-tui is the ONE session daemon on every cmux Cloud machine
@@ -27,6 +28,9 @@ export type CmuxTuiSource = { url: string; sha256: string; commit: string; built
 export const CMUX_TUI_LINUX_TARGET = "cmux-tui-x86_64-unknown-linux-musl";
 export const CMUX_TUI_DEFAULT_MANIFEST_URL = "https://files.cmux.com/cmux-tui/latest/manifest.json";
 const CMUX_TUI_MANIFEST_CACHE_MS = 5 * 60 * 1000;
+const CMUX_TUI_MATERIALIZATION_INSTALL_ATTEMPTS = 5;
+const CMUX_TUI_WORKSPACE_STATE_ROOT = "/root/.local/state/cmux-tui/sessions";
+const CMUX_TUI_REMOTE_STATE_DIR = "/root/.local/state/cmux/remote";
 
 /**
  * CMUX_VM_CMUX_TUI_MANIFEST_URL pins a deployment to one commit's manifest
@@ -104,6 +108,37 @@ export function resetCmuxTuiSourceCache(): void {
 }
 
 /**
+ * Install-time enforcement for the private new-machine token.
+ *
+ * Current Daytona images can start their supervisor as soon as the binary is
+ * installed, so installation and `server start` may race to perform the same
+ * materialization. Both carry one token and the transition is idempotent; a
+ * few retries let the winner commit and the loser observe the committed marker.
+ *
+ * An older Daytona snapshot is different: its already-running copied daemon can
+ * hold the auth owner lease before the current binary exists. In that case every
+ * attempt remains fenced and installation fails. Provider create rollback then
+ * destroys the new sandbox instead of publishing a machine with cloned authority.
+ */
+export function cmuxTuiInstallMaterializationGuardCommand(): string {
+  const bin = shellQuote(CMUX_TUI_BINARY_PATH);
+  const workspace = shellQuote(CMUX_TUI_WORKSPACE_STATE_ROOT);
+  const remote = shellQuote(CMUX_TUI_REMOTE_STATE_DIR);
+  const envName = CMUX_TUI_MATERIALIZATION_ID_ENV;
+  return [
+    `if [ -n "\${${envName}:-}" ]; then`,
+    "cmux_materialize_attempt=1;",
+    "while :; do",
+    `cmux_materialize_output="$(${bin} __materialize-new-machine --workspace-state-root ${workspace} --remote-state-dir ${remote} --materialization-id "\$${envName}" 2>&1)" && break;`,
+    `if [ "\$cmux_materialize_attempt" -ge ${CMUX_TUI_MATERIALIZATION_INSTALL_ATTEMPTS} ]; then printf '%s\\n' "\$cmux_materialize_output" >&2; exit 1; fi;`,
+    "cmux_materialize_attempt=$((cmux_materialize_attempt + 1));",
+    "sleep 1;",
+    "done;",
+    "fi",
+  ].join(" ");
+}
+
+/**
  * Installs the pinned cmux-tui binary onto the machine, skipping the download when
  * the installed copy already matches the pin. The VM fetches the ~50 MB static musl
  * binary itself (in-region, seconds) instead of the driver pushing a base64 payload
@@ -125,6 +160,7 @@ export function cmuxTuiInstallCommand(source: CmuxTuiSource): string {
       `${fetch} && ${pinned(tmp)} && chmod 755 ${tmp} && mv -f ${tmp} ${bin}; fi`,
     `ln -sfn ${bin} /usr/local/bin/cmux-tui`,
     `${bin} --version`,
+    cmuxTuiInstallMaterializationGuardCommand(),
   ].join(" && ");
 }
 
