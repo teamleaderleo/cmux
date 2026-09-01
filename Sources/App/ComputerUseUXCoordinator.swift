@@ -2,6 +2,42 @@ import AppKit
 import CMUXAgentLaunch
 import CmuxSettings
 
+struct ComputerUseAcceptedInvocationIdentity: Equatable, Sendable {
+    let surfaceID: UUID
+    let agentSessionID: String
+    let processIdentity: AgentPIDProcessIdentity?
+    let receivedAt: Date
+
+    func matchesCompletion(
+        _ event: WorkstreamEvent,
+        processIdentity completionProcessIdentity: AgentPIDProcessIdentity?
+    ) -> Bool {
+        guard
+            let surfaceString = event.surfaceId,
+            let completionSurfaceID = UUID(uuidString: surfaceString),
+            completionSurfaceID == surfaceID,
+            event.sessionId == agentSessionID,
+            event.receivedAt >= receivedAt
+        else {
+            return false
+        }
+
+        if let ppid = event.ppid {
+            guard
+                let processIdentity,
+                let completionProcessIdentity,
+                Int(completionProcessIdentity.pid) == ppid,
+                completionProcessIdentity == processIdentity
+            else {
+                return false
+            }
+            return true
+        }
+
+        return processIdentity == nil && completionProcessIdentity == nil
+    }
+}
+
 /// Owns the app-level computer-use menu-bar and onboarding controllers.
 @MainActor
 final class ComputerUseUXCoordinator {
@@ -30,11 +66,7 @@ final class ComputerUseUXCoordinator {
     /// still retire the cursor during that bookkeeping gap without allowing a
     /// delayed event from a replaced agent generation to hide its successor.
     private var acceptedInvocationByDriverSessionID:
-        [String: (
-            surfaceID: UUID,
-            agentSessionID: String,
-            receivedAt: Date
-        )] = [:]
+        [String: ComputerUseAcceptedInvocationIdentity] = [:]
 
     init(
         liveAgentIndex: SharedLiveAgentIndex,
@@ -126,8 +158,18 @@ final class ComputerUseUXCoordinator {
                 named: .workstreamEventReceived
             ) {
                 guard !Task.isCancelled else { return }
-                guard let event = notification.object as? WorkstreamEvent else { continue }
-                self?.handleWorkstreamEvent(event)
+                if let ingressEvent = notification.object as? FeedIngressProcessGenerationEvent {
+                    self?.handleWorkstreamEvent(
+                        ingressEvent.event,
+                        hookProcessIdentity: ingressEvent.processIdentity
+                    )
+                    continue
+                }
+                guard let event = notification.object as? WorkstreamEvent,
+                      event.ppid == nil else {
+                    continue
+                }
+                self?.handleWorkstreamEvent(event, hookProcessIdentity: nil)
             }
         }
 
@@ -309,37 +351,51 @@ final class ComputerUseUXCoordinator {
         controller.present(startingAt: startingPoint)
     }
 
-    private func handleWorkstreamEvent(_ event: WorkstreamEvent) {
+    private func handleWorkstreamEvent(
+        _ event: WorkstreamEvent,
+        hookProcessIdentity: AgentPIDProcessIdentity?
+    ) {
         let isComputerUseInvocation = Self.isComputerUseToolInvocation(event)
-        if isComputerUseInvocation {
-            reconcileToolInvocation(event)
-        }
         let isCompletion =
             event.hookEventName == .stop
                 || event.hookEventName == .sessionEnd
         guard isComputerUseInvocation || isCompletion else { return }
+
         let resolvedDriverSessionID = liveSessionProjection.driverSessionID(
-                surfaceID: event.surfaceId,
-                agentSessionID: event.sessionId,
-                hookProcessID: event.ppid
-            )
+            surfaceID: event.surfaceId,
+            agentSessionID: event.sessionId,
+            hookProcessID: event.ppid,
+            hookProcessIdentity: hookProcessIdentity
+        )
         let driverSessionID: String?
         if let resolvedDriverSessionID {
-            driverSessionID = resolvedDriverSessionID
+            if isCompletion,
+               let acceptedInvocation = acceptedInvocationByDriverSessionID[
+                resolvedDriverSessionID
+               ],
+               !acceptedInvocation.matchesCompletion(
+                event,
+                processIdentity: hookProcessIdentity
+               ) {
+                // The live projection can temporarily contain overlapping agent
+                // roots. Once a Computer Use invocation has been accepted, only
+                // that exact process generation may complete the current turn.
+                driverSessionID = nil
+            } else {
+                driverSessionID = resolvedDriverSessionID
+            }
         } else if isCompletion,
-                  let surfaceString = event.surfaceId,
-                  let surfaceID = UUID(uuidString: surfaceString),
                   let candidate = acceptedInvocationByDriverSessionID.first(
                     where: {
-                        $0.value.surfaceID == surfaceID
-                            && $0.value.agentSessionID == event.sessionId
-                            && event.receivedAt >= $0.value.receivedAt
+                        $0.value.matchesCompletion(
+                            event,
+                            processIdentity: hookProcessIdentity
+                        )
                     }
                   )?.key {
-            // The candidate was accepted for this exact surface + logical
-            // agent session earlier in the run. This fallback only bridges a
-            // transient projection refresh; a replaced generation has a
-            // different agent session id and cannot match.
+            // The candidate was accepted for this exact surface, logical
+            // session, and process generation earlier in the run. The fallback
+            // only bridges a transient live-index refresh gap.
             driverSessionID = candidate
         } else {
             driverSessionID = nil
@@ -350,13 +406,16 @@ final class ComputerUseUXCoordinator {
 
         switch event.hookEventName {
         case .preToolUse where isComputerUseInvocation:
+            reconcileToolInvocation(event)
             if let surfaceString = event.surfaceId,
                let surfaceID = UUID(uuidString: surfaceString) {
-                acceptedInvocationByDriverSessionID[driverSessionID] = (
-                    surfaceID,
-                    event.sessionId,
-                    event.receivedAt
-                )
+                acceptedInvocationByDriverSessionID[driverSessionID] =
+                    ComputerUseAcceptedInvocationIdentity(
+                        surfaceID: surfaceID,
+                        agentSessionID: event.sessionId,
+                        processIdentity: hookProcessIdentity,
+                        receivedAt: event.receivedAt
+                    )
             }
             watchTargetController?.driverSessionDidStart(driverSessionID)
         case .stop, .sessionEnd:

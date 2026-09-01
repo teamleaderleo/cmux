@@ -101,14 +101,16 @@ final class ComputerUseLiveSessionProjection {
     /// Resolves a hook only when its surface and current agent generation still
     /// match the live projection.
     ///
-    /// Some agents expose different identifiers to the process scanner and hook
-    /// protocol. In that case the generation-validated hook parent process is
-    /// the authority. A delayed Stop from a replaced process cannot match the
-    /// successor's live process tree, so it cannot hide newer pane activity.
+    /// A process-bound hook must carry the exact process birth identity captured
+    /// at Feed ingress. The numeric PID is checked only as a consistency field;
+    /// it is never re-resolved here, so PID reuse cannot turn a stale event into
+    /// evidence for a successor process. Generationless hook sources retain the
+    /// logical-session compatibility path.
     func driverSessionID(
         surfaceID rawSurfaceID: String?,
         agentSessionID: String,
-        hookProcessID: Int? = nil
+        hookProcessID: Int?,
+        hookProcessIdentity: AgentPIDProcessIdentity?
     ) -> String? {
         guard
             let rawSurfaceID,
@@ -125,22 +127,52 @@ final class ComputerUseLiveSessionProjection {
         else {
             return nil
         }
-        if record.agentSessionID == agentSessionID {
+
+        if let hookProcessID {
+            guard
+                let hookProcessIdentity,
+                Int(hookProcessIdentity.pid) == hookProcessID,
+                ComputerUseCuaState.process(
+                    hookProcessIdentity,
+                    belongsToProcessTree: record.session.rootProcessIdentities
+                )
+            else {
+                return nil
+            }
             return driverSessionID
         }
-        guard
-            let hookProcessID,
-            let processID = pid_t(exactly: hookProcessID),
-            let hookProcessIdentity = AgentPIDProcessIdentity(pid: processID),
-            ComputerUseCuaState.process(
-                hookProcessIdentity,
-                belongsToProcessTree: record.session.rootProcessIdentities
-            )
+
+        guard hookProcessIdentity == nil,
+              record.agentSessionID == agentSessionID
         else {
             return nil
         }
         return driverSessionID
     }
+
+    #if DEBUG
+    /// Test compatibility helper. Production callers must provide the identity
+    /// captured at Feed ingress and must never reconstruct it at consumption.
+    func driverSessionID(
+        surfaceID rawSurfaceID: String?,
+        agentSessionID: String,
+        hookProcessID: Int? = nil
+    ) -> String? {
+        let hookProcessIdentity: AgentPIDProcessIdentity?
+        if let hookProcessID,
+           let processID = pid_t(exactly: hookProcessID) {
+            hookProcessIdentity = AgentPIDProcessIdentity(pid: processID)
+        } else {
+            hookProcessIdentity = nil
+        }
+        return driverSessionID(
+            surfaceID: rawSurfaceID,
+            agentSessionID: agentSessionID,
+            hookProcessID: hookProcessID,
+            hookProcessIdentity: hookProcessIdentity
+        )
+    }
+    #endif
 
     func currentSession(
         matching scannedSession: ComputerUseLiveDriverSession
