@@ -75,6 +75,20 @@ jobs:
           name: journal-runtime-results
           path: journal-runtime-results/*.json
 
+  macos-rpc-upstream-control:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+      - name: Pin untouched upstream-derived revision
+        run: test "$(git rev-parse HEAD)" = "8ef183f1e5de765b183aec9d1799f17a0848ae84"
+      - name: Run untouched remote-daemon package control
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon
+
   macos-rpc-write-admission:
     runs-on: macos-15
     timeout-minutes: 20
