@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/fieldwork-proxy-slow-reader.yml
       - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,8 @@ jobs:
         run: |
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
           git diff --check
       - name: Build probe
         env:
@@ -53,6 +56,34 @@ jobs:
                 --filter RemoteDaemonProxySessionSlowReaderProbeTests \
               2>&1 | tee -a proxy-slow-reader-results/drain.log
           done
+      - name: Fragmented active-reader control
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "67108864"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "1024"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+        run: |
+          echo "=== fragmented active sessions=1 mib=64 chunk=1KiB ===" | tee proxy-slow-reader-results/fragmented.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a proxy-slow-reader-results/fragmented.log
+      - name: Fragmented slow-reader control
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "16777216"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "1024"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+        run: |
+          echo "=== fragmented slow sessions=1 mib=16 chunk=1KiB ===" | tee -a proxy-slow-reader-results/fragmented.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a proxy-slow-reader-results/fragmented.log
       - name: Active-reader offered-volume discriminator
         env:
           CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
