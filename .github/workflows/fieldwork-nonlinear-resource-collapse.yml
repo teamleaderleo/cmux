@@ -70,6 +70,39 @@ jobs:
           name: journal-backpressure-results
           path: journal-backpressure-results/*.json
 
+  macos-rpc-upstream-baseline:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+      - name: Toolchain
+        run: swift --version
+      - name: Pin upstream baseline
+        run: git rev-parse HEAD
+      - name: Run pinned upstream package concurrently
+        continue-on-error: true
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon
+      - name: Run pinned upstream timeout-isolation suite together
+        continue-on-error: true
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientTimeoutIsolationTests
+      - name: Run pinned upstream preserve-after-timeout discriminator alone
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachPreservesHealthyTransportState
+      - name: Run pinned upstream blocked-cancellation discriminator alone
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachBoundsCancellationWrite
+
   macos-rpc-candidate:
     runs-on: macos-15
     timeout-minutes: 20
@@ -79,11 +112,17 @@ jobs:
         run: swift --version
       - name: Pin candidate revision
         run: git rev-parse HEAD
-      - name: Run package outside upstream-parallel-flaky timeout suite
+      - name: Run package outside timeout-isolation suite
         run: |
           swift test \
             --package-path Packages/macOS/CmuxRemoteDaemon \
             --skip RemoteDaemonRPCClientTimeoutIsolationTests
+      - name: Run candidate timeout-isolation suite together
+        continue-on-error: true
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientTimeoutIsolationTests
       - name: Run preserve-after-timeout discriminator alone
         run: |
           swift test \
