@@ -1,0 +1,4 @@
+Fieldwork #929 execution trigger.
+Canonical target pin: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+Canonical regression commit: 15210b38244e289ad750fe65ee07fc51f8854a56
+This branch is temporary execution machinery only.
