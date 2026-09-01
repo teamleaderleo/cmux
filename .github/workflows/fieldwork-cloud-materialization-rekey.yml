@@ -1,0 +1,56 @@
+name: Fieldwork cloud materialization rekey
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cloud-materialization-verifier-base-6044a8b3
+    paths:
+      - "cmux-tui/crates/cmux-remote/src/materialization.rs"
+      - "cmux-tui/crates/cmux-remote/src/lib.rs"
+      - "cmux-tui/crates/cmux-tui-core/src/materialization.rs"
+      - "cmux-tui/crates/cmux-tui-core/src/lib.rs"
+      - "cmux-tui/crates/cmux-tui-core/Cargo.toml"
+      - "cmux-tui/crates/cmux-tui/src/bin/cmux-tui-materialize.rs"
+      - "cmux-tui/crates/cmux-tui/tests/cloud_materialization_rekey.rs"
+      - ".github/workflows/fieldwork-cloud-materialization-rekey.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  prototype:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: false
+
+      - name: Require exact PR head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Run materialization integration tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui --test cloud_materialization_rekey --locked -- --nocapture
+
+      - name: Run machine-id materialization unit test
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core materialization --locked -- --nocapture
