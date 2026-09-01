@@ -55,7 +55,8 @@ fn copied_workspace_state_root_preserves_machine_and_session_identity() {
 
     // Fresh-machine control: a new state root receives independent identities.
     let fresh_root = tempfile::tempdir().unwrap();
-    let fresh = WorkspaceRegistry::open(fresh_root.path().join("state"), "cloud").unwrap();
+    let fresh_state = fresh_root.path().join("state");
+    let fresh = WorkspaceRegistry::open(&fresh_state, "cloud").unwrap();
     assert_ne!(fresh.machine_id(), &source_machine);
     assert_ne!(fresh.session_id(), &source_session);
 }
