@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 const MARKER_FILE: &str = "cloud-materialization.json";
 const MARKER_LOCK_FILE: &str = "cloud-materialization.lock";
+pub const MATERIALIZATION_ID_ENV: &str = "CMUX_TUI_MATERIALIZATION_ID";
 const USAGE: &str = "usage: cmux-tui __materialize-new-machine --workspace-state-root <path> --remote-state-dir <path> --materialization-id <id> [--inherit-enrollments]";
 
 #[derive(Debug)]
@@ -39,17 +41,13 @@ struct MaterializationMarker {
     daemon_private_key: Option<String>,
 }
 
-/// Private Cloud lifecycle mode invoked before `server start` on a copied VM.
-///
-/// This deliberately lives outside the public resource/remote CLI. Only the
-/// Cloud control plane needs to distinguish "same machine resurrected" from
-/// "copied state is becoming a new machine".
+/// Private explicit lifecycle mode retained for operators/tests.
 pub fn run(raw_args: &[String]) -> i32 {
     if raw_args.iter().any(|arg| matches!(arg.as_str(), "--help" | "-h")) {
         println!("{USAGE}");
         return 0;
     }
-    match run_inner(raw_args) {
+    match parse_args(raw_args).and_then(|args| run_args(&args, true)) {
         Ok(()) => 0,
         Err(error) => {
             crate::client_log::stderr_log!(
@@ -61,9 +59,43 @@ pub fn run(raw_args: &[String]) -> i32 {
     }
 }
 
-fn run_inner(raw_args: &[String]) -> anyhow::Result<()> {
+/// Apply a Cloud create-time materialization token before ordinary server startup.
+///
+/// Only the canonical raw `server start` spelling is eligible. Other cmux-tui
+/// process modes may inherit the sandbox environment but must never mutate the
+/// daemon identity. On success the token is removed from this process before it
+/// launches descendants; a supervisor restart receives the token again from its
+/// parent and replays the committed transition as a no-op.
+pub fn try_run_server_start_from_environment(raw_args: &[String]) -> anyhow::Result<bool> {
+    if raw_args.first().map(String::as_str) != Some("server")
+        || raw_args.get(1).map(String::as_str) != Some("start")
+    {
+        return Ok(false);
+    }
+    let Some(materialization_id) = std::env::var_os(MATERIALIZATION_ID_ENV) else {
+        return Ok(false);
+    };
+    let materialization_id = os_string(materialization_id, MATERIALIZATION_ID_ENV)?;
+    validate_materialization_id(&materialization_id)?;
+    let state_home = default_state_home()?;
+    let args = Args {
+        workspace_state_root: state_home.join("cmux-tui").join("sessions"),
+        remote_state_dir: state_home.join("cmux").join("remote"),
+        materialization_id,
+        enrollment_policy: MaterializedEnrollmentPolicy::Fresh,
+    };
+    run_args(&args, false)?;
+    // SAFETY: this private startup hook runs before the daemon creates worker
+    // threads. Removing the create-only token prevents terminal descendants
+    // from inheriting it; the external supervisor retains its own copy.
+    unsafe {
+        std::env::remove_var(MATERIALIZATION_ID_ENV);
+    }
+    Ok(true)
+}
+
+fn run_args(args: &Args, emit_receipt: bool) -> anyhow::Result<()> {
     harden_sensitive_process()?;
-    let args = parse_args(raw_args)?;
     validate_materialization_id(&args.materialization_id)?;
     fs::create_dir_all(&args.workspace_state_root).with_context(|| {
         format!("create workspace state root {}", args.workspace_state_root.display())
@@ -82,7 +114,7 @@ fn run_inner(raw_args: &[String]) -> anyhow::Result<()> {
     FileExt::try_lock(&lock)
         .with_context(|| format!("another materialization owns {}", lock_path.display()))?;
 
-    let result = materialize_under_lock(&args);
+    let result = materialize_under_lock(args, emit_receipt);
     let _ = FileExt::unlock(&lock);
     result
 }
@@ -95,13 +127,15 @@ fn harden_sensitive_process() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn materialize_under_lock(args: &Args) -> anyhow::Result<()> {
+fn materialize_under_lock(args: &Args, emit_receipt: bool) -> anyhow::Result<()> {
     let marker_path = args.workspace_state_root.join(MARKER_FILE);
     let marker = match read_marker(&marker_path)? {
         Some(marker)
             if marker.materialization_id == args.materialization_id && marker.phase == "committed" =>
         {
-            print_receipt(false, &marker);
+            if emit_receipt {
+                print_receipt(false, &marker);
+            }
             return Ok(());
         }
         Some(marker)
@@ -147,7 +181,9 @@ fn materialize_under_lock(args: &Args) -> anyhow::Result<()> {
         daemon_private_key: None,
     };
     atomic_marker(&marker_path, &committed)?;
-    print_receipt(true, &committed);
+    if emit_receipt {
+        print_receipt(true, &committed);
+    }
     Ok(())
 }
 
@@ -196,6 +232,29 @@ fn validate_materialization_id(value: &str) -> anyhow::Result<()> {
         bail!("materialization id must be 1..=256 non-control bytes with no edge whitespace");
     }
     Ok(())
+}
+
+fn default_state_home() -> anyhow::Result<PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME") {
+        let xdg = PathBuf::from(xdg);
+        if !xdg.is_absolute() {
+            bail!("XDG_STATE_HOME must be absolute for Cloud materialization");
+        }
+        return Ok(xdg);
+    }
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| anyhow::anyhow!("HOME is required for Cloud materialization"))?;
+    let home = PathBuf::from(home);
+    if !home.is_absolute() {
+        bail!("HOME must be absolute for Cloud materialization");
+    }
+    Ok(home.join(".local").join("state"))
+}
+
+fn os_string(value: OsString, name: &str) -> anyhow::Result<String> {
+    value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("{name} must be valid UTF-8"))
 }
 
 fn prepare_marker(path: &Path, args: &Args) -> anyhow::Result<MaterializationMarker> {
