@@ -1,0 +1,94 @@
+name: Fieldwork PTY timeout isolation reduction
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-timeout-isolation-reduction.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  timeout-isolation-reduction:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply exact composition overlays
+        run: |
+          set -euo pipefail
+          client_path=Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
+          git apply --check --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          git apply --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          for patch in \
+            event_delivery_client_candidate.patch \
+            event_delivery_budget_candidate_runtime_repair.patch \
+            event_delivery_budget_candidate_storage_repair.patch \
+            event_delivery_budget_candidate_tests.patch \
+            event_delivery_budget_candidate_tests_repair.patch \
+            event_delivery_budget_candidate_tests_snapshot_repair.patch \
+            event_delivery_candidate_subscription_retirement_repair.patch \
+            event_delivery_candidate_pty_retirement_test.patch; do
+            git apply --check --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+            git apply --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+          done
+          for patch in \
+            proxy_slow_reader_probe.patch \
+            proxy_probe_chunk_size.patch \
+            proxy_output_budget_candidate.patch \
+            proxy_output_budget_candidate_repair.patch \
+            proxy_candidate_probe_expectations.patch; do
+            git apply --check --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+            git apply --recount "scripts/fieldwork/cmux-resource-collapse/${patch}"
+          done
+          git diff --check
+      - name: Build timeout suite once
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachPreservesHealthyTransportState
+      - name: Preserves-state test repeated alone
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            echo "=== preserves-state repeat ${n} ==="
+            swift test \
+              --skip-build \
+              --package-path Packages/macOS/CmuxRemoteDaemon \
+              --filter timedOutPTYAttachPreservesHealthyTransportState
+          done
+      - name: Blocked-cancellation test repeated alone
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            echo "=== blocked-cancellation repeat ${n} ==="
+            swift test \
+              --skip-build \
+              --package-path Packages/macOS/CmuxRemoteDaemon \
+              --filter timedOutPTYAttachBoundsCancellationWrite
+          done
+      - name: Timeout suite repeated together
+        run: |
+          set -euo pipefail
+          for n in 1 2 3; do
+            echo "=== timeout suite repeat ${n} ==="
+            swift test \
+              --skip-build \
+              --package-path Packages/macOS/CmuxRemoteDaemon \
+              --filter RemoteDaemonRPCClientTimeoutIsolationTests
+          done
+      - name: Timeout plus event-delivery suites
+        run: |
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter 'RemoteDaemonRPCClientTimeoutIsolationTests|RemoteDaemonEventDeliveryQueueTests'
