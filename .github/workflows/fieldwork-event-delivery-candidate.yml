@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/fieldwork-event-delivery-candidate.yml
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
   workflow_dispatch:
 
@@ -26,8 +27,13 @@ jobs:
       - name: Apply event-delivery candidate
         run: |
           set -euo pipefail
-          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
-          git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          client_path=Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
+          git apply --check --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          git apply --recount --exclude="$client_path" \
+            scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
           git diff --check
