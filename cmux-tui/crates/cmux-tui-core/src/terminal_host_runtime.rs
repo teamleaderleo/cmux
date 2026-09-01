@@ -153,6 +153,10 @@ pub struct TerminalHostRecord {
     /// hosts whose fire-and-forget Terminate command has no receipt.
     #[serde(default)]
     pub supports_terminate_ack: bool,
+    /// Additive control capability. Missing/false records belong to hosts that
+    /// accept fire-and-forget input but cannot confirm PTY delivery.
+    #[serde(default)]
+    pub supports_input_ack: bool,
 }
 
 impl std::fmt::Debug for TerminalHostRecord {
@@ -169,6 +173,7 @@ impl std::fmt::Debug for TerminalHostRecord {
             .field("supports_set_defaults", &self.supports_set_defaults)
             .field("supports_clear_history", &self.supports_clear_history)
             .field("supports_terminate_ack", &self.supports_terminate_ack)
+            .field("supports_input_ack", &self.supports_input_ack)
             .finish()
     }
 }
@@ -955,6 +960,26 @@ mod unix {
                 let _ = writer.shutdown(std::net::Shutdown::Both);
             }
             result
+        }
+
+        pub(crate) fn send_input_confirmed(&self, payload: &[u8]) -> std::io::Result<()> {
+            if !self.record.supports_input_ack {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "terminal host cannot acknowledge receipted input",
+                ));
+            }
+            let response = self
+                .send_control_request(MessageKind::Input, MessageKind::InputAck, payload.to_vec())
+                .map_err(|failure| std::io::Error::other(failure.into_error()))?;
+            if !response.is_empty() {
+                self.disconnect();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "terminal host returned a malformed input acknowledgement",
+                ));
+            }
+            Ok(())
         }
 
         /// Update the authoritative parser defaults on a feature-advertising
@@ -3637,6 +3662,22 @@ mod unix {
             );
         }
 
+        fn write_input(&self, payload: &[u8], request_id: u64, target: &HostTap) -> bool {
+            {
+                let mut writer = self.writer.lock().unwrap();
+                if writer.write_all(payload).and_then(|()| writer.flush()).is_err() {
+                    return false;
+                }
+            }
+            if request_id == 0 {
+                return true;
+            }
+            let mut response = Frame::new(MessageKind::InputAck, Vec::new());
+            response.request_id = request_id;
+            let _broadcast = self.broadcast_lock.lock().unwrap();
+            target.try_send(response)
+        }
+
         fn fence_client_detach(&self, client: u64, request_id: u64, target: &HostTap) -> bool {
             let mut response = Frame::new(MessageKind::DetachAck, Vec::new());
             response.request_id = request_id;
@@ -4755,6 +4796,7 @@ mod unix {
             supports_set_defaults: true,
             supports_clear_history: true,
             supports_terminate_ack: true,
+            supports_input_ack: true,
         };
         let record_root = Path::new(&launch.record_path)
             .parent()
@@ -5409,12 +5451,15 @@ mod unix {
                         command_host.mark_launch_owner_stream_ready();
                     }
                     MessageKind::Input => {
-                        if !granted_rights.contains(CapabilityRights::INPUT) {
+                        if !granted_rights.contains(CapabilityRights::INPUT)
+                            || !command_host.write_input(
+                                &frame.payload,
+                                frame.request_id,
+                                &command_sender,
+                            )
+                        {
                             break;
                         }
-                        let mut writer = command_host.writer.lock().unwrap();
-                        let _ = writer.write_all(&frame.payload);
-                        let _ = writer.flush();
                     }
                     MessageKind::Paste => {
                         if !granted_rights.contains(CapabilityRights::INPUT) {
@@ -6404,6 +6449,7 @@ mod unix {
                 supports_set_defaults: true,
                 supports_clear_history: true,
                 supports_terminate_ack: true,
+                supports_input_ack: true,
             };
             let record_path = record.record_path(&root);
             let lease = HostLivenessLease::acquire(liveness_path(&record_path, &record)).unwrap();
@@ -6860,6 +6906,123 @@ mod unix {
         }
 
         #[test]
+        fn receipted_input_waits_for_the_authoritative_pty_receipt() {
+            let (record_path, record, lease) = record_fixture("input-ack");
+            let root = record_path.parent().unwrap().to_path_buf();
+            let (client, mut host) = UnixStream::pair().unwrap();
+            let control_responses = Arc::new(ControlResponses::new());
+            let attachment = HostAttachment {
+                record,
+                record_path,
+                snapshot: HostSnapshot {
+                    cols: 80,
+                    rows: 24,
+                    cell_pixels: DEFAULT_CELL_PIXELS,
+                    replay: Vec::new(),
+                    kitty_image_aliases: Vec::new(),
+                    kitty_state: test_kitty_state(),
+                    sequence_boundary: 0,
+                    colors: TerminalColorOverrides::default(),
+                    pid: None,
+                    command: Vec::new(),
+                    cwd: None,
+                },
+                protocol_version: PROTOCOL_VERSION,
+                smart_renderer: true,
+                reader: None,
+                writer: Arc::new(Mutex::new(client)),
+                control_responses: control_responses.clone(),
+                next_request: AtomicU64::new(2),
+                viewer_size: Mutex::new(None),
+                launch_process: None,
+                launch_activation_pending: false,
+            };
+            let responder = thread::spawn(move || {
+                let request = read_frame(&mut host, MAX_FRAME_PAYLOAD).unwrap().unwrap();
+                assert_eq!(request.kind, MessageKind::Input);
+                assert_eq!(request.payload, b"owner-ack");
+                assert_ne!(request.request_id, 0);
+                let mut response = Frame::new(MessageKind::InputAck, Vec::new());
+                response.request_id = request.request_id;
+                assert!(control_responses.resolve(&response));
+            });
+
+            attachment.send_input_confirmed(b"owner-ack").unwrap();
+            responder.join().unwrap();
+
+            drop(attachment);
+            drop(lease);
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn receipted_input_never_reaches_a_legacy_host_without_ack_support() {
+            let (record_path, mut record, lease) = record_fixture("input-ack-legacy");
+            let root = record_path.parent().unwrap().to_path_buf();
+            record.supports_input_ack = false;
+            let (client, mut host) = UnixStream::pair().unwrap();
+            host.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+            let attachment = HostAttachment {
+                record,
+                record_path,
+                snapshot: HostSnapshot {
+                    cols: 80,
+                    rows: 24,
+                    cell_pixels: DEFAULT_CELL_PIXELS,
+                    replay: Vec::new(),
+                    kitty_image_aliases: Vec::new(),
+                    kitty_state: test_kitty_state(),
+                    sequence_boundary: 0,
+                    colors: TerminalColorOverrides::default(),
+                    pid: None,
+                    command: Vec::new(),
+                    cwd: None,
+                },
+                protocol_version: PROTOCOL_VERSION,
+                smart_renderer: true,
+                reader: None,
+                writer: Arc::new(Mutex::new(client)),
+                control_responses: Arc::new(ControlResponses::new()),
+                next_request: AtomicU64::new(2),
+                viewer_size: Mutex::new(None),
+                launch_process: None,
+                launch_activation_pending: false,
+            };
+
+            let error = attachment.send_input_confirmed(b"must-not-send").unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+            let mut byte = [0u8; 1];
+            let read_error = host.read(&mut byte).unwrap_err();
+            assert!(matches!(
+                read_error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ));
+
+            drop(attachment);
+            drop(lease);
+            let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn host_input_receipt_follows_the_pty_write() {
+            let host = test_host_shared();
+            let (pty_writer, mut pty_reader) = UnixStream::pair().unwrap();
+            *host.writer.lock().unwrap() = Box::new(pty_writer);
+            let (target_socket, _target_peer) = UnixStream::pair().unwrap();
+            let (target_tx, target_rx) = mpsc_channel();
+            let target = HostTap::new(target_tx, Arc::new(target_socket), usize::MAX);
+
+            assert!(host.write_input(b"x", 42, &target));
+            let mut byte = [0u8; 1];
+            pty_reader.read_exact(&mut byte).unwrap();
+            assert_eq!(&byte, b"x");
+            let ack = target_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(ack.kind, MessageKind::InputAck);
+            assert_eq!(ack.request_id, 42);
+            assert!(ack.payload.is_empty());
+        }
+
+        #[test]
         fn terminate_waits_for_the_authoritative_host_receipt() {
             let (record_path, record, lease) = record_fixture("terminate-ack");
             let root = record_path.parent().unwrap().to_path_buf();
@@ -7234,6 +7397,7 @@ mod unix {
             legacy.supports_set_defaults = false;
             legacy.supports_clear_history = false;
             legacy.supports_terminate_ack = false;
+            legacy.supports_input_ack = false;
             let legacy_path = legacy.record_path(root);
             write_record(&legacy_path, &legacy).unwrap();
 
