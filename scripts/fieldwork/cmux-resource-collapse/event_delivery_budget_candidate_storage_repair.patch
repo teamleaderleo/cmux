@@ -1,0 +1,40 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+@@ -93,7 +93,7 @@ final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendabl
+     private let handler: (Event) -> Void
+     private let budget: RemoteDaemonEventDeliveryBudget
+     private let limits: RemoteDaemonEventDeliveryLimits
+-    private var entries: [Entry] = []
++    private var entries: [Entry?] = []
+     private var head = 0
+     private var reservedBytes = 0
+     private var reservedEvents = 0
+@@ -215,8 +215,9 @@ final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendabl
+             let next: (entry: Entry?, failure: (Event, (@Sendable () -> Void)?)?)
+             lock.lock()
+             if head < entries.count {
+-                let entry = entries[head]
++                let entry = entries[head]
++                entries[head] = nil
+                 head += 1
+                 next = (entry, nil)
+             } else if let failureTerminal {
+@@ -263,8 +264,13 @@ final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendabl
+             head = 0
+             return (0, 0)
+         }
+-        let queued = entries[head...]
+-        let bytes = queued.reduce(0) { $0 + $1.retainedBytes }
+-        let events = queued.count
++        var bytes = 0
++        var events = 0
++        for index in head..<entries.count {
++            guard let entry = entries[index] else { continue }
++            bytes += entry.retainedBytes
++            events += 1
++            entries[index] = nil
++        }
+         reservedBytes = max(0, reservedBytes - bytes)
+         reservedEvents = max(0, reservedEvents - events)
+         entries.removeAll(keepingCapacity: false)
