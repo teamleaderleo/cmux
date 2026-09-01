@@ -1,9 +1,9 @@
 name: Fieldwork cloud fork identity
 
 on:
-  pull_request:
+  push:
     branches:
-      - fieldwork/upstream-main-8ef183f1
+      - scout/cloud-fork-identity-red-20260901
     paths:
       - "cmux-tui/crates/cmux-tui/tests/cloud_fork_identity_route.rs"
       - ".github/workflows/fieldwork-cloud-fork-identity.yml"
@@ -19,12 +19,12 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           submodules: false
 
-      - name: Require exact PR head
+      - name: Require exact pushed head
         env:
-          EXPECTED: ${{ github.event.pull_request.head.sha }}
+          EXPECTED: ${{ github.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED"
 
       - name: Init Ghostty submodule
