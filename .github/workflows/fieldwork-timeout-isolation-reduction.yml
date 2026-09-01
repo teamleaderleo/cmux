@@ -92,3 +92,9 @@ jobs:
             --skip-build \
             --package-path Packages/macOS/CmuxRemoteDaemon \
             --filter 'RemoteDaemonRPCClientTimeoutIsolationTests|RemoteDaemonEventDeliveryQueueTests'
+      - name: Full remote-daemon package without parallelism
+        run: |
+          swift test \
+            --skip-build \
+            --no-parallel \
+            --package-path Packages/macOS/CmuxRemoteDaemon
