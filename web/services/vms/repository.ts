@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -509,6 +510,7 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
     Effect.tryPromise({
       try: async () => {
         const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+        let createIdentity = input.provider === "blaxel" ? randomUUID() : undefined;
         const db = cloudDb();
         try {
           return await db.transaction(async (tx) => {
@@ -539,6 +541,16 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
               if (existing) {
                 if (!isRetryableFailedCreate(existing, new Date())) {
                   return { inserted: false as const, vm: existing };
+                }
+                if (
+                  input.provider === "blaxel" &&
+                  existing.provider === "blaxel" &&
+                  existing.failureCode === PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE
+                ) {
+                  const previousCreateIdentity = existing.providerMetadata?.createIdentity;
+                  if (typeof previousCreateIdentity === "string" && previousCreateIdentity.trim()) {
+                    createIdentity = previousCreateIdentity.trim();
+                  }
                 }
                 await tx
                   .update(cloudVms)
@@ -576,6 +588,7 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
                 imageVersion: input.imageVersion ?? null,
                 status: "provisioning",
                 idempotencyKey,
+                ...(createIdentity ? { providerMetadata: { createIdentity } } : {}),
               })
               .returning();
             if (!vm) throw new Error("insert returned no VM row");
