@@ -30,6 +30,7 @@ jobs:
           python3 .fieldwork/refine_terminal_input_owner_ack_split_phase.py
           python3 .fieldwork/refine_terminal_input_owner_ack_split_phase_controls.py
           python3 .fieldwork/refine_terminal_input_owner_ack_delivery_classification.py
+          python3 .fieldwork/refine_terminal_input_owner_ack_rustfmt.py
 
       - name: Require exact product delta
         run: |
