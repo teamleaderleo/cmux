@@ -1,0 +1,104 @@
+name: Fieldwork Blaxel create response-loss repair
+
+on:
+  push:
+    branches:
+      - fieldwork/blaxel-create-response-loss-repair-carrier-20260901
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-blaxel-create-response-loss-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 950371857bb8774c59f40046e5605c6bdf002181
+  RED_SHA: e34a515f307b6a1c5f94395d1045b3bd4f8f633e
+
+jobs:
+  prove-red:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact RED commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+
+      - name: Verify test-only RED diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base "$BASE_SHA" "$RED_SHA")" = "$BASE_SHA"
+          test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "web/tests/vm-blaxel-create-response-loss-repair.test.ts"
+          git diff --check "$BASE_SHA" "$RED_SHA"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Prove real Blaxel driver response-loss recovery is RED
+        working-directory: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          bun test tests/vm-blaxel-create-response-loss-repair.test.ts \
+            -t 'Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous create' \
+            2>&1 | tee /tmp/blaxel-driver-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous create' /tmp/blaxel-driver-red.log
+          echo "observed expected driver RED exit: $status"
+
+      - name: Start and migrate isolated test database
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "30000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
+        run: |
+          set -euo pipefail
+          ./scripts/db-local.sh up
+          bunx drizzle-kit migrate --config drizzle.config.ts
+
+      - name: Prove same-key provider create identity continuity is RED
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "30000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:33777/cmux_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          bun test --max-concurrency=1 \
+            tests/vm-blaxel-create-response-loss-repair.test.ts \
+            -t 'same-key retry preserves one provider create identity across an ambiguous first create' \
+            2>&1 | tee /tmp/blaxel-workflow-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'same-key retry preserves one provider create identity across an ambiguous first create' /tmp/blaxel-workflow-red.log
+          echo "observed expected workflow RED exit: $status"
+
+      - name: Tear down test database
+        if: always()
+        working-directory: web
+        env:
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "30000"
+          CMUX_DB_NAME: cmux_test
+        run: ./scripts/db-local.sh down || true
