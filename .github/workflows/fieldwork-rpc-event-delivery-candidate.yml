@@ -1,0 +1,40 @@
+name: Fieldwork RPC event delivery candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-rpc-event-delivery-candidate.yml
+      - scripts/fieldwork/cmux-resource-collapse/apply_rpc_event_delivery_budget_candidate.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rpc-event-delivery-candidate:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply guarded candidate
+        run: |
+          set -euo pipefail
+          python3 scripts/fieldwork/cmux-resource-collapse/apply_rpc_event_delivery_budget_candidate.py
+          git diff --check
+          git status --short
+      - name: Focused delivery-budget tests
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonEventDeliveryBudgetTests
+      - name: Full remote-daemon package
+        run: |
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteDaemon
