@@ -1,0 +1,43 @@
+name: Fieldwork promote journal backpressure
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-promote-journal.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  promote-journal-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Guard pinned source and promote tested patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_path=cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          expected_blob=9b4551770e807084c48c2cdbe94f15f2cf2358e0
+          actual_blob=$(git hash-object "$source_path")
+          if [[ "$actual_blob" != "$expected_blob" ]]; then
+            echo "source blob is $actual_blob; expected pinned upstream $expected_blob" >&2
+            exit 1
+          fi
+
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure_handoff.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_backpressure_handoff.patch
+          git diff --check
+
+          git config user.name "Fieldwork automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add "$source_path"
+          git commit -m "fix(relay): bound journal backlog during stalled delivery"
+          git push origin HEAD:fieldwork/nonlinear-resource-collapse
