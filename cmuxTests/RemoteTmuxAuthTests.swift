@@ -277,6 +277,35 @@ import Testing
         #expect(RemoteTmuxControlConnection.hexByteArguments(Data()) == "")
     }
 
+    @Test @MainActor func sendKeysChunksPayloadPastControlCommandLimit() {
+        let connection = RemoteTmuxControlConnection(
+            host: RemoteTmuxHost(destination: "user@host"), sessionName: "work"
+        )
+        let pipe = Pipe()
+        let writer = RemoteTmuxControlPipeWriter(
+            handle: pipe.fileHandleForWriting,
+            label: "remote-tmux-large-paste-test",
+            maxPendingBytes: 1 << 20,
+            onFailure: {}
+        )
+        connection.installStdinWriterForTesting(writer)
+        defer {
+            writer.close()
+            try? pipe.fileHandleForReading.close()
+        }
+
+        connection.handleMessageForTesting(.enter)
+        connection.handleMessageForTesting(
+            .commandResult(commandNumber: 0, lines: [], isError: false)
+        )
+        let baseline = connection.pendingCommandKindsForTesting.count
+
+        #expect(connection.sendKeys(paneId: 1, data: Data(repeating: 0x78, count: 9_995)))
+
+        let added = Array(connection.pendingCommandKindsForTesting.dropFirst(baseline))
+        #expect(added == [.other, .other, .other])
+    }
+
     @Test @MainActor func pastePaneRejectsDisconnectedControlStream() {
         let connection = RemoteTmuxControlConnection(host: RemoteTmuxHost(destination: "user@host"), sessionName: "work")
         #expect(connection.pastePane(paneId: 1, text: "/tmp/image.png") == false)
