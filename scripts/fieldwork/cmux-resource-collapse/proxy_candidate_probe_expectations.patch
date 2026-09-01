@@ -1,0 +1,95 @@
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+@@ -28,6 +28,7 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             Int(environment["CMUX_FIELDWORK_PROXY_CHUNK_BYTES"] ?? "32768") ?? 32 * 1024
+         )
+         let rounds = max(1, (bytesPerSession + chunkBytes - 1) / chunkBytes)
++        let expectsBreaker = environment["CMUX_FIELDWORK_PROXY_EXPECT_BREAKER"] == "1"
+ 
+         let rpcClient = ProbeRPCClient()
+         let sessions = ProbeSessionStore()
+@@ -89,6 +90,8 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+         let offeredBytes = sessionCount * rounds * chunkBytes
+         let drainedBytes = drainers.reduce(0) { $0 + $1.bytesRead }
++        let closeStreamCount = rpcClient.closeStreamCount
++        let processBudget = RemoteProxyOutputBudget.shared.snapshot()
+ 
+         printProbeJSON([
+             "sessions": sessionCount,
+@@ -108,13 +111,22 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             "pending_send_bytes": sendSnapshot.pendingBytes,
+             "peak_pending_send_count": sendSnapshot.peakCount,
+             "peak_pending_send_bytes": sendSnapshot.peakBytes,
++            "close_stream_count": closeStreamCount,
++            "process_pending_send_count": processBudget.pendingSends,
++            "process_pending_send_bytes": processBudget.pendingBytes,
+         ])
+ 
+-        if drainsLocalClient {
++        #expect(processBudget.pendingBytes <= 256 * 1024 * 1024)
++        #expect(processBudget.pendingSends <= 262_144)
++        if expectsBreaker {
++            #expect(closeStreamCount > 0, "configured breaker load must close at least one proxy stream")
++        } else if drainsLocalClient {
++            #expect(closeStreamCount == 0, "healthy reader must stay open through measurement")
+             #expect(sendSnapshot.pendingCount == 0)
+             #expect(sendSnapshot.pendingBytes == 0)
+         } else {
++            #expect(closeStreamCount == 0, "sub-threshold slow-reader control must stay open")
+             #expect(sendSnapshot.pendingCount > 0, "slow local readers did not retain any send completion")
+             #expect(sendSnapshot.pendingBytes > 0)
+         }
+@@ -127,6 +139,10 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             let snapshot = sessionQueue.sync { sessions.aggregateSendSnapshot() }
+             return snapshot.pendingCount == 0
+         })
++        #expect(waitUntil(timeout: 3) {
++            let snapshot = RemoteProxyOutputBudget.shared.snapshot()
++            return snapshot.pendingBytes == 0 && snapshot.pendingSends == 0
++        })
+         Thread.sleep(forTimeInterval: 0.2)
+         let cleanup = probeProcessMetrics()
+         let cleanupSends = sessionQueue.sync { sessions.aggregateSendSnapshot() }
++        let cleanupBudget = RemoteProxyOutputBudget.shared.snapshot()
+         printProbeJSON([
+             "sessions": sessionCount,
+             "drain": drainsLocalClient,
+@@ -137,6 +153,8 @@ struct RemoteDaemonProxySessionSlowReaderProbeTests {
+             "cleanup_threads": cleanup.threads,
+             "pending_send_count": cleanupSends.pendingCount,
+             "pending_send_bytes": cleanupSends.pendingBytes,
++            "process_pending_send_count": cleanupBudget.pendingSends,
++            "process_pending_send_bytes": cleanupBudget.pendingBytes,
+         ])
+     }
+ }
+@@ -288,6 +306,7 @@ private final class ProbeRPCClient: @unchecked Sendable, RemoteDaemonTunnelRPCCl
+     private let lock = NSLock()
+     private var nextStreamID = 1
+     private var handlers: [String: StreamHandler] = [:]
++    private var storedCloseStreamCount = 0
+ 
+     func waitForAttachedStreams(_ count: Int, timeout: TimeInterval) -> Bool {
+         waitUntil(timeout: timeout) {
+@@ -297,6 +316,13 @@ private final class ProbeRPCClient: @unchecked Sendable, RemoteDaemonTunnelRPCCl
+         }
+     }
+ 
++    var closeStreamCount: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return storedCloseStreamCount
++    }
++
+     func emitDataToEveryStream(_ data: Data) {
+         lock.lock()
+         let snapshot = Array(handlers.values)
+@@ -329,6 +355,7 @@ private final class ProbeRPCClient: @unchecked Sendable, RemoteDaemonTunnelRPCCl
+ 
+     func closeStream(streamID: String) {
+         lock.lock()
++        storedCloseStreamCount += 1
+         handlers.removeValue(forKey: streamID)
+         lock.unlock()
+     }
