@@ -24,8 +24,10 @@ jobs:
           grep -q 'post_completion_handoff_keeps_the_next_ready_batch_exact' \
             cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
           git diff --check
-      - name: Apply recovery measurement harness
+      - name: Apply byte-threshold candidate and recovery harness
         run: |
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_byte_threshold.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_byte_threshold.patch
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/journal_recovery_harness.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/journal_recovery_harness.patch
           git diff --check
