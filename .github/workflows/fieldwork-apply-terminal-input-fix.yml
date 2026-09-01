@@ -20,7 +20,9 @@ jobs:
           persist-credentials: true
 
       - name: Apply owner-ack patch
-        run: python3 .github/fieldwork/apply_terminal_input_owner_ack.py
+        run: |
+          python3 .github/fieldwork/apply_terminal_input_owner_ack.py
+          python3 .github/fieldwork/refine_terminal_input_owner_ack.py
 
       - name: Initialize Ghostty
         run: git submodule update --init --depth 1 ghostty
@@ -61,6 +63,7 @@ jobs:
         run: |
           rm .github/workflows/fieldwork-apply-terminal-input-fix.yml
           rm .github/fieldwork/apply_terminal_input_owner_ack.py
+          rm .github/fieldwork/refine_terminal_input_owner_ack.py
           rmdir .github/fieldwork 2>/dev/null || true
           git config user.name "Fieldwork"
           git config user.email "fieldwork@users.noreply.github.com"
