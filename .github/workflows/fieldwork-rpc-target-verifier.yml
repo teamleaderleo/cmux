@@ -15,36 +15,34 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CANDIDATE_BRANCH: fieldwork/rpc-target-keys-10910
   UPSTREAM_BASE_SHA: eaa899cb20bd411019744fbd2bdedeb397f3070b
+  RED_APP_SHA: 702784686141f453454fea2afcda15c9b9573753
+  RED_PARSER_SHA: 0f4e0144398cfda3efd096bc68a560f7b9f2e220
+  GREEN_SHA: a36ffbe0b8c3acedeb7ab82454ae6cec65ec5d06
   SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
   CMUX_SKIP_ZIG_BUILD: "1"
 
 jobs:
-  parser-discriminator:
+  parser-red-green:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check out candidate
+      - name: Check out fork history
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.CANDIDATE_BRANCH }}
           fetch-depth: 0
 
-      - name: Verify exact ancestry
+      - name: Prove red accepts the ignored alias
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "$UPSTREAM_BASE_SHA" HEAD
-          echo "candidate=$(git rev-parse HEAD)"
+          git checkout --detach "$RED_PARSER_SHA"
+          test "$(git rev-parse HEAD^)" = "$RED_APP_SHA"
 
-      - name: Compile real parser sources and prove current alias outcome
-        run: |
-          set -euo pipefail
-          cat > /tmp/cmux-rpc-alias-probe.swift <<'SWIFT'
+          cat > /tmp/cmux-rpc-alias-red.swift <<'SWIFT'
           import Foundation
 
           @main
-          struct CmuxRPCAliasProbe {
+          struct CmuxRPCAliasRedProbe {
               static func main() {
                   let line = #"{"id":7,"method":"terminal.input","params":{"surfaceId":"00000000-0000-0000-0000-000000000001","text":"marker"}}"#
                   switch ControlRequestParser().request(fromLine: line) {
@@ -62,29 +60,85 @@ jobs:
             Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequest.swift \
             Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParseError.swift \
             Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParser.swift \
-            /tmp/cmux-rpc-alias-probe.swift \
-            -o /tmp/cmux-rpc-alias-probe
+            /tmp/cmux-rpc-alias-red.swift \
+            -o /tmp/cmux-rpc-alias-red
 
-          outcome="$(/tmp/cmux-rpc-alias-probe)"
-          echo "parser_outcome=$outcome"
+          outcome="$(/tmp/cmux-rpc-alias-red)"
+          echo "red_parser_outcome=$outcome"
           test "$outcome" = "accepted"
 
-  app-host-regression:
+      - name: Prove green rejects the alias and preserves extension behavior
+        run: |
+          set -euo pipefail
+          git checkout --detach "$GREEN_SHA"
+          test "$(git rev-parse HEAD^)" = "$RED_PARSER_SHA"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_SHA" HEAD
+
+          cat > /tmp/cmux-rpc-alias-green.swift <<'SWIFT'
+          import Foundation
+
+          @main
+          struct CmuxRPCAliasGreenProbe {
+              static func main() {
+                  let parser = ControlRequestParser()
+                  let encoder = ControlResponseEncoder()
+                  let aliased = #"{"id":7,"method":"terminal.input","params":{"surfaceId":"00000000-0000-0000-0000-000000000001","text":"marker"}}"#
+
+                  guard case .failure(let error) = parser.request(fromLine: aliased) else {
+                      fatalError("green parser accepted surfaceId")
+                  }
+                  let response = encoder.response(for: error)
+                  guard let data = response.data(using: .utf8),
+                        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                        object["ok"] as? Bool == false,
+                        let payload = object["error"] as? [String: Any],
+                        payload["code"] as? String == "invalid_params" else {
+                      fatalError("green response was not invalid_params: \(response)")
+                  }
+
+                  let canonical = #"{"method":"terminal.input","params":{"surface_id":"00000000-0000-0000-0000-000000000001","text":"marker"}}"#
+                  guard case .success = parser.request(fromLine: canonical) else {
+                      fatalError("canonical surface_id stopped parsing")
+                  }
+
+                  let extensionKey = #"{"method":"terminal.input","params":{"totally_bogus_key":1,"text":"marker"}}"#
+                  guard case .success = parser.request(fromLine: extensionKey) else {
+                      fatalError("unrelated extension key stopped parsing")
+                  }
+
+                  print("rejected-invalid_params; canonical-and-extension-keys-preserved")
+              }
+          }
+          SWIFT
+
+          swiftc \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/JSONValue.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequest.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParseError.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlRequestParser.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlCallResult.swift \
+            Packages/macOS/CmuxControlSocket/Sources/CmuxControlSocket/Wire/ControlResponseEncoder.swift \
+            /tmp/cmux-rpc-alias-green.swift \
+            -o /tmp/cmux-rpc-alias-green
+
+          /tmp/cmux-rpc-alias-green
+          git diff --check "$UPSTREAM_BASE_SHA" HEAD
+
+  app-host-red:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - name: Check out candidate
+      - name: Check out red app regression
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.CANDIDATE_BRANCH }}
+          ref: ${{ env.RED_APP_SHA }}
           fetch-depth: 0
           submodules: recursive
 
-      - name: Verify candidate ancestry
+      - name: Verify exact red ancestry
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "$UPSTREAM_BASE_SHA" HEAD
-          echo "candidate=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$UPSTREAM_BASE_SHA"
 
       - name: Select Xcode
         run: ./scripts/select-ci-xcode.sh
@@ -103,14 +157,12 @@ jobs:
 
       - name: Prepare DerivedData
         run: |
-          set -euo pipefail
-          DERIVED_DATA_PATH="${RUNNER_TEMP}/cmux-fieldwork-rpc-target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/cmux-rpc-red-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$DERIVED_DATA_PATH"
           echo "CMUX_DERIVED_DATA_PATH=$DERIVED_DATA_PATH" >> "$GITHUB_ENV"
 
       - name: Resolve Swift packages
         run: |
-          set -euo pipefail
           SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
           mkdir -p "$SOURCE_PACKAGES_DIR"
           xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
@@ -118,9 +170,74 @@ jobs:
             -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
             -resolvePackageDependencies
 
-      - name: Run focused socket regression
+      - name: Require the focused-terminal injection regression to fail for the intended reason
         run: |
           set -euo pipefail
+          SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
+          set +e
+          python3 scripts/ci/xcodebuild_noninteractive.py \
+            xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
+              -derivedDataPath "$CMUX_DERIVED_DATA_PATH" \
+              -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+              -disableAutomaticPackageResolution \
+              -destination "platform=macOS" \
+              EXCLUDED_SOURCE_FILE_NAMES="BrowserPanelTests.swift BrowserPanelViewIdentityTests.swift" \
+              -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal \
+              test 2>&1 | tee /tmp/rpc-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F "camelCase surfaceId silently injected input into the focused terminal" /tmp/rpc-red.log
+
+  app-host-green:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out green candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GREEN_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify exact green ancestry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$RED_PARSER_SHA"
+          git merge-base --is-ancestor "$UPSTREAM_BASE_SHA" HEAD
+
+      - name: Select Xcode
+        run: ./scripts/select-ci-xcode.sh
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Download pre-built GhosttyKit.xcframework
+        run: ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Install Rust
+        run: ./scripts/install-rust-ci.sh
+
+      - name: Prepare DerivedData
+        run: |
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/cmux-rpc-green-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$DERIVED_DATA_PATH"
+          echo "CMUX_DERIVED_DATA_PATH=$DERIVED_DATA_PATH" >> "$GITHUB_ENV"
+
+      - name: Resolve Swift packages
+        run: |
+          SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
+          mkdir -p "$SOURCE_PACKAGES_DIR"
+          xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
+            -derivedDataPath "$CMUX_DERIVED_DATA_PATH" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -resolvePackageDependencies
+
+      - name: Require focused-terminal injection regression to pass
+        run: |
           SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
           python3 scripts/ci/xcodebuild_noninteractive.py \
             xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
