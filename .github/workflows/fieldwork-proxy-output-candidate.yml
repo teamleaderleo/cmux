@@ -1,0 +1,127 @@
+name: Fieldwork proxy output candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-proxy-output-candidate.yml
+      - scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+      - scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proxy-output-candidate:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and revision
+        run: |
+          swift --version
+          git rev-parse HEAD
+      - name: Apply measurement and candidate overlays
+        run: |
+          set -euo pipefail
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_slow_reader_probe.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_probe_chunk_size.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_output_budget_candidate.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/proxy_candidate_probe_expectations.patch
+          git diff --check
+      - name: Run focused budget and response-buffer tests
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteProxyOutputBudgetTests
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteLoopbackHTTPResponseStreamRewriterTests
+      - name: Run full remote-workspace package
+        run: |
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace
+      - name: Healthy high-volume controls
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "0"
+        run: |
+          mkdir -p proxy-output-candidate-results
+          run_probe() {
+            local label="$1" sessions="$2" bytes="$3" chunk="$4"
+            echo "=== healthy ${label} ===" | tee -a proxy-output-candidate-results/healthy.log
+            CMUX_FIELDWORK_PROXY_SESSIONS="$sessions" \
+              CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION="$bytes" \
+              CMUX_FIELDWORK_PROXY_CHUNK_BYTES="$chunk" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteWorkspace \
+                --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+              2>&1 | tee -a proxy-output-candidate-results/healthy.log
+          }
+          run_probe "1x64MiB-32KiB" 1 67108864 32768
+          run_probe "1x64MiB-1KiB" 1 67108864 1024
+          run_probe "10x16MiB-32KiB" 10 16777216 32768
+          run_probe "200x1MiB-32KiB" 200 1048576 32768
+      - name: Per-session byte breaker
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "134217728"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "32768"
+        run: |
+          echo "=== breaker per-session-byte 1x128MiB ===" | tee proxy-output-candidate-results/breakers.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a proxy-output-candidate-results/breakers.log
+      - name: Process-wide byte breaker
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "10"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "67108864"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "32768"
+        run: |
+          echo "=== breaker process-byte 10x64MiB ===" | tee -a proxy-output-candidate-results/breakers.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a proxy-output-candidate-results/breakers.log
+      - name: Fragmented send-count breaker
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "0"
+          CMUX_FIELDWORK_PROXY_EXPECT_BREAKER: "1"
+          CMUX_FIELDWORK_PROXY_SESSIONS: "1"
+          CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION: "83886080"
+          CMUX_FIELDWORK_PROXY_CHUNK_BYTES: "1024"
+        run: |
+          echo "=== breaker send-count 1x80MiB-1KiB ===" | tee -a proxy-output-candidate-results/breakers.log
+          swift test \
+            --skip-build \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+            2>&1 | tee -a proxy-output-candidate-results/breakers.log
+      - name: Preserve candidate measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-output-candidate-results
+          path: proxy-output-candidate-results/*.log
