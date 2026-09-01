@@ -1,0 +1,10 @@
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import Testing
++import CmuxCore
+ @testable import CmuxRemoteWorkspace
+ 
+ @Suite("Remote proxy output budget")
