@@ -1,0 +1,91 @@
+name: Fork candidate CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fork-candidate-ci.yml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Candidate ref or SHA to test
+        required: false
+        default: fix/ssh-tmux-large-paste
+  workflow_run:
+    workflows: ["Testbox broker guard"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  ssh-tmux-large-paste:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.head_branch == 'fix/ssh-tmux-large-paste'
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
+      CANDIDATE_REF: >-
+        ${{ github.event_name == 'workflow_dispatch' && inputs.ref ||
+            github.event_name == 'workflow_run' && github.event.workflow_run.head_sha ||
+            'fix/ssh-tmux-large-paste' }}
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_REF }}
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Select Xcode
+        run: ./scripts/select-ci-xcode.sh
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Download pre-built GhosttyKit.xcframework
+        run: ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Install Rust
+        run: ./scripts/install-rust-ci.sh
+
+      - name: Prepare DerivedData
+        run: |
+          set -euo pipefail
+          DERIVED_DATA_PATH="${RUNNER_TEMP}/cmux-fork-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$DERIVED_DATA_PATH"
+          echo "CMUX_DERIVED_DATA_PATH=$DERIVED_DATA_PATH" >> "$GITHUB_ENV"
+
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
+          mkdir -p "$SOURCE_PACKAGES_DIR"
+          xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
+            -derivedDataPath "$CMUX_DERIVED_DATA_PATH" \
+            -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+            -resolvePackageDependencies
+
+      - name: Run RemoteTmuxAuthTests
+        run: |
+          set -euo pipefail
+          SOURCE_PACKAGES_DIR="$PWD/.ci-source-packages"
+          python3 scripts/ci/xcodebuild_noninteractive.py \
+            xcodebuild -project cmux.xcodeproj -scheme cmux-unit -configuration Debug \
+              -derivedDataPath "$CMUX_DERIVED_DATA_PATH" \
+              -clonedSourcePackagesDirPath "$SOURCE_PACKAGES_DIR" \
+              -disableAutomaticPackageResolution \
+              -destination "platform=macOS" \
+              -only-testing:cmuxTests/RemoteTmuxAuthTests \
+              test
+
+      - name: Repository guards
+        run: |
+          ./scripts/lint-pbxproj-test-wiring.sh
+          python3 scripts/check-package-resolved-policy.py
+          python3 scripts/check-workspace-package-groups.py --check
