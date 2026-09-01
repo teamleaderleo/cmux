@@ -9,6 +9,7 @@ on:
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_v2.patch
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
       - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+      - scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_repair.patch
   workflow_dispatch:
 
 permissions:
@@ -36,6 +37,8 @@ jobs:
           git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_client_candidate.patch
           git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
           git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests.patch
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_repair.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/event_delivery_budget_candidate_tests_repair.patch
           git diff --check
       - name: Run full remote-daemon package
         run: |
