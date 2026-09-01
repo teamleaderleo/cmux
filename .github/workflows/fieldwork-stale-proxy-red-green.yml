@@ -20,7 +20,7 @@ env:
 jobs:
   verify:
     name: Prove stale proxy red-green
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - name: Checkout exact green candidate
