@@ -1,0 +1,60 @@
+name: Fieldwork reachability overlap probe
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-reachability-overlap.yml
+      - scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reachability-overlap:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Pin revision
+        run: git rev-parse HEAD
+      - name: Apply measurement-only overlap probe
+        run: |
+          git apply --check --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
+          git apply --recount scripts/fieldwork/cmux-resource-collapse/reachability_overlap_probe.patch
+          git diff --check
+      - name: Build and run 1-probe control
+        env:
+          CMUX_FIELDWORK_REACHABILITY_OVERLAP: "1"
+          CMUX_FIELDWORK_REACHABILITY_PROBES: "1"
+          CMUX_FIELDWORK_REACHABILITY_HOLD_MS: "2000"
+        run: |
+          mkdir -p reachability-overlap-results
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteSession \
+            --filter RemoteHostReachabilityOverlapProbeTests \
+            2>&1 | tee reachability-overlap-results/probe-1.log
+      - name: Run 10/50/200 overlap sequence
+        env:
+          CMUX_FIELDWORK_REACHABILITY_OVERLAP: "1"
+          CMUX_FIELDWORK_REACHABILITY_HOLD_MS: "2000"
+        run: |
+          for probes in 10 50 200; do
+            echo "=== probes=${probes} ===" | tee -a reachability-overlap-results/scaling.log
+            CMUX_FIELDWORK_REACHABILITY_PROBES="${probes}" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteSession \
+                --filter RemoteHostReachabilityOverlapProbeTests \
+              2>&1 | tee -a reachability-overlap-results/scaling.log
+          done
+      - name: Preserve reachability measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reachability-overlap-results
+          path: reachability-overlap-results/*.log
