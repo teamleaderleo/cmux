@@ -8,6 +8,8 @@ use cmux_remote::identity::ClientIdentityStore;
 
 const SOURCE_ROUTE: &str = "wss://127.0.0.1:9/v1/link";
 const FORK_ROUTE: &str = "wss://127.0.0.1:10/v1/link";
+const FORK_ROUTE_HINT: &str = "wss://127.0.0.1:10/";
+const SOURCE_ROUTE_HINT: &str = "wss://127.0.0.1:9/";
 const OTHER_ROUTE: &str = "wss://127.0.0.1:11/v1/link";
 const ROUTE_MISS: &str = "no known daemon matches this route; connect with an invitation";
 
@@ -66,8 +68,8 @@ async fn cloned_daemon_repin_orphans_source_route_when_another_daemon_is_known()
         .iter()
         .find(|daemon| daemon.fingerprint == source.fingerprint)
         .expect("shared daemon record disappeared");
-    assert_eq!(shared.route_hints, [FORK_ROUTE]);
-    assert!(!shared.route_hints.iter().any(|route| route == SOURCE_ROUTE));
+    assert_eq!(shared.route_hints, [FORK_ROUTE_HINT]);
+    assert!(!shared.route_hints.iter().any(|route| route == SOURCE_ROUTE_HINT));
 
     let stderr = connect_stderr(directory.path(), SOURCE_ROUTE);
     assert!(
