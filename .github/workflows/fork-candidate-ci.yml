@@ -9,24 +9,27 @@ on:
 permissions:
   contents: write
 
+env:
+  CANDIDATE_BRANCH: fix/ssh-tmux-sendkeys-current-main
+  SNAPSHOT_BRANCH: fieldwork/sendkeys-snapshot-64055249
+  UPSTREAM_BASE_SHA: 244adb38efdb8dea6fde624b079a0083738049d5
+  SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
+
 jobs:
-  ssh-tmux-sendkeys-current-main:
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      CANDIDATE_BRANCH: fix/ssh-tmux-sendkeys-current-main
-      SNAPSHOT_BRANCH: fieldwork/sendkeys-snapshot-64055249
-      UPSTREAM_BASE_SHA: 244adb38efdb8dea6fde624b079a0083738049d5
-      SWIFT_BACKTRACE: interactive=no,timeout=0s,symbolicate=off,color=no
+  build-candidate:
+    runs-on: ubuntu-latest
+    outputs:
+      red_sha: ${{ steps.build.outputs.red_sha }}
+      green_sha: ${{ steps.build.outputs.green_sha }}
     steps:
       - name: Checkout exact-base candidate branch
         uses: actions/checkout@v4
         with:
           ref: ${{ env.CANDIDATE_BRANCH }}
           fetch-depth: 0
-          submodules: recursive
 
       - name: Build red and green candidate commits
+        id: build
         shell: bash
         run: |
           set -euo pipefail
@@ -141,7 +144,6 @@ jobs:
           git add cmuxTests/RemoteTmuxAuthTests.swift
           git commit -m "test: prove ssh-tmux paste command boundary"
           RED_SHA=$(git rev-parse HEAD)
-          echo "RED_SHA=$RED_SHA" >> "$GITHUB_ENV"
 
           git fetch origin "$SNAPSHOT_BRANCH:refs/remotes/origin/$SNAPSHOT_BRANCH"
           git checkout "origin/$SNAPSHOT_BRANCH" -- \
@@ -156,8 +158,22 @@ jobs:
             Sources/RemoteTmuxPaneInputForwarder.swift
           git commit -m "fix: bound ssh-tmux send-key batches"
           GREEN_SHA=$(git rev-parse HEAD)
-          echo "GREEN_SHA=$GREEN_SHA" >> "$GITHUB_ENV"
           git push origin "HEAD:$CANDIDATE_BRANCH"
+
+          echo "red_sha=$RED_SHA" >> "$GITHUB_OUTPUT"
+          echo "green_sha=$GREEN_SHA" >> "$GITHUB_OUTPUT"
+
+  verify-candidate:
+    needs: build-candidate
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout green candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-candidate.outputs.green_sha }}
+          fetch-depth: 0
+          submodules: recursive
 
       - name: Select Xcode
         run: ./scripts/select-ci-xcode.sh
@@ -193,6 +209,8 @@ jobs:
 
       - name: Prove regression commit is red
         shell: bash
+        env:
+          RED_SHA: ${{ needs.build-candidate.outputs.red_sha }}
         run: |
           set -euo pipefail
           git checkout --detach "$RED_SHA"
@@ -215,6 +233,8 @@ jobs:
           echo "observed expected red test exit: $RED_STATUS"
 
       - name: Prove fix commit is green
+        env:
+          GREEN_SHA: ${{ needs.build-candidate.outputs.green_sha }}
         run: |
           set -euo pipefail
           git checkout --detach "$GREEN_SHA"
@@ -241,7 +261,12 @@ jobs:
               -only-testing:cmuxTests/RemoteTmuxAuthTests \
               test
 
+      - name: Run package tests
+        run: swift test --package-path Packages/macOS/CmuxRemoteSession
+
       - name: Repository guards
+        env:
+          GREEN_SHA: ${{ needs.build-candidate.outputs.green_sha }}
         run: |
           set -euo pipefail
           git diff --check "$UPSTREAM_BASE_SHA" "$GREEN_SHA"
