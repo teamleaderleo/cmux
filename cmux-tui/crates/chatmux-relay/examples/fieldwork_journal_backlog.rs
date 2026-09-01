@@ -13,7 +13,7 @@ use chatmux_relay::config::ManagedEvents;
 use chatmux_relay::journal_forwarder;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream, UnixListener};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -59,7 +59,7 @@ fn parse_options() -> Options {
     let mut options = Options::default();
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
-        let value = || args.next().unwrap_or_else(|| usage());
+        let mut value = || args.next().unwrap_or_else(|| usage());
         match flag.as_str() {
             "--sessions" => options.sessions = value().parse().unwrap_or_else(|_| usage()),
             "--records-per-session" => {
