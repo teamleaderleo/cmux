@@ -1,0 +1,163 @@
+name: Fieldwork persistent generation compatibility
+
+on:
+  push:
+    branches:
+      - fieldwork/cmux-persistent-generation-compat-20260901
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry-transition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      REV_A: ddd4a01bc5d8ebac19643930f5fd7d40e85f1534
+      REV_B: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+    steps:
+      - name: Checkout experiment carrier
+        uses: actions/checkout@v4
+
+      - name: Checkout exact upstream A
+        uses: actions/checkout@v4
+        with:
+          repository: manaflow-ai/cmux
+          ref: ddd4a01bc5d8ebac19643930f5fd7d40e85f1534
+          path: upstream-a
+
+      - name: Checkout exact upstream B
+        uses: actions/checkout@v4
+        with:
+          repository: manaflow-ai/cmux
+          ref: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+          path: upstream-b
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fieldwork-persistent-generation-compat
+
+      - name: Build exact-revision open harnesses
+        shell: bash
+        run: |
+          set -euxo pipefail
+          make_harness() {
+            local src="$1"
+            mkdir -p "$src/fieldwork-open-probe/src"
+            cat > "$src/fieldwork-open-probe/Cargo.toml" <<'EOF'
+          [package]
+          name = "fieldwork-open-probe"
+          version = "0.1.0"
+          edition = "2024"
+
+          [workspace]
+
+          [dependencies]
+          cmux-tui-core = { path = "../cmux-tui/crates/cmux-tui-core" }
+          EOF
+            cat > "$src/fieldwork-open-probe/src/main.rs" <<'EOF'
+          use std::path::Path;
+
+          fn main() {
+              let root = std::env::args().nth(1).expect("state root");
+              match cmux_tui_core::workspace_registry::WorkspaceRegistry::open(Path::new(&root), "main") {
+                  Ok(registry) => {
+                      let snapshot = registry.snapshot().expect("snapshot");
+                      println!("OPEN_OK registry_id={} generation={} revision={} resource_revision={}", snapshot.registry_id, snapshot.generation, snapshot.revision, snapshot.resource_revision);
+                  }
+                  Err(error) => {
+                      eprintln!("OPEN_ERR {error:#}");
+                      std::process::exit(23);
+                  }
+              }
+          }
+          EOF
+          }
+          make_harness upstream-a
+          make_harness upstream-b
+          cargo build --locked --release --manifest-path upstream-a/fieldwork-open-probe/Cargo.toml
+          cargo build --locked --release --manifest-path upstream-b/fieldwork-open-probe/Cargo.toml
+          mkdir -p probe-bin
+          cp upstream-a/fieldwork-open-probe/target/release/fieldwork-open-probe probe-bin/open-a
+          cp upstream-b/fieldwork-open-probe/target/release/fieldwork-open-probe probe-bin/open-b
+          sha256sum probe-bin/open-a probe-bin/open-b
+
+      - name: Run transition matrix and byte checks
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          tree_state() {
+            local root="$1"
+            local label="$2"
+            {
+              echo "### ${label}"
+              find "$root" -type f -printf '%P\n' | LC_ALL=C sort
+              echo "-- hashes --"
+              while IFS= read -r f; do sha256sum "$root/$f"; done < <(find "$root" -type f -printf '%P\n' | LC_ALL=C sort)
+              echo "-- sqlite --"
+              local db
+              db=$(find "$root" -name workspace-registry.sqlite3 -type f -print -quit || true)
+              if [ -n "$db" ]; then
+                sqlite3 "$db" "SELECT key,value FROM meta ORDER BY key;"
+                sqlite3 "$db" "PRAGMA integrity_check;"
+              fi
+            } | tee "out/${label}.txt"
+          }
+
+          # A -> A control.
+          rm -rf state-aa
+          ./probe-bin/open-a state-aa | tee out/a-create.txt
+          tree_state state-aa a-create-state
+          ./probe-bin/open-a state-aa | tee out/a-reopen.txt
+          tree_state state-aa a-reopen-state
+          diff -u out/a-create-state.txt out/a-reopen-state.txt || true
+
+          # A -> B supported upgrade.
+          cp -a state-aa state-ab
+          ./probe-bin/open-b state-ab | tee out/ab-upgrade.txt
+          tree_state state-ab ab-upgraded-state
+
+          # Fresh B control.
+          rm -rf state-b
+          ./probe-bin/open-b state-b | tee out/b-create.txt
+          tree_state state-b b-create-state
+
+          # B -> A rollback against a disposable copy. Capture exact bytes before A attempts open.
+          cp -a state-ab state-ba
+          tree_state state-ba ba-before-old-open
+          set +e
+          ./probe-bin/open-a state-ba >out/ba-old-open.stdout 2>out/ba-old-open.stderr
+          rc=$?
+          set -e
+          printf 'old_open_rc=%s\n' "$rc" | tee out/ba-old-open.rc
+          cat out/ba-old-open.stderr
+          tree_state state-ba ba-after-old-open
+          diff -u out/ba-before-old-open.txt out/ba-after-old-open.txt | tee out/ba-byte-diff.txt || true
+          test "$rc" -eq 23
+          test ! -s out/ba-byte-diff.txt
+
+          # Reopen the refused state with B to prove recoverability.
+          ./probe-bin/open-b state-ba | tee out/ba-recover-b.txt
+          tree_state state-ba ba-recovered-b-state
+
+      - name: Run migration/refusal regression tests from B
+        working-directory: upstream-b/cmux-tui
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo test -p cmux-tui-core --locked workspace_registry::tests::open_rejects_newer_schema -- --exact --nocapture || true
+          cargo test -p cmux-tui-core --locked newer_schema -- --nocapture
+          cargo test -p cmux-tui-core --locked migrate -- --nocapture
+
+      - name: Upload probe receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: persistent-generation-compat-receipts
+          path: out/
+          if-no-files-found: error
