@@ -161,3 +161,188 @@ jobs:
           name: persistent-generation-compat-receipts
           path: out/
           if-no-files-found: error
+
+  terminal-host-rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REV_A: ae830c381bb846609230fc155a7fcdcd5e06b4d0
+      REV_B: a23c328f58738e58f692ef7e0e23ec5c194cf383
+    steps:
+      - name: Checkout exact pre-bump A
+        uses: actions/checkout@v4
+        with:
+          repository: manaflow-ai/cmux
+          ref: ae830c381bb846609230fc155a7fcdcd5e06b4d0
+          path: host-a
+
+      - name: Checkout exact protocol-v4 B
+        uses: actions/checkout@v4
+        with:
+          repository: manaflow-ai/cmux
+          ref: a23c328f58738e58f692ef7e0e23ec5c194cf383
+          path: host-b
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fieldwork-terminal-host-rollback
+
+      - name: Build exact cmux-tui binaries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo build --locked --release --manifest-path host-a/cmux-tui/Cargo.toml -p cmux-tui
+          cargo build --locked --release --manifest-path host-b/cmux-tui/Cargo.toml -p cmux-tui
+          mkdir -p host-bin
+          cp host-a/cmux-tui/target/release/cmux-tui host-bin/cmux-a
+          cp host-b/cmux-tui/target/release/cmux-tui host-bin/cmux-b
+          ./host-bin/cmux-a --version
+          ./host-bin/cmux-b --version
+          sha256sum host-bin/cmux-a host-bin/cmux-b
+
+      - name: Exercise B host across A rollback and B recovery
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p host-out host-state
+          SESSION=rollback-host
+          STATE="$PWD/host-state"
+          SOCK_B="$PWD/mux-b.sock"
+          SOCK_A="$PWD/mux-a.sock"
+
+          wait_socket() {
+            local socket="$1"
+            local pid="$2"
+            for _ in $(seq 1 200); do
+              [ -S "$socket" ] && return 0
+              kill -0 "$pid" 2>/dev/null || return 1
+              sleep 0.05
+            done
+            return 1
+          }
+
+          request() {
+            local socket="$1"
+            local payload="$2"
+            python3 - "$socket" "$payload" <<'PY'
+          import json, socket, sys
+          path, payload = sys.argv[1], sys.argv[2]
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.settimeout(10)
+          s.connect(path)
+          s.sendall(payload.encode() + b"\n")
+          data = b""
+          while b"\n" not in data:
+              chunk = s.recv(65536)
+              if not chunk:
+                  break
+              data += chunk
+          print(data.split(b"\n", 1)[0].decode())
+          PY
+          }
+
+          inspect_state() {
+            local label="$1"
+            {
+              echo "### $label"
+              find "$STATE" -type f -printf '%P\n' | LC_ALL=C sort
+              echo "-- hashes --"
+              while IFS= read -r f; do sha256sum "$STATE/$f"; done < <(find "$STATE" -type f -printf '%P\n' | LC_ALL=C sort)
+              echo "-- sqlite meta --"
+              db=$(find "$STATE" -name workspace-registry.sqlite3 -type f -print -quit || true)
+              if [ -n "$db" ]; then
+                sqlite3 "$db" "SELECT key,value FROM meta ORDER BY key;"
+                sqlite3 "$db" "SELECT terminal_id,workspace_key,incarnation,lifecycle,created_revision,updated_revision,deleted_revision FROM terminal_hosts ORDER BY terminal_id;" || true
+                sqlite3 "$db" "PRAGMA integrity_check;"
+              fi
+            } >"host-out/$label.txt"
+          }
+
+          # B creates a durable long-lived terminal under protocol 4 / schema 13.
+          ./host-bin/cmux-b --headless --session "$SESSION" --socket "$SOCK_B" --state "$STATE" >host-out/b-first.log 2>&1 &
+          PID_B=$!
+          wait_socket "$SOCK_B" "$PID_B"
+          RUN_JSON=$(request "$SOCK_B" '{"id":1,"cmd":"run","argv":["/bin/sh","-c","while :; do sleep 60; done"],"new_workspace":true,"name":"rollback-probe"}')
+          printf '%s\n' "$RUN_JSON" | tee host-out/b-run.json
+          TERMINAL_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["terminal_id"])' <<<"$RUN_JSON")
+          RECORD=$(python3 - "$STATE" "$TERMINAL_ID" <<'PY'
+          import json, os, sys
+          root, terminal = sys.argv[1], sys.argv[2]
+          for base, _, files in os.walk(root):
+              for name in files:
+                  if not name.endswith('.json'):
+                      continue
+                  path = os.path.join(base, name)
+                  try:
+                      obj = json.load(open(path))
+                  except Exception:
+                      continue
+                  if obj.get('terminal_id') == terminal and 'host_pid' in obj:
+                      print(path)
+                      raise SystemExit
+          raise SystemExit(2)
+          PY
+          )
+          cp "$RECORD" host-out/host-record-before.json
+          HOST_PID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host_pid"])' "$RECORD")
+          printf 'terminal_id=%s\nhost_record=%s\nhost_pid=%s\n' "$TERMINAL_ID" "$RECORD" "$HOST_PID" | tee host-out/identity.txt
+          inspect_state before-b-kill
+
+          # Kill only mux B. The independently hosted PTY process must survive.
+          kill -9 "$PID_B"
+          wait "$PID_B" || true
+          rm -f "$SOCK_B"
+          kill -0 "$HOST_PID"
+          printf 'host_alive_after_b_kill=yes\n' | tee host-out/host-after-b-kill.txt
+          inspect_state after-b-kill
+
+          # Roll back to A. A and B both own workspace schema 13; only the host protocol differs (3 vs 4).
+          ./host-bin/cmux-a --headless --session "$SESSION" --socket "$SOCK_A" --state "$STATE" >host-out/a-rollback.log 2>&1 &
+          PID_A=$!
+          if wait_socket "$SOCK_A" "$PID_A"; then
+            printf 'a_started=yes\n' | tee host-out/a-started.txt
+            set +e
+            request "$SOCK_A" "{\"id\":2,\"cmd\":\"resolve-terminal\",\"terminal_id\":\"$TERMINAL_ID\"}" >host-out/a-resolve.json 2>host-out/a-resolve.err
+            A_RESOLVE_RC=$?
+            set -e
+            printf 'a_resolve_rc=%s\n' "$A_RESOLVE_RC" | tee host-out/a-resolve.rc
+          else
+            printf 'a_started=no\n' | tee host-out/a-started.txt
+          fi
+          kill -0 "$HOST_PID" && printf 'host_alive_after_a_start=yes\n' || printf 'host_alive_after_a_start=no\n'
+          inspect_state after-a
+          cp "$RECORD" host-out/host-record-after-a.json 2>/dev/null || true
+          if kill -0 "$PID_A" 2>/dev/null; then kill -9 "$PID_A"; wait "$PID_A" || true; fi
+          rm -f "$SOCK_A"
+
+          # Restore B against exactly the state A just touched and ask for the same terminal identity.
+          ./host-bin/cmux-b --headless --session "$SESSION" --socket "$SOCK_B" --state "$STATE" >host-out/b-recover.log 2>&1 &
+          PID_B2=$!
+          if wait_socket "$SOCK_B" "$PID_B2"; then
+            printf 'b_restarted=yes\n' | tee host-out/b-restarted.txt
+            set +e
+            request "$SOCK_B" "{\"id\":3,\"cmd\":\"resolve-terminal\",\"terminal_id\":\"$TERMINAL_ID\"}" >host-out/b-recover-resolve.json 2>host-out/b-recover-resolve.err
+            B_RESOLVE_RC=$?
+            set -e
+            printf 'b_resolve_rc=%s\n' "$B_RESOLVE_RC" | tee host-out/b-recover-resolve.rc
+          else
+            printf 'b_restarted=no\n' | tee host-out/b-restarted.txt
+          fi
+          inspect_state after-b-recovery
+          kill -0 "$HOST_PID" && printf 'host_alive_after_b_recovery=yes\n' || printf 'host_alive_after_b_recovery=no\n'
+
+          # Preserve the probe outcome; cleanup only after all receipts are captured.
+          if kill -0 "$PID_B2" 2>/dev/null; then kill -9 "$PID_B2"; wait "$PID_B2" || true; fi
+          if kill -0 "$HOST_PID" 2>/dev/null; then kill -9 "$HOST_PID" || true; fi
+          rm -f "$SOCK_B" "$SOCK_A"
+
+      - name: Upload terminal-host rollback receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-host-rollback-receipts
+          path: host-out/
+          if-no-files-found: error
