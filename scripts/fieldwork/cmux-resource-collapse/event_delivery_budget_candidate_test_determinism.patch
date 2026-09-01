@@ -1,0 +1,20 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+@@ -91,6 +91,8 @@ struct RemoteDaemonEventDeliveryQueueTests {
+     func overflowHandlerMayUnregisterWithoutDeadlock() {
+         let client = makeDeliveryClient()
+         let deliveryQueue = DispatchQueue(label: "com.cmux.test.event-delivery-unregister")
++        let deliveryGate = DispatchSemaphore(value: 0)
++        deliveryQueue.async { deliveryGate.wait() }
+         let budget = RemoteDaemonEventDeliveryBudget(maxPendingBytes: 8, maxPendingEvents: 8)
+         let terminal = DispatchSemaphore(value: 0)
+         let streamID = "bounded-stream"
+@@ -123,6 +125,7 @@ struct RemoteDaemonEventDeliveryQueueTests {
+                 "data_base64": payload,
+             ])
+         }
++        deliveryGate.signal()
+         #expect(terminal.wait(timeout: .now() + 2) == .success)
+         #expect(budget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
+     }
