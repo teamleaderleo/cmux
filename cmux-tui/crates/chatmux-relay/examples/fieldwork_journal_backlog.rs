@@ -363,6 +363,7 @@ async fn wait_for_counter(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let options = parse_options();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let discovered_cap = source_usize_constant("MAX_DISCOVERED_SESSIONS");
     let batch_records = source_usize_constant("MAX_BATCH_RECORDS");
     let batch_body_bytes = source_usize_constant("MAX_BATCH_BODY_BYTES");
