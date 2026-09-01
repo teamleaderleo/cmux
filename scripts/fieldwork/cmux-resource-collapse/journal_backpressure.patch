@@ -1,5 +1,4 @@
 diff --git a/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs b/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
-index 9b455177..00000000 100644
 --- a/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
 +++ b/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
 @@ -36,6 +36,10 @@ use crate::config::ManagedEvents;
@@ -13,7 +12,7 @@ index 9b455177..00000000 100644
  const MAX_JOURNAL_LINE_BYTES: usize = 1 << 20;
  const DEFAULT_FLUSH_DEBOUNCE: Duration = Duration::from_millis(500);
  const DEFAULT_MIN_BACKOFF: Duration = Duration::from_secs(1);
-@@ -272,6 +276,10 @@ struct Shared {
+@@ -272,6 +276,9 @@ struct Shared {
      /// queue of redundant debounce wakes.
      flush_wake: Arc<tokio::sync::Notify>,
 +    /// Session readers wait here when the next pooled batch reaches its
@@ -22,7 +21,7 @@ index 9b455177..00000000 100644
  }
  
  #[cfg(unix)]
-@@ -280,6 +288,10 @@ struct PoolState {
+@@ -280,6 +287,10 @@ struct PoolState {
      /// Per-session record buffers awaiting the shared flush, in first-record
      /// arrival order so pooled POST bodies are deterministic.
      pending: Vec<PendingSession>,
@@ -32,11 +31,7 @@ index 9b455177..00000000 100644
 +    pending_bytes: usize,
      /// A POST is in flight; a threshold flush defers to `flush_again`.
      flushing: bool,
-@@ -301,6 +313,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
-         Ok(client) => client,
-         Err(error) => {
-             eprintln!("chatmux-relay: journal forwarder HTTP client failed: {error}");
-@@ -309,6 +322,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
+@@ -309,6 +320,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
          }
      };
      let flush_wake = Arc::new(tokio::sync::Notify::new());
@@ -44,14 +39,14 @@ index 9b455177..00000000 100644
      let shared = Shared {
          events,
          client,
-@@ -319,6 +333,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
+@@ -319,6 +331,7 @@ async fn run(events: ManagedEvents, cancellation: CancellationToken) {
          claims: Arc::new(Mutex::new(HashSet::new())),
          pool: Arc::new(Mutex::new(PoolState::default())),
          flush_wake,
 +        pool_capacity_wake,
      };
      let flusher = tokio::spawn(run_flusher(shared.clone()));
-@@ -642,14 +657,17 @@ async fn run_session(
+@@ -642,14 +655,17 @@ async fn run_session(
                                  generation.get_or_insert_with(|| cursor.generation.clone());
                                  last_delivered = Some(cursor);
                              }
@@ -70,7 +65,7 @@ index 9b455177..00000000 100644
 +                            }
                          }
                          Some("stream_end") => {
-@@ -694,6 +712,41 @@ async fn run_session(
+@@ -694,6 +710,41 @@ async fn run_session(
      }
  }
  
@@ -113,7 +108,7 @@ index 9b455177..00000000 100644
  /// Buffer one delivered record under its session in the forwarder-level
  /// pooled buffers, then apply the Node forwarder's `#scheduleFlush` decision
  /// synchronously: at the shared record threshold the buffers are drained on
-@@ -706,8 +759,17 @@ fn enqueue_pending(
+@@ -706,8 +757,17 @@ fn enqueue_pending(
      cursor_key: &str,
      generation: &Option<String>,
      record: Value,
@@ -130,7 +125,7 @@ index 9b455177..00000000 100644
 +    }
      let index = match pool.pending.iter().position(|entry| entry.cursor_key == cursor_key) {
          Some(index) => index,
-@@ -721,22 +783,27 @@ fn enqueue_pending(
+@@ -721,22 +781,27 @@ fn enqueue_pending(
              pool.pending.len() - 1
          }
      };
@@ -181,7 +176,7 @@ index 9b455177..00000000 100644
      shared.flush_wake.notify_one();
 +    EnqueuePendingResult::Enqueued
  }
-@@ -799,6 +866,8 @@ async fn flush_cycle(
+@@ -799,6 +864,8 @@ async fn flush_cycle(
                          return true;
                      }
                      let entries = std::mem::take(&mut pool.pending);
@@ -190,7 +185,7 @@ index 9b455177..00000000 100644
                      let batches = batch_records(&entries);
                      if batches.is_empty() {
                          return true;
-@@ -817,9 +886,11 @@ async fn flush_cycle(
+@@ -817,9 +884,11 @@ async fn flush_cycle(
              Ok(mut pool) => {
                  pool.flushing = false;
                  (
@@ -205,7 +200,7 @@ index 9b455177..00000000 100644
          if !delivered {
              return false;
          }
-@@ -1267,6 +1338,7 @@ mod tests {
+@@ -1267,6 +1336,7 @@ mod tests {
              claims: Arc::new(Mutex::new(HashSet::new())),
              pool: Arc::new(Mutex::new(PoolState::default())),
              flush_wake,
@@ -213,7 +208,7 @@ index 9b455177..00000000 100644
          };
          (shared, wake)
      }
-@@ -1378,6 +1450,90 @@ mod tests {
+@@ -1378,6 +1448,90 @@ mod tests {
          remove_cursor_test_path(&root).await;
      }
  
