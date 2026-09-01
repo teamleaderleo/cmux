@@ -38,6 +38,14 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
 
     @Test("physical stdio write stall does not strand queued RPC timeouts at scale")
     func physicalWriteStallMustBoundQueuedCallers() throws {
+        // FileHandle writes to a pipe whose peer is terminated during the
+        // cleanup control can raise SIGPIPE in a standalone Swift test host.
+        // Ignore it for this serialized probe so the write reports its error
+        // and every 1/10/50/200 case can finish. Restore the process handler
+        // after the suite case returns.
+        let previousSIGPIPEHandler = Darwin.signal(SIGPIPE, SIG_IGN)
+        defer { Darwin.signal(SIGPIPE, previousSIGPIPEHandler) }
+
         // The response timeout passed to `call` is deliberately tiny. The
         // invariant under test is that callers cannot wait indefinitely before
         // reaching the timeout owner merely because another physical write is
@@ -50,7 +58,7 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
     }
 
     private func runPhysicalWriteStallCase(callers: Int) throws {
-        let executable = try makeStallingTransport(stallSeconds: 2)
+        let executable = try makeStallingTransport(stallSeconds: 10)
         defer { removeTransport(at: executable) }
 
         let client = makeClient()
@@ -70,10 +78,10 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
                     // Far above ordinary Darwin pipe capacity. The fake SSH
                     // helper remains alive but stops reading after `hello`, so
                     // this write should stay inside FileHandle.write until the
-                    // helper exits on its safety timer.
+                    // explicit cleanup control stops the transport.
                     try client.writePayload(Data(repeating: 0x78, count: 4 * 1024 * 1024))
                 } catch {
-                    // The helper's eventual exit is the cleanup breaker.
+                    // The cleanup control owns the expected write failure.
                 }
                 physicalWriteFinished.signal()
             }
@@ -110,11 +118,21 @@ struct RemoteDaemonRPCClientWriteAdmissionScalingTests {
         )
 
         if !settledWithinBound {
-            // Keep a red run self-cleaning. The fake helper exits after two
-            // seconds, breaking the pipe and allowing current main to unwind.
-            #expect(group.wait(timeout: .now() + 5) == .success)
+            // Explicit clean-shutdown control. A direct stop must break the
+            // physical writer and release every queued caller even though the
+            // fake helper would otherwise remain alive for ten seconds.
+            client.stop()
+            #expect(
+                group.wait(timeout: .now() + 1) == .success,
+                "clean shutdown did not release \(callers) queued RPC callers"
+            )
+            #expect(
+                physicalWriteFinished.wait(timeout: .now() + 1) == .success,
+                "clean shutdown did not release the blocked physical write"
+            )
+        } else {
+            #expect(physicalWriteFinished.wait(timeout: .now() + 1) == .success)
         }
-        #expect(physicalWriteFinished.wait(timeout: .now() + 5) == .success)
         #expect(completions.value == callers)
     }
 
