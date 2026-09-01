@@ -1,0 +1,441 @@
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Package.swift b/Packages/macOS/CmuxRemoteWorkspace/Package.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Package.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Package.swift
+@@ -39,7 +39,10 @@ let package = Package(
+         ),
+         .testTarget(
+             name: "CmuxRemoteWorkspaceTests",
+-            dependencies: ["CmuxRemoteWorkspace"]
++            dependencies: [
++                "CmuxRemoteWorkspace",
++                .product(name: "CmuxRemoteDaemon", package: "CmuxRemoteDaemon"),
++            ]
+         ),
+     ]
+ )
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
+@@ -57,6 +57,10 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+     private var loopbackRequestHeaderRewriter: RemoteLoopbackHTTPRequestStreamRewriter?
+     private var pendingRemoteHTTPHeaderBytes = Data()
+     private var hasForwardedRemoteHTTPHeaders = false
++    private var fieldworkPendingLocalSendCount = 0
++    private var fieldworkPendingLocalSendBytes = 0
++    private var fieldworkPeakLocalSendCount = 0
++    private var fieldworkPeakLocalSendBytes = 0
+ 
+     init(
+         connection: NWConnection,
+@@ -87,6 +91,15 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+         close(reason: nil)
+     }
+ 
++    func fieldworkLocalSendSnapshot() -> (pendingCount: Int, pendingBytes: Int, peakCount: Int, peakBytes: Int) {
++        (
++            fieldworkPendingLocalSendCount,
++            fieldworkPendingLocalSendBytes,
++            fieldworkPeakLocalSendCount,
++            fieldworkPeakLocalSendBytes
++        )
++    }
++
+     private func receiveNext() {
+         guard !isClosed else { return }
+         connection.receive(minimumIncompleteLength: 1, maximumLength: 32768) { [weak self] data, _, isComplete, error in
+@@ -376,8 +389,16 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+     private func forwardRemotePayloadToLocal(_ data: Data, eof: Bool) {
+         let localData = rewriteRemoteResponseIfNeeded(data, eof: eof)
+         if !localData.isEmpty {
++            fieldworkPendingLocalSendCount += 1
++            fieldworkPendingLocalSendBytes += localData.count
++            fieldworkPeakLocalSendCount = max(fieldworkPeakLocalSendCount, fieldworkPendingLocalSendCount)
++            fieldworkPeakLocalSendBytes = max(fieldworkPeakLocalSendBytes, fieldworkPendingLocalSendBytes)
++            let sendBytes = localData.count
+             connection.send(content: localData, completion: .contentProcessed { [weak self] error in
+                 guard let self else { return }
++                self.fieldworkPendingLocalSendCount = max(0, self.fieldworkPendingLocalSendCount - 1)
++                self.fieldworkPendingLocalSendBytes = max(0, self.fieldworkPendingLocalSendBytes - sendBytes)
+                 if let error {
+                     self.close(reason: "proxy client send error: \(error)")
+                     return
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteDaemonProxySessionSlowReaderProbeTests.swift
+@@ -0,0 +1,353 @@
++import Darwin
++import Dispatch
++import Foundation
++import Network
++import Testing
++import CmuxRemoteDaemon
++@testable import CmuxRemoteWorkspace
++
++private let fieldworkProxyProbeEnabled =
++    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_PROXY_SLOW_READER"] == "1"
++
++@Suite(
++    "RemoteDaemonProxySession slow-reader probe",
++    .serialized,
++    .enabled(if: fieldworkProxyProbeEnabled)
++)
++struct RemoteDaemonProxySessionSlowReaderProbeTests {
++    @Test("remote output exposes pending local-send occupancy")
++    func remoteOutputPendingSendOccupancy() throws {
++        let environment = ProcessInfo.processInfo.environment
++        let sessionCount = max(1, Int(environment["CMUX_FIELDWORK_PROXY_SESSIONS"] ?? "1") ?? 1)
++        let bytesPerSession = max(
++            32 * 1024,
++            Int(environment["CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION"] ?? "1048576") ?? 1_048_576
++        )
++        let drainsLocalClient = environment["CMUX_FIELDWORK_PROXY_DRAIN"] == "1"
++        let chunkBytes = 32 * 1024
++        let rounds = max(1, (bytesPerSession + chunkBytes - 1) / chunkBytes)
++
++        let rpcClient = ProbeRPCClient()
++        let sessions = ProbeSessionStore()
++        let sessionQueue = DispatchQueue(label: "com.cmux.fieldwork.proxy-session")
++        let listenerQueue = DispatchQueue(label: "com.cmux.fieldwork.proxy-listener")
++        let clientQueue = DispatchQueue(
++            label: "com.cmux.fieldwork.proxy-clients",
++            attributes: .concurrent
++        )
++
++        let listener = try NWListener(using: .tcp, on: .any)
++        let listenerReady = DispatchSemaphore(value: 0)
++        listener.stateUpdateHandler = { state in
++            if case .ready = state {
++                listenerReady.signal()
++            }
++        }
++        listener.newConnectionHandler = { connection in
++            let session = RemoteDaemonProxySession(
++                connection: connection,
++                rpcClient: rpcClient,
++                queue: sessionQueue
++            ) { _ in }
++            sessions.append(session)
++            session.start()
++        }
++        listener.start(queue: listenerQueue)
++        defer { listener.cancel() }
++        #expect(listenerReady.wait(timeout: .now() + 3) == .success)
++        let port = try #require(listener.port)
++
++        var clients: [NWConnection] = []
++        var drainers: [ProbeConnectionDrainer] = []
++        for index in 0..<sessionCount {
++            let client = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
++            let ready = DispatchSemaphore(value: 0)
++            client.stateUpdateHandler = { state in
++                switch state {
++                case .ready, .failed, .cancelled:
++                    ready.signal()
++                default:
++                    break
++                }
++            }
++            client.start(queue: clientQueue)
++            #expect(ready.wait(timeout: .now() + 3) == .success)
++            if drainsLocalClient {
++                let drainer = ProbeConnectionDrainer(connection: client)
++                drainers.append(drainer)
++                drainer.start()
++            }
++            let request = Data(
++                "CONNECT fieldwork.invalid:443 HTTP/1.1\r\nHost: fieldwork.invalid:443\r\n\r\n".utf8
++            )
++            let sent = DispatchSemaphore(value: 0)
++            client.send(content: request, completion: .contentProcessed { _ in sent.signal() })
++            #expect(sent.wait(timeout: .now() + 3) == .success, "CONNECT send \(index) did not complete")
++            clients.append(client)
++        }
++        defer { clients.forEach { $0.cancel() } }
++
++        #expect(rpcClient.waitForAttachedStreams(sessionCount, timeout: 5))
++        #expect(sessions.waitForCount(sessionCount, timeout: 5))
++        Thread.sleep(forTimeInterval: 0.1)
++
++        let baseline = probeProcessMetrics()
++        let chunk = Data(repeating: 0x78, count: chunkBytes)
++        let started = ContinuousClock.now
++        for _ in 0..<rounds {
++            rpcClient.emitDataToEveryStream(chunk)
++        }
++        let enqueueMillis = Int(started.duration(to: .now).components.attoseconds / 1_000_000_000_000_000)
++
++        if drainsLocalClient {
++            #expect(waitUntil(timeout: 5) {
++                let snapshot = sessionQueue.sync { sessions.aggregateSendSnapshot() }
++                return snapshot.pendingCount == 0
++            })
++        } else {
++            Thread.sleep(forTimeInterval: 0.35)
++        }
++
++        let loaded = probeProcessMetrics()
++        let sendSnapshot = sessionQueue.sync { sessions.aggregateSendSnapshot() }
++        let offeredBytes = sessionCount * rounds * chunkBytes
++        let drainedBytes = drainers.reduce(0) { $0 + $1.bytesRead }
++
++        printProbeJSON([
++            "sessions": sessionCount,
++            "drain": drainsLocalClient,
++            "bytes_per_session": rounds * chunkBytes,
++            "offered_bytes": offeredBytes,
++            "drained_bytes": drainedBytes,
++            "enqueue_millis": enqueueMillis,
++            "baseline_rss_kib": baseline.rssKiB,
++            "loaded_rss_kib": loaded.rssKiB,
++            "baseline_fds": baseline.fds,
++            "loaded_fds": loaded.fds,
++            "baseline_threads": baseline.threads,
++            "loaded_threads": loaded.threads,
++            "pending_send_count": sendSnapshot.pendingCount,
++            "pending_send_bytes": sendSnapshot.pendingBytes,
++            "peak_pending_send_count": sendSnapshot.peakCount,
++            "peak_pending_send_bytes": sendSnapshot.peakBytes,
++        ])
++
++        if drainsLocalClient {
++            #expect(sendSnapshot.pendingCount == 0)
++            #expect(sendSnapshot.pendingBytes == 0)
++        } else {
++            #expect(sendSnapshot.pendingCount > 0, "slow local readers did not retain any send completion")
++            #expect(sendSnapshot.pendingBytes > 0)
++        }
++
++        sessionQueue.sync {
++            sessions.snapshot().forEach { $0.stop() }
++        }
++        clients.forEach { $0.cancel() }
++        #expect(waitUntil(timeout: 3) {
++            let snapshot = sessionQueue.sync { sessions.aggregateSendSnapshot() }
++            return snapshot.pendingCount == 0
++        })
++        Thread.sleep(forTimeInterval: 0.2)
++        let cleanup = probeProcessMetrics()
++        let cleanupSends = sessionQueue.sync { sessions.aggregateSendSnapshot() }
++        printProbeJSON([
++            "sessions": sessionCount,
++            "drain": drainsLocalClient,
++            "phase": "cleanup",
++            "cleanup_rss_kib": cleanup.rssKiB,
++            "cleanup_fds": cleanup.fds,
++            "cleanup_threads": cleanup.threads,
++            "pending_send_count": cleanupSends.pendingCount,
++            "pending_send_bytes": cleanupSends.pendingBytes,
++        ])
++    }
++}
++
++private struct ProbeProcessMetrics {
++    let rssKiB: Int
++    let fds: Int
++    let threads: Int
++}
++
++private func probeProcessMetrics() -> ProbeProcessMetrics {
++    var taskInfo = proc_taskinfo()
++    let taskInfoSize = MemoryLayout<proc_taskinfo>.stride
++    let read = proc_pidinfo(
++        getpid(),
++        PROC_PIDTASKINFO,
++        0,
++        &taskInfo,
++        Int32(taskInfoSize)
++    )
++    let rssKiB = read == Int32(taskInfoSize) ? Int(taskInfo.pti_resident_size / 1024) : -1
++    let threads = read == Int32(taskInfoSize) ? Int(taskInfo.pti_threadnum) : -1
++    let fds = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
++    return ProbeProcessMetrics(rssKiB: rssKiB, fds: fds, threads: threads)
++}
++
++private func waitUntil(timeout: TimeInterval, predicate: () -> Bool) -> Bool {
++    let deadline = Date().addingTimeInterval(timeout)
++    repeat {
++        if predicate() {
++            return true
++        }
++        Thread.sleep(forTimeInterval: 0.02)
++    } while Date() < deadline
++    return predicate()
++}
++
++private func printProbeJSON(_ object: [String: Any]) {
++    guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
++          let text = String(data: data, encoding: .utf8) else {
++        return
++    }
++    print("FIELDWORK_PROXY_SLOW_READER \(text)")
++}
++
++private final class ProbeSessionStore: @unchecked Sendable {
++    private let lock = NSLock()
++    private var sessions: [RemoteDaemonProxySession] = []
++
++    func append(_ session: RemoteDaemonProxySession) {
++        lock.lock()
++        sessions.append(session)
++        lock.unlock()
++    }
++
++    func snapshot() -> [RemoteDaemonProxySession] {
++        lock.lock()
++        defer { lock.unlock() }
++        return sessions
++    }
++
++    func waitForCount(_ count: Int, timeout: TimeInterval) -> Bool {
++        waitUntil(timeout: timeout) { self.snapshot().count >= count }
++    }
++
++    func aggregateSendSnapshot() -> (pendingCount: Int, pendingBytes: Int, peakCount: Int, peakBytes: Int) {
++        snapshot().reduce(into: (pendingCount: 0, pendingBytes: 0, peakCount: 0, peakBytes: 0)) {
++            aggregate, session in
++            let value = session.fieldworkLocalSendSnapshot()
++            aggregate.pendingCount += value.pendingCount
++            aggregate.pendingBytes += value.pendingBytes
++            aggregate.peakCount += value.peakCount
++            aggregate.peakBytes += value.peakBytes
++        }
++    }
++}
++
++private final class ProbeConnectionDrainer: @unchecked Sendable {
++    private let connection: NWConnection
++    private let lock = NSLock()
++    private var storedBytesRead = 0
++
++    init(connection: NWConnection) {
++        self.connection = connection
++    }
++
++    var bytesRead: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return storedBytesRead
++    }
++
++    func start() {
++        receiveNext()
++    }
++
++    private func receiveNext() {
++        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
++            guard let self else { return }
++            if let data {
++                self.lock.lock()
++                self.storedBytesRead += data.count
++                self.lock.unlock()
++            }
++            if !complete && error == nil {
++                self.receiveNext()
++            }
++        }
++    }
++}
++
++private enum ProbeRPCError: Error {
++    case unused
++}
++
++private final class ProbeRPCClient: @unchecked Sendable, RemoteDaemonTunnelRPCClient {
++    private struct StreamHandler {
++        let queue: DispatchQueue
++        let handler: (RemoteDaemonStreamEvent) -> Void
++    }
++
++    private let lock = NSLock()
++    private var nextStreamID = 1
++    private var handlers: [String: StreamHandler] = [:]
++
++    func waitForAttachedStreams(_ count: Int, timeout: TimeInterval) -> Bool {
++        waitUntil(timeout: timeout) {
++            self.lock.lock()
++            defer { self.lock.unlock() }
++            return self.handlers.count >= count
++        }
++    }
++
++    func emitDataToEveryStream(_ data: Data) {
++        lock.lock()
++        let snapshot = Array(handlers.values)
++        lock.unlock()
++        for stream in snapshot {
++            stream.queue.sync {
++                stream.handler(.data(data))
++            }
++        }
++    }
++
++    func stop() {}
++
++    func openStream(host: String, port: Int, timeoutMs: Int) throws -> String {
++        lock.lock()
++        defer { lock.unlock() }
++        let id = "fieldwork-stream-\(nextStreamID)"
++        nextStreamID += 1
++        return id
++    }
++
++    func writeStream(streamID: String, data: Data) throws {}
++
++    func attachStream(
++        streamID: String,
++        queue: DispatchQueue,
++        onEvent: @escaping (RemoteDaemonStreamEvent) -> Void
++    ) throws {
++        lock.lock()
++        handlers[streamID] = StreamHandler(queue: queue, handler: onEvent)
++        lock.unlock()
++    }
++
++    func closeStream(streamID: String) {
++        lock.lock()
++        handlers.removeValue(forKey: streamID)
++        lock.unlock()
++    }
++
++    func listPTY() throws -> [[String: Any]] { [] }
++
++    func closePTY(sessionID: String, timeout: TimeInterval) throws {}
++
++    func resizePTY(
++        sessionID: String,
++        attachmentID: String,
++        attachmentToken: String,
++        cols: Int,
++        rows: Int
++    ) throws {}
++
++    func detachPTYChecked(sessionID: String, attachmentID: String, attachmentToken: String) throws {}
++
++    func attachBridgePTY(
++        sessionID: String,
++        attachmentID: String,
++        cols: Int,
++        rows: Int,
++        command: String?,
++        requireExisting: Bool,
++        inputSeqAck: Bool,
++        queue: DispatchQueue,
++        onEvent: @escaping (RemotePTYBridgeEvent) -> Void
++    ) throws -> RemotePTYBridgeAttachment {
++        throw ProbeRPCError.unused
++    }
++
++    func writePTY(
++        sessionID: String,
++        attachmentID: String,
++        attachmentToken: String,
++        data: Data,
++        seq: UInt64?,
++        completion: @escaping ((any Error)?) -> Void
++    ) {
++        completion(ProbeRPCError.unused)
++    }
++
++    func detachPTY(sessionID: String, attachmentID: String, attachmentToken: String) {}
++}
