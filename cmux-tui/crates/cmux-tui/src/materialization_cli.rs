@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, bail};
 use base64::Engine as _;
@@ -47,7 +48,7 @@ pub fn run(raw_args: &[String]) -> i32 {
         println!("{USAGE}");
         return 0;
     }
-    match parse_args(raw_args).and_then(|args| run_args(&args, true)) {
+    match parse_args(raw_args).and_then(|args| run_args(&args)) {
         Ok(()) => 0,
         Err(error) => {
             crate::client_log::stderr_log!(
@@ -63,9 +64,11 @@ pub fn run(raw_args: &[String]) -> i32 {
 ///
 /// Only the canonical raw `server start` spelling is eligible. Other cmux-tui
 /// process modes may inherit the sandbox environment but must never mutate the
-/// daemon identity. On success the token is removed from this process before it
-/// launches descendants; a supervisor restart receives the token again from its
-/// parent and replays the committed transition as a no-op.
+/// daemon identity. The long-lived server delegates the sensitive transition to
+/// the same installed binary in the explicit one-shot mode, so daemon-key bytes
+/// never enter the server process. On success the create-only token is removed
+/// before the server launches descendants; a supervisor restart receives its own
+/// copy and replays the committed transition as a no-op.
 pub fn try_run_server_start_from_environment(raw_args: &[String]) -> anyhow::Result<bool> {
     if raw_args.first().map(String::as_str) != Some("server")
         || raw_args.get(1).map(String::as_str) != Some("start")
@@ -78,23 +81,50 @@ pub fn try_run_server_start_from_environment(raw_args: &[String]) -> anyhow::Res
     let materialization_id = os_string(materialization_id, MATERIALIZATION_ID_ENV)?;
     validate_materialization_id(&materialization_id)?;
     let state_home = default_state_home()?;
-    let args = Args {
-        workspace_state_root: state_home.join("cmux-tui").join("sessions"),
-        remote_state_dir: state_home.join("cmux").join("remote"),
-        materialization_id,
-        enrollment_policy: MaterializedEnrollmentPolicy::Fresh,
-    };
-    run_args(&args, false)?;
-    // SAFETY: this private startup hook runs before the daemon creates worker
-    // threads. Removing the create-only token prevents terminal descendants
-    // from inheriting it; the external supervisor retains its own copy.
+    let workspace_state_root = state_home.join("cmux-tui").join("sessions");
+    let remote_state_dir = state_home.join("cmux").join("remote");
+    let executable = std::env::current_exe().context("resolve cmux-tui executable for materialization")?;
+    let output = Command::new(executable)
+        .arg("__materialize-new-machine")
+        .arg("--workspace-state-root")
+        .arg(&workspace_state_root)
+        .arg("--remote-state-dir")
+        .arg(&remote_state_dir)
+        .arg("--materialization-id")
+        .arg(&materialization_id)
+        .env_remove(MATERIALIZATION_ID_ENV)
+        .stdin(Stdio::null())
+        .output()
+        .context("run one-shot Cloud materialization child")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        bail!(
+            "one-shot Cloud materialization failed{}",
+            if stderr.is_empty() { String::new() } else { format!(": {stderr}") }
+        );
+    }
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .context("parse one-shot Cloud materialization receipt")?;
+    if receipt.get("materialization_id").and_then(serde_json::Value::as_str)
+        != Some(materialization_id.as_str())
+        || receipt.get("machine_id").and_then(serde_json::Value::as_str).is_none()
+        || receipt
+            .get("daemon_fingerprint")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        bail!("one-shot Cloud materialization returned an invalid receipt");
+    }
+    // SAFETY: this startup hook runs before the daemon creates worker threads.
+    // Removing the token prevents terminal descendants from inheriting it; the
+    // external supervisor retains its own environment for restart replay.
     unsafe {
         std::env::remove_var(MATERIALIZATION_ID_ENV);
     }
     Ok(true)
 }
 
-fn run_args(args: &Args, emit_receipt: bool) -> anyhow::Result<()> {
+fn run_args(args: &Args) -> anyhow::Result<()> {
     harden_sensitive_process()?;
     validate_materialization_id(&args.materialization_id)?;
     fs::create_dir_all(&args.workspace_state_root).with_context(|| {
@@ -114,7 +144,7 @@ fn run_args(args: &Args, emit_receipt: bool) -> anyhow::Result<()> {
     FileExt::try_lock(&lock)
         .with_context(|| format!("another materialization owns {}", lock_path.display()))?;
 
-    let result = materialize_under_lock(args, emit_receipt);
+    let result = materialize_under_lock(args);
     let _ = FileExt::unlock(&lock);
     result
 }
@@ -127,15 +157,13 @@ fn harden_sensitive_process() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn materialize_under_lock(args: &Args, emit_receipt: bool) -> anyhow::Result<()> {
+fn materialize_under_lock(args: &Args) -> anyhow::Result<()> {
     let marker_path = args.workspace_state_root.join(MARKER_FILE);
     let marker = match read_marker(&marker_path)? {
         Some(marker)
             if marker.materialization_id == args.materialization_id && marker.phase == "committed" =>
         {
-            if emit_receipt {
-                print_receipt(false, &marker);
-            }
+            print_receipt(false, &marker);
             return Ok(());
         }
         Some(marker)
@@ -166,8 +194,6 @@ fn materialize_under_lock(args: &Args, emit_receipt: bool) -> anyhow::Result<()>
         .context("pending materialization marker has an invalid machine id")?;
     let enrollment_policy = parse_policy(&marker.enrollment_policy)?;
 
-    // Auth state first: its owner lease is held for the daemon lifetime, so a
-    // running daemon makes this fail closed before the root machine id changes.
     install_materialized_daemon_identity(&args.remote_state_dir, &identity, enrollment_policy)?;
     install_materialized_machine_id(&args.workspace_state_root, &machine_id)?;
 
@@ -181,9 +207,7 @@ fn materialize_under_lock(args: &Args, emit_receipt: bool) -> anyhow::Result<()>
         daemon_private_key: None,
     };
     atomic_marker(&marker_path, &committed)?;
-    if emit_receipt {
-        print_receipt(true, &committed);
-    }
+    print_receipt(true, &committed);
     Ok(())
 }
 
