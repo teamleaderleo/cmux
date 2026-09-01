@@ -1,0 +1,72 @@
+name: Fieldwork cloud CLI socket red-green verifier
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cmux-cloud-cli-execution-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-cloud-cli-red-green-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 2ead47750ab2f47c13972d0709d99cdcbaa8ad73
+  RED_SHA: 665b1771caa5c4833e5d44ee734cdeeef8047c29
+  GREEN_SHA: ec050357a2e2a594c89fb563508cc96bc88a6745
+
+jobs:
+  verify:
+    name: Prove cloud CLI socket red-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact green candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GREEN_SHA }}
+          fetch-depth: 0
+
+      - name: Verify candidate ancestry and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$RED_SHA^")" = "$BASE_SHA"
+          test "$(git rev-parse "$GREEN_SHA^")" = "$RED_SHA"
+          test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "daemon/remote/cmd/cmuxd-remote/cloud_cli_bridge_generation_test.go"
+          git diff --check "$BASE_SHA" "$GREEN_SHA"
+
+      - name: Record Go toolchain
+        working-directory: daemon/remote
+        run: go version
+
+      - name: Prove regression commit is red at stale socket ownership
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$RED_SHA"
+          set +e
+          go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1 2>&1 | tee /tmp/cloud-cli-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected the test-only commit to fail"
+            exit 1
+          fi
+          grep -F "second bridge took over the socket while the first owner was still alive" /tmp/cloud-cli-red.log
+          echo "observed expected red test exit: $status"
+
+      - name: Prove fix commit is green
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$GREEN_SHA"
+          go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1
+
+      - name: Run full remote daemon package tests
+        working-directory: daemon/remote
+        run: go test ./...
