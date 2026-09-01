@@ -1,0 +1,68 @@
+name: Fieldwork remote auth stale-delete RED
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cmux-remote-auth-stale-delete-execution-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-remote-auth-stale-delete-red-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TARGET_SHA: 8ef183f1e5de765b183aec9d1799f17a0848ae84
+  RED_SHA: 15210b38244e289ad750fe65ee07fc51f8854a56
+
+jobs:
+  verify-red:
+    name: Prove stale lease generation deletion
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact regression commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+
+      - name: Verify regression-only diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base "$TARGET_SHA" "$RED_SHA")" = "$TARGET_SHA"
+          test "$(git diff --name-only "$TARGET_SHA" "$RED_SHA")" = "daemon/remote/cmd/cmuxd-remote/ws_lease_generation_test.go"
+          git diff --check "$TARGET_SHA" "$RED_SHA"
+
+      - name: Set up repository Go version
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: daemon/remote/go.mod
+          cache-dependency-path: daemon/remote/go.sum
+
+      - name: Record toolchain
+        run: go version
+
+      - name: Settled-owner negative control
+        working-directory: daemon/remote
+        run: go test ./cmd/cmuxd-remote -run '^TestLeaseInstallAfterSingleUseConsumptionSurvives$' -count=1 -v
+
+      - name: Prove overlapping generation is RED for the intended reason
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          go test ./cmd/cmuxd-remote \
+            -run '^TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration$' \
+            -count=1 -v 2>&1 | tee /tmp/cmux-lease-generation-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected current source to violate the stale-generation invariant"
+            exit 1
+          fi
+          grep -F "single-use cleanup for lease A deleted replacement lease B" /tmp/cmux-lease-generation-red.log
+          echo "observed expected product-path RED exit: $status"
