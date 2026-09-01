@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - fieldwork/nonlinear-resource-collapse
+    paths:
+      - .github/workflows/fieldwork-nonlinear-resource-collapse.yml
+      - cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+      - Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift
   workflow_dispatch:
 
 permissions:
