@@ -466,7 +466,44 @@ func writeLeaseFile(path string, lease *wsLease) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("lease path is empty")
 	}
-	return writeJSONFile(path, lease)
+	wsLeaseMu.Lock()
+	defer wsLeaseMu.Unlock()
+	return writeLeaseFileAtomic(path, lease)
+}
+
+func writeLeaseFileAtomic(path string, lease *wsLease) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(lease)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func writeJSONFile(path string, value any) error {
