@@ -1,0 +1,4 @@
+Current-main terminal input owner-ack refinement and gate.
+Upstream: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+Starting product candidate: fcccdb386dcd6545300997bdb5c8c8d564b859e4
+Canonical branch is force-with-lease fenced at current upstream until all gates pass.
