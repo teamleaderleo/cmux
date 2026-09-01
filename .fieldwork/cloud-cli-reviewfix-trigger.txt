@@ -1,0 +1,4 @@
+Review-fixed cloud CLI socket ownership verifier.
+Base: 2ead47750ab2f47c13972d0709d99cdcbaa8ad73
+Red: 7ee8e84e4e0efe14e78e07bb735438ae30413271
+Green: b6133588800111f99f17333b8fd1450ba5bcc036
