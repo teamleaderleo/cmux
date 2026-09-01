@@ -84,7 +84,14 @@ jobs:
         run: swift --version
       - name: Pin revision
         run: git rev-parse HEAD
-      - name: Run full remote-daemon package including scaling probe
+      - name: Run normal remote-daemon package
         run: |
           swift test \
             --package-path Packages/macOS/CmuxRemoteDaemon
+      - name: Run heavy write-admission scaling probe separately
+        env:
+          CMUX_FIELDWORK_SCALING: "1"
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientWriteAdmissionScalingTests
