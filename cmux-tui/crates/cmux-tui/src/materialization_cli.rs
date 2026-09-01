@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -62,6 +62,7 @@ pub fn run(raw_args: &[String]) -> i32 {
 }
 
 fn run_inner(raw_args: &[String]) -> anyhow::Result<()> {
+    harden_sensitive_process()?;
     let args = parse_args(raw_args)?;
     validate_materialization_id(&args.materialization_id)?;
     fs::create_dir_all(&args.workspace_state_root).with_context(|| {
@@ -84,6 +85,14 @@ fn run_inner(raw_args: &[String]) -> anyhow::Result<()> {
     let result = materialize_under_lock(&args);
     let _ = FileExt::unlock(&lock);
     result
+}
+
+fn harden_sensitive_process() -> anyhow::Result<()> {
+    let result = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if result != 0 {
+        return Err(io::Error::last_os_error()).context("disable dumps for materialization process");
+    }
+    Ok(())
 }
 
 fn materialize_under_lock(args: &Args) -> anyhow::Result<()> {
