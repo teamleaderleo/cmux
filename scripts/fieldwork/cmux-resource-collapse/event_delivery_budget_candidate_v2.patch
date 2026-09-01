@@ -1,0 +1,602 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+@@ -0,0 +1,286 @@
++internal import Foundation
++
++private let remoteDaemonEventDeliveryDrainBatchSize = 16
++
++struct RemoteDaemonEventDeliveryLimits: Sendable {
++    static let proxy = RemoteDaemonEventDeliveryLimits(
++        maxPendingBytes: 96 * 1024 * 1024,
++        maxPendingEvents: 65_536
++    )
++    static let pty = RemoteDaemonEventDeliveryLimits(
++        maxPendingBytes: 16 * 1024 * 1024,
++        maxPendingEvents: 16_384
++    )
++
++    let maxPendingBytes: Int
++    let maxPendingEvents: Int
++}
++
++final class RemoteDaemonEventDeliveryBudget: @unchecked Sendable {
++    struct Snapshot: Equatable, Sendable {
++        let pendingBytes: Int
++        let pendingEvents: Int
++    }
++
++    static let shared = RemoteDaemonEventDeliveryBudget(
++        maxPendingBytes: 128 * 1024 * 1024,
++        maxPendingEvents: 131_072
++    )
++
++    private let lock = NSLock()
++    private let maxPendingBytes: Int
++    private let maxPendingEvents: Int
++    private var pendingBytes = 0
++    private var pendingEvents = 0
++
++    init(maxPendingBytes: Int, maxPendingEvents: Int) {
++        self.maxPendingBytes = max(0, maxPendingBytes)
++        self.maxPendingEvents = max(0, maxPendingEvents)
++    }
++
++    func reserve(bytes: Int) -> Bool {
++        guard bytes >= 0 else { return false }
++        lock.lock()
++        defer { lock.unlock() }
++        guard pendingEvents < maxPendingEvents else { return false }
++        guard pendingBytes <= maxPendingBytes else { return false }
++        guard bytes <= maxPendingBytes - pendingBytes else { return false }
++        pendingEvents += 1
++        pendingBytes += bytes
++        return true
++    }
++
++    func release(bytes: Int, events: Int = 1) {
++        guard bytes >= 0, events >= 0 else { return }
++        lock.lock()
++        pendingBytes = max(0, pendingBytes - bytes)
++        pendingEvents = max(0, pendingEvents - events)
++        lock.unlock()
++    }
++
++    func snapshot() -> Snapshot {
++        lock.lock()
++        defer { lock.unlock() }
++        return Snapshot(pendingBytes: pendingBytes, pendingEvents: pendingEvents)
++    }
++}
++
++final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendable {
++    enum EnqueueResult {
++        case enqueued
++        case closed
++        case overflow
++    }
++
++    struct Snapshot: Equatable, Sendable {
++        let pendingBytes: Int
++        let pendingEvents: Int
++        let queuedEvents: Int
++        let acceptingEvents: Bool
++    }
++
++    private struct Entry: Sendable {
++        let event: Event
++        let retainedBytes: Int
++        let afterDelivery: (@Sendable () -> Void)?
++    }
++
++    private let lock = NSLock()
++    private let queue: DispatchQueue
++    private let handler: (Event) -> Void
++    private let budget: RemoteDaemonEventDeliveryBudget
++    private let limits: RemoteDaemonEventDeliveryLimits
++    private var entries: [Entry] = []
++    private var head = 0
++    private var reservedBytes = 0
++    private var reservedEvents = 0
++    private var drainScheduled = false
++    private var acceptingEvents = true
++    private var failureTerminal: (Event, (@Sendable () -> Void)?)?
++
++    init(
++        queue: DispatchQueue,
++        handler: @escaping (Event) -> Void,
++        budget: RemoteDaemonEventDeliveryBudget,
++        limits: RemoteDaemonEventDeliveryLimits
++    ) {
++        self.queue = queue
++        self.handler = handler
++        self.budget = budget
++        self.limits = limits
++    }
++
++    func enqueue(_ event: Event, retainedBytes: Int) -> EnqueueResult {
++        append(event, retainedBytes: retainedBytes, afterDelivery: nil, closesInput: false)
++    }
++
++    func finish(
++        _ event: Event,
++        retainedBytes: Int,
++        afterDelivery: (@Sendable () -> Void)?
++    ) -> EnqueueResult {
++        append(event, retainedBytes: retainedBytes, afterDelivery: afterDelivery, closesInput: true)
++    }
++
++    func fail(
++        _ terminal: Event,
++        afterDelivery: (@Sendable () -> Void)? = nil
++    ) {
++        let released: (bytes: Int, events: Int)
++        let scheduleDrain: Bool
++        lock.lock()
++        acceptingEvents = false
++        released = clearQueuedEntriesLocked()
++        failureTerminal = (terminal, afterDelivery)
++        scheduleDrain = !drainScheduled
++        if scheduleDrain {
++            drainScheduled = true
++        }
++        lock.unlock()
++        if released.events > 0 {
++            budget.release(bytes: released.bytes, events: released.events)
++        }
++        if scheduleDrain {
++            scheduleDrainBlock()
++        }
++    }
++
++    func cancel() {
++        let released: (bytes: Int, events: Int)
++        lock.lock()
++        acceptingEvents = false
++        failureTerminal = nil
++        released = clearQueuedEntriesLocked()
++        lock.unlock()
++        if released.events > 0 {
++            budget.release(bytes: released.bytes, events: released.events)
++        }
++    }
++
++    func snapshot() -> Snapshot {
++        lock.lock()
++        defer { lock.unlock() }
++        return Snapshot(
++            pendingBytes: reservedBytes,
++            pendingEvents: reservedEvents,
++            queuedEvents: max(0, entries.count - head) + (failureTerminal == nil ? 0 : 1),
++            acceptingEvents: acceptingEvents
++        )
++    }
++
++    private func append(
++        _ event: Event,
++        retainedBytes: Int,
++        afterDelivery: (@Sendable () -> Void)?,
++        closesInput: Bool
++    ) -> EnqueueResult {
++        guard retainedBytes >= 0 else { return .overflow }
++
++        let scheduleDrain: Bool
++        lock.lock()
++        guard acceptingEvents else {
++            lock.unlock()
++            return .closed
++        }
++        guard reservedEvents < limits.maxPendingEvents,
++              reservedBytes <= limits.maxPendingBytes,
++              retainedBytes <= limits.maxPendingBytes - reservedBytes else {
++            acceptingEvents = false
++            lock.unlock()
++            return .overflow
++        }
++        guard budget.reserve(bytes: retainedBytes) else {
++            acceptingEvents = false
++            lock.unlock()
++            return .overflow
++        }
++
++        reservedEvents += 1
++        reservedBytes += retainedBytes
++        entries.append(
++            Entry(
++                event: event,
++                retainedBytes: retainedBytes,
++                afterDelivery: afterDelivery
++            )
++        )
++        if closesInput {
++            acceptingEvents = false
++        }
++        scheduleDrain = !drainScheduled
++        if scheduleDrain {
++            drainScheduled = true
++        }
++        lock.unlock()
++
++        if scheduleDrain {
++            scheduleDrainBlock()
++        }
++        return .enqueued
++    }
++
++    private func scheduleDrainBlock() {
++        queue.async { [weak self] in
++            self?.drainBatch()
++        }
++    }
++
++    private func drainBatch() {
++        var delivered = 0
++        while delivered < remoteDaemonEventDeliveryDrainBatchSize {
++            let next: (entry: Entry?, failure: (Event, (@Sendable () -> Void)?)?)
++            lock.lock()
++            if head < entries.count {
++                let entry = entries[head]
++                head += 1
++                next = (entry, nil)
++            } else if let failureTerminal {
++                self.failureTerminal = nil
++                next = (nil, failureTerminal)
++            } else {
++                entries.removeAll(keepingCapacity: false)
++                head = 0
++                drainScheduled = false
++                lock.unlock()
++                return
++            }
++            lock.unlock()
++
++            if let entry = next.entry {
++                handler(entry.event)
++                lock.lock()
++                reservedBytes = max(0, reservedBytes - entry.retainedBytes)
++                reservedEvents = max(0, reservedEvents - 1)
++                lock.unlock()
++                budget.release(bytes: entry.retainedBytes)
++                entry.afterDelivery?()
++            } else if let failure = next.failure {
++                handler(failure.0)
++                failure.1?()
++            }
++            delivered += 1
++        }
++
++        lock.lock()
++        let hasMore = head < entries.count || failureTerminal != nil
++        if !hasMore {
++            entries.removeAll(keepingCapacity: false)
++            head = 0
++            drainScheduled = false
++        }
++        lock.unlock()
++        if hasMore {
++            scheduleDrainBlock()
++        }
++    }
++
++    private func clearQueuedEntriesLocked() -> (bytes: Int, events: Int) {
++        guard head < entries.count else {
++            entries.removeAll(keepingCapacity: false)
++            head = 0
++            return (0, 0)
++        }
++        let queued = entries[head...]
++        let bytes = queued.reduce(0) { $0 + $1.retainedBytes }
++        let events = queued.count
++        reservedBytes = max(0, reservedBytes - bytes)
++        reservedEvents = max(0, reservedEvents - events)
++        entries.removeAll(keepingCapacity: false)
++        head = 0
++        return (bytes, events)
++    }
++}
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient.swift
+@@ -99,16 +99,70 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
+-    struct StreamSubscription: @unchecked Sendable {
+-        let queue: DispatchQueue
+-        let handler: (RemoteDaemonStreamEvent) -> Void
++    final class StreamSubscription: @unchecked Sendable {
++        private let delivery: RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>
++
++        init(
++            queue: DispatchQueue,
++            handler: @escaping (RemoteDaemonStreamEvent) -> Void,
++            budget: RemoteDaemonEventDeliveryBudget = .shared,
++            limits: RemoteDaemonEventDeliveryLimits = .proxy
++        ) {
++            delivery = RemoteDaemonEventDeliveryQueue(
++                queue: queue,
++                handler: handler,
++                budget: budget,
++                limits: limits
++            )
++        }
++
++        func enqueue(_ event: RemoteDaemonStreamEvent, retainedBytes: Int) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.EnqueueResult {
++            delivery.enqueue(event, retainedBytes: retainedBytes)
++        }
++
++        func finish(
++            _ event: RemoteDaemonStreamEvent,
++            retainedBytes: Int,
++            afterDelivery: (@Sendable () -> Void)?
++        ) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.EnqueueResult {
++            delivery.finish(event, retainedBytes: retainedBytes, afterDelivery: afterDelivery)
++        }
++
++        func fail(_ detail: String, afterDelivery: (@Sendable () -> Void)? = nil) {
++            delivery.fail(.error(detail), afterDelivery: afterDelivery)
++        }
++
++        func cancel() { delivery.cancel() }
++        func snapshot() -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.Snapshot { delivery.snapshot() }
+     }
+ 
+     // See StreamSubscription for the @unchecked Sendable justification.
+-    struct PTYSubscription: @unchecked Sendable {
+-        let queue: DispatchQueue
+-        let handler: (RemoteDaemonPTYEvent) -> Void
++    final class PTYSubscription: @unchecked Sendable {
++        private let delivery: RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>
++
++        init(
++            queue: DispatchQueue,
++            handler: @escaping (RemoteDaemonPTYEvent) -> Void,
++            budget: RemoteDaemonEventDeliveryBudget = .shared,
++            limits: RemoteDaemonEventDeliveryLimits = .pty
++        ) {
++            delivery = RemoteDaemonEventDeliveryQueue(
++                queue: queue,
++                handler: handler,
++                budget: budget,
++                limits: limits
++            )
++        }
++
++        func enqueue(_ event: RemoteDaemonPTYEvent, retainedBytes: Int) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.EnqueueResult {
++            delivery.enqueue(event, retainedBytes: retainedBytes)
++        }
++
++        func finish(
++            _ event: RemoteDaemonPTYEvent,
++            retainedBytes: Int,
++            afterDelivery: (@Sendable () -> Void)?
++        ) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.EnqueueResult {
++            delivery.finish(event, retainedBytes: retainedBytes, afterDelivery: afterDelivery)
++        }
++
++        func fail(_ detail: String, afterDelivery: (@Sendable () -> Void)? = nil) {
++            delivery.fail(.error(detail), afterDelivery: afterDelivery)
++        }
++
++        func cancel() { delivery.cancel() }
++        func snapshot() -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.Snapshot { delivery.snapshot() }
+     }
+@@ -247,16 +301,32 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
+     func markTransportOpenLocked() {
+         isClosed = false
+         shouldReportTermination = true
+         stdoutBuffer = Data()
+         stderrBuffer = ""
++        cancelStreamSubscriptionsLocked()
++        cancelPTYSubscriptionsLocked()
+         streamSubscriptions.removeAll(keepingCapacity: false)
+         ptySubscriptions.removeAll(keepingCapacity: false)
+         advertisedCapabilities.removeAll(keepingCapacity: false)
+     }
+ 
++    func cancelStreamSubscriptionsLocked() {
++        for subscription in streamSubscriptions.values {
++            subscription.cancel()
++        }
++    }
++
++    func cancelPTYSubscriptionsLocked() {
++        for subscription in ptySubscriptions.values {
++            subscription.cancel()
++        }
++    }
++
+     func failPTYSubscriptionsLocked(_ detail: String) {
+         let subscriptions = Array(ptySubscriptions.values)
+         ptySubscriptions.removeAll(keepingCapacity: false)
+         for subscription in subscriptions {
+-            subscription.queue.async {
+-                subscription.handler(.error(detail))
+-            }
++            subscription.fail(detail)
+         }
+     }
+@@ -292,6 +362,7 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
+             webSocketTask = nil
+             webSocketSession = nil
+             webSocketDelegate = nil
++            cancelStreamSubscriptionsLocked()
+             streamSubscriptions.removeAll(keepingCapacity: false)
+             failPTYSubscriptionsLocked(detail)
+             return (
+
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift
+@@ -75,9 +75,12 @@ extension RemoteDaemonRPCClient {
+     public func unregisterStream(streamID: String) {
+         let trimmedStreamID = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
+         guard !trimmedStreamID.isEmpty else { return }
+-        _ = stateQueue.sync {
++        let subscription = stateQueue.sync {
+             streamSubscriptions.removeValue(forKey: trimmedStreamID)
+         }
++        subscription?.cancel()
+     }
+@@ -260,9 +263,12 @@ extension RemoteDaemonRPCClient {
+         let key = Self.ptySubscriptionKey(
+             sessionID: sessionID,
+             attachmentID: attachmentID,
+             attachmentToken: attachmentToken
+         )
+-        _ = stateQueue.sync {
++        let subscription = stateQueue.sync {
+             ptySubscriptions.removeValue(forKey: key)
+         }
++        subscription?.cancel()
+     }
+
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
+@@ -137,35 +137,73 @@ extension RemoteDaemonRPCClient {
+-        let subscription: StreamSubscription?
+-        let event: RemoteDaemonStreamEvent?
++        let subscription: StreamSubscription?
++        let event: RemoteDaemonStreamEvent?
++        let retainedBytes: Int
++        let terminal: Bool
+         switch eventName {
+         case "proxy.stream.data":
+             subscription = streamSubscriptions[streamID]
+-            event = .data(Self.decodeBase64Data(payload["data_base64"]))
++            let data = Self.decodeBase64Data(payload["data_base64"])
++            event = .data(data)
++            retainedBytes = data.count
++            terminal = false
+ 
+         case "proxy.stream.eof":
+-            subscription = streamSubscriptions.removeValue(forKey: streamID)
+-            event = .eof(Self.decodeBase64Data(payload["data_base64"]))
++            subscription = streamSubscriptions[streamID]
++            let data = Self.decodeBase64Data(payload["data_base64"])
++            event = .eof(data)
++            retainedBytes = data.count
++            terminal = true
+ 
+         case "proxy.stream.error":
+-            subscription = streamSubscriptions.removeValue(forKey: streamID)
++            subscription = streamSubscriptions[streamID]
+             let detail = ((payload["error"] as? String)?
+                 .trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                 ?? "stream error"
+             event = .error(detail)
++            retainedBytes = 0
++            terminal = true
+ 
+         default:
+             return
+         }
+ 
+         guard let subscription, let event else { return }
+-        subscription.queue.async {
+-            subscription.handler(event)
++        let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
++            guard let self, let subscription else { return }
++            self.stateQueue.async {
++                if self.streamSubscriptions[streamID] === subscription {
++                    self.streamSubscriptions.removeValue(forKey: streamID)
++                }
++            }
++        }
++        let result = terminal
++            ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
++            : subscription.enqueue(event, retainedBytes: retainedBytes)
++        if case .overflow = result {
++            subscription.fail(
++                "proxy stream delivery queue exceeded its bounded capacity",
++                afterDelivery: cleanup
++            )
+         }
+     }
+@@ -260,6 +298,8 @@ extension RemoteDaemonRPCClient {
+-        let subscription: PTYSubscription?
+-        let event: RemoteDaemonPTYEvent?
++        let subscription: PTYSubscription?
++        let event: RemoteDaemonPTYEvent?
++        let retainedBytes: Int
++        let terminal: Bool
+         switch eventName {
+         case "pty.ready":
+             subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+             event = .ready
++            retainedBytes = 0
++            terminal = false
+ 
+         case "pty.data":
+             subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+-            event = .data(Self.decodeBase64Data(payload["data_base64"]))
++            let data = Self.decodeBase64Data(payload["data_base64"])
++            event = .data(data)
++            retainedBytes = data.count
++            terminal = false
+ 
+         case "pty.input_ack":
+             subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+             event = .inputAck(seq: rpcEventUInt64Value(payload["seq"]))
++            retainedBytes = 0
++            terminal = false
+ 
+         case "pty.exit":
+-            subscription = ptySubscriptions.removeValue(forKey: key)
+-                ?? ptySubscriptions.removeValue(forKey: legacyKey)
++            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+             event = .exit
++            retainedBytes = 0
++            terminal = true
+ 
+         case "pty.error":
+-            subscription = ptySubscriptions.removeValue(forKey: key)
+-                ?? ptySubscriptions.removeValue(forKey: legacyKey)
++            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+             let detail = ((payload["error"] as? String) ?? (payload["message"] as? String))?
+                 .trimmingCharacters(in: .whitespacesAndNewlines)
+             event = .error(detail?.isEmpty == false ? detail! : "PTY error")
++            retainedBytes = 0
++            terminal = true
+ 
+         default:
+             return true
+         }
+ 
+         guard let subscription, let event else { return true }
+-        subscription.queue.async {
+-            subscription.handler(event)
++        let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
++            guard let self, let subscription else { return }
++            self.stateQueue.async {
++                if self.ptySubscriptions[key] === subscription {
++                    self.ptySubscriptions.removeValue(forKey: key)
++                }
++                if self.ptySubscriptions[legacyKey] === subscription {
++                    self.ptySubscriptions.removeValue(forKey: legacyKey)
++                }
++            }
++        }
++        let result = terminal
++            ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
++            : subscription.enqueue(event, retainedBytes: retainedBytes)
++        if case .overflow = result {
++            subscription.fail(
++                "PTY delivery queue exceeded its bounded capacity",
++                afterDelivery: cleanup
++            )
+         }
+         return true
+@@ -335,6 +411,7 @@ extension RemoteDaemonRPCClient {
+         stdoutHandle = nil
+         stderrHandle?.readabilityHandler = nil
+         stderrHandle = nil
++        cancelStreamSubscriptionsLocked()
+         streamSubscriptions.removeAll(keepingCapacity: false)
+         failPTYSubscriptionsLocked(detail)
+@@ -357,6 +434,7 @@ extension RemoteDaemonRPCClient {
+         webSocketTask = nil
+         webSocketSession = nil
+         webSocketDelegate = nil
++        cancelStreamSubscriptionsLocked()
+         streamSubscriptions.removeAll(keepingCapacity: false)
+         failPTYSubscriptionsLocked(detail)
