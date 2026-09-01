@@ -1,0 +1,331 @@
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteProxyOutputBudget.swift b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteProxyOutputBudget.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteProxyOutputBudget.swift
+@@ -0,0 +1,113 @@
++import Foundation
++
++struct RemoteProxySessionOutputLimits: Sendable {
++    static let production = RemoteProxySessionOutputLimits(
++        maxPendingBytes: 96 * 1024 * 1024,
++        maxPendingSends: 65_536
++    )
++
++    let maxPendingBytes: Int
++    let maxPendingSends: Int
++}
++
++final class RemoteProxyOutputBudget: @unchecked Sendable {
++    struct Snapshot: Equatable, Sendable {
++        let pendingBytes: Int
++        let pendingSends: Int
++    }
++
++    static let shared = RemoteProxyOutputBudget(
++        maxPendingBytes: 256 * 1024 * 1024,
++        maxPendingSends: 262_144
++    )
++
++    private let lock = NSLock()
++    private let maxPendingBytes: Int
++    private let maxPendingSends: Int
++    private var pendingBytes = 0
++    private var pendingSends = 0
++
++    init(maxPendingBytes: Int, maxPendingSends: Int) {
++        self.maxPendingBytes = max(0, maxPendingBytes)
++        self.maxPendingSends = max(0, maxPendingSends)
++    }
++
++    func reserve(bytes: Int) -> RemoteProxyOutputReservation? {
++        guard bytes >= 0 else { return nil }
++
++        lock.lock()
++        defer { lock.unlock() }
++
++        guard pendingSends < maxPendingSends else { return nil }
++        guard pendingBytes <= maxPendingBytes else { return nil }
++        guard bytes <= maxPendingBytes - pendingBytes else { return nil }
++
++        pendingSends += 1
++        pendingBytes += bytes
++        return RemoteProxyOutputReservation(budget: self, bytes: bytes)
++    }
++
++    func snapshot() -> Snapshot {
++        lock.lock()
++        defer { lock.unlock() }
++        return Snapshot(pendingBytes: pendingBytes, pendingSends: pendingSends)
++    }
++
++    fileprivate func release(bytes: Int) {
++        lock.lock()
++        pendingSends = max(0, pendingSends - 1)
++        pendingBytes = max(0, pendingBytes - bytes)
++        lock.unlock()
++    }
++}
++
++final class RemoteProxyOutputReservation: @unchecked Sendable {
++    private let lock = NSLock()
++    private let bytes: Int
++    private var budget: RemoteProxyOutputBudget?
++
++    fileprivate init(budget: RemoteProxyOutputBudget, bytes: Int) {
++        self.budget = budget
++        self.bytes = bytes
++    }
++
++    func release() {
++        let budget: RemoteProxyOutputBudget?
++        lock.lock()
++        budget = self.budget
++        self.budget = nil
++        lock.unlock()
++        budget?.release(bytes: bytes)
++    }
++
++    deinit {
++        release()
++    }
++}
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Rewriters/RemoteLoopbackHTTPResponseStreamRewriter.swift b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Rewriters/RemoteLoopbackHTTPResponseStreamRewriter.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Rewriters/RemoteLoopbackHTTPResponseStreamRewriter.swift
+@@ -0,0 +1,48 @@
++import Foundation
++
++struct RemoteLoopbackHTTPResponseStreamRewriter: Sendable {
++    static let maxHeaderBytes = 64 * 1024
++    private static let headerDelimiter = Data([0x0d, 0x0a, 0x0d, 0x0a])
++
++    private let aliasHost: String
++    private var pendingHeaderBytes = Data()
++    private var hasForwardedHeaders = false
++
++    init(aliasHost: String) {
++        self.aliasHost = aliasHost
++    }
++
++    mutating func rewriteNextChunk(_ data: Data, eof: Bool) -> Data {
++        guard !hasForwardedHeaders else { return data }
++
++        if !data.isEmpty {
++            pendingHeaderBytes.append(data)
++        }
++
++        let hasHeaderDelimiter = pendingHeaderBytes.range(of: Self.headerDelimiter) != nil
++        if !hasHeaderDelimiter,
++           pendingHeaderBytes.count <= Self.maxHeaderBytes,
++           !eof {
++            return Data()
++        }
++
++        hasForwardedHeaders = true
++        let payload = pendingHeaderBytes
++        pendingHeaderBytes = Data()
++
++        guard hasHeaderDelimiter else {
++            // Oversized or EOF-terminated incomplete response headers pass
++            // through unchanged. The important invariant here is bounded
++            // buffering; once the limit is crossed, later chunks stream.
++            return payload
++        }
++        return RemoteLoopbackHTTPResponseRewriter.rewriteIfNeeded(
++            data: payload,
++            aliasHost: aliasHost
++        )
++    }
++}
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
+--- a/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
++++ b/Packages/macOS/CmuxRemoteWorkspace/Sources/CmuxRemoteWorkspace/Tunnel/RemoteDaemonProxySession.swift
+@@ -48,15 +48,18 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+     private let connection: NWConnection
+     private let rpcClient: any RemoteDaemonTunnelRPCClient
+     private let queue: DispatchQueue
++    private let outputBudget: RemoteProxyOutputBudget
++    private let outputLimits: RemoteProxySessionOutputLimits
+     private let onClose: (UUID) -> Void
+ 
+     private var isClosed = false
+     private var protocolKind: HandshakeProtocol = .undecided
+     private var socksStage: SocksStage = .greeting
+     private var handshakeBuffer = Data()
+     private var streamID: String?
+     private var localInputEOF = false
+     private var rewritesLoopbackHTTPHeaders = false
+     private var loopbackRequestHeaderRewriter: RemoteLoopbackHTTPRequestStreamRewriter?
+-    private var pendingRemoteHTTPHeaderBytes = Data()
+-    private var hasForwardedRemoteHTTPHeaders = false
++    private var loopbackResponseHeaderRewriter: RemoteLoopbackHTTPResponseStreamRewriter?
+     private var fieldworkPendingLocalSendCount = 0
+     private var fieldworkPendingLocalSendBytes = 0
+     private var fieldworkPeakLocalSendCount = 0
+@@ -66,11 +69,15 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+         connection: NWConnection,
+         rpcClient: any RemoteDaemonTunnelRPCClient,
+         queue: DispatchQueue,
++        outputBudget: RemoteProxyOutputBudget = .shared,
++        outputLimits: RemoteProxySessionOutputLimits = .production,
+         onClose: @escaping (UUID) -> Void
+     ) {
+         self.connection = connection
+         self.rpcClient = rpcClient
+         self.queue = queue
++        self.outputBudget = outputBudget
++        self.outputLimits = outputLimits
+         self.onClose = onClose
+     }
+@@ -328,8 +335,9 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+             loopbackRequestHeaderRewriter = rewritesLoopbackHTTPHeaders
+                 ? RemoteLoopbackHTTPRequestStreamRewriter(aliasHost: Self.remoteLoopbackProxyAliasHost)
+                 : nil
+-            pendingRemoteHTTPHeaderBytes = Data()
+-            hasForwardedRemoteHTTPHeaders = false
++            loopbackResponseHeaderRewriter = rewritesLoopbackHTTPHeaders
++                ? RemoteLoopbackHTTPResponseStreamRewriter(aliasHost: Self.remoteLoopbackProxyAliasHost)
++                : nil
+             let targetHost = Self.normalizedProxyTargetHost(host)
+             let streamID = try rpcClient.openStream(host: targetHost, port: port, timeoutMs: 10_000)
+             self.streamID = streamID
+@@ -390,13 +398,26 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+     private func forwardRemotePayloadToLocal(_ data: Data, eof: Bool) {
+         let localData = rewriteRemoteResponseIfNeeded(data, eof: eof)
+         if !localData.isEmpty {
++            let sendBytes = localData.count
++            let localBytesAvailable = max(0, outputLimits.maxPendingBytes - fieldworkPendingLocalSendBytes)
++            guard fieldworkPendingLocalSendCount < outputLimits.maxPendingSends,
++                  sendBytes <= localBytesAvailable else {
++                close(reason: "proxy client output queue exceeded per-session limit")
++                return
++            }
++            guard let reservation = outputBudget.reserve(bytes: sendBytes) else {
++                close(reason: "proxy client output queue exceeded process limit")
++                return
++            }
+             fieldworkPendingLocalSendCount += 1
+-            fieldworkPendingLocalSendBytes += localData.count
++            fieldworkPendingLocalSendBytes += sendBytes
+             fieldworkPeakLocalSendCount = max(fieldworkPeakLocalSendCount, fieldworkPendingLocalSendCount)
+             fieldworkPeakLocalSendBytes = max(fieldworkPeakLocalSendBytes, fieldworkPendingLocalSendBytes)
+-            let sendBytes = localData.count
+-            connection.send(content: localData, completion: .contentProcessed { [weak self] error in
++            connection.send(content: localData, completion: .contentProcessed { [weak self, reservation] error in
++                reservation.release()
+                 guard let self else { return }
+                 self.fieldworkPendingLocalSendCount = max(0, self.fieldworkPendingLocalSendCount - 1)
+                 self.fieldworkPendingLocalSendBytes = max(0, self.fieldworkPendingLocalSendBytes - sendBytes)
+@@ -419,29 +440,13 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
+     }
+ 
+     private func rewriteRemoteResponseIfNeeded(_ data: Data, eof: Bool) -> Data {
+         guard rewritesLoopbackHTTPHeaders else { return data }
+-        guard !data.isEmpty else { return data }
+-        guard !hasForwardedRemoteHTTPHeaders else { return data }
+-
+-        pendingRemoteHTTPHeaderBytes.append(data)
+-        let marker = Data([0x0D, 0x0A, 0x0D, 0x0A])
+-        guard pendingRemoteHTTPHeaderBytes.range(of: marker) != nil else {
+-            guard eof else { return Data() }
+-            hasForwardedRemoteHTTPHeaders = true
+-            let payload = pendingRemoteHTTPHeaderBytes
+-            pendingRemoteHTTPHeaderBytes = Data()
+-            return payload
+-        }
+-
+-        hasForwardedRemoteHTTPHeaders = true
+-        let payload = pendingRemoteHTTPHeaderBytes
+-        pendingRemoteHTTPHeaderBytes = Data()
+-        return RemoteLoopbackHTTPResponseRewriter.rewriteIfNeeded(
+-            data: payload,
+-            aliasHost: Self.remoteLoopbackProxyAliasHost
+-        )
++        guard var rewriter = loopbackResponseHeaderRewriter else { return data }
++        let rewritten = rewriter.rewriteNextChunk(data, eof: eof)
++        loopbackResponseHeaderRewriter = rewriter
++        return rewritten
+     }
+ 
+     private func close(reason: String?) {
+diff --git a/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteWorkspace/Tests/CmuxRemoteWorkspaceTests/RemoteProxyOutputBudgetTests.swift
+@@ -0,0 +1,93 @@
++import Foundation
++import Testing
++@testable import CmuxRemoteWorkspace
++
++@Suite("Remote proxy output budget")
++struct RemoteProxyOutputBudgetTests {
++    @Test("reservations enforce byte and send ceilings and release idempotently")
++    func reservationsAreBoundedAndReleased() throws {
++        let budget = RemoteProxyOutputBudget(maxPendingBytes: 10, maxPendingSends: 2)
++        let first = try #require(budget.reserve(bytes: 4))
++        let second = try #require(budget.reserve(bytes: 6))
++        #expect(budget.snapshot() == .init(pendingBytes: 10, pendingSends: 2))
++        #expect(budget.reserve(bytes: 0) == nil)
++        #expect(budget.reserve(bytes: 1) == nil)
++
++        first.release()
++        first.release()
++        #expect(budget.snapshot() == .init(pendingBytes: 6, pendingSends: 1))
++        let third = try #require(budget.reserve(bytes: 4))
++        #expect(budget.snapshot() == .init(pendingBytes: 10, pendingSends: 2))
++
++        second.release()
++        third.release()
++        #expect(budget.snapshot() == .init(pendingBytes: 0, pendingSends: 0))
++    }
++
++    @Test("reservation deinit returns capacity")
++    func reservationDeinitReturnsCapacity() throws {
++        let budget = RemoteProxyOutputBudget(maxPendingBytes: 8, maxPendingSends: 1)
++        var reservation: RemoteProxyOutputReservation? = try #require(budget.reserve(bytes: 8))
++        #expect(budget.snapshot() == .init(pendingBytes: 8, pendingSends: 1))
++        reservation = nil
++        #expect(budget.snapshot() == .init(pendingBytes: 0, pendingSends: 0))
++    }
++}
++
++@Suite("Remote loopback HTTP response stream rewriter")
++struct RemoteLoopbackHTTPResponseStreamRewriterTests {
++    @Test("buffers a split response header, rewrites once, and streams later bytes")
++    func splitHeaderRewritesOnce() {
++        let alias = RemoteLoopbackProxyAlias.aliasHost
++        var rewriter = RemoteLoopbackHTTPResponseStreamRewriter(aliasHost: alias)
++        let first = Data("HTTP/1.1 302 Found\r\nLocation: http://local".utf8)
++        #expect(rewriter.rewriteNextChunk(first, eof: false).isEmpty)
++        let second = Data("host:3000/next\r\n\r\nBODY".utf8)
++        let flushed = rewriter.rewriteNextChunk(second, eof: false)
++        let text = String(decoding: flushed, as: UTF8.self)
++        #expect(text.contains("Location: http://\(alias):3000/next"))
++        #expect(text.hasSuffix("\r\n\r\nBODY"))
++
++        let later = Data("later".utf8)
++        #expect(rewriter.rewriteNextChunk(later, eof: false) == later)
++    }
++
++    @Test("EOF flushes an incomplete response header even when the EOF chunk is empty")
++    func eofFlushesBufferedIncompleteHeader() {
++        let alias = RemoteLoopbackProxyAlias.aliasHost
++        var rewriter = RemoteLoopbackHTTPResponseStreamRewriter(aliasHost: alias)
++        let partial = Data("HTTP/1.1 200 OK\r\nX-Test: value\r\n".utf8)
++        #expect(rewriter.rewriteNextChunk(partial, eof: false).isEmpty)
++        #expect(rewriter.rewriteNextChunk(Data(), eof: true) == partial)
++    }
++
++    @Test("oversized unterminated response headers stop buffering at the explicit ceiling")
++    func oversizedHeaderStopsBuffering() {
++        let alias = RemoteLoopbackProxyAlias.aliasHost
++        var rewriter = RemoteLoopbackHTTPResponseStreamRewriter(aliasHost: alias)
++        let oversized = Data(
++            ("HTTP/1.1 200 OK\r\nX-Test: " + String(repeating: "x", count: 65 * 1024)).utf8
++        )
++        #expect(rewriter.rewriteNextChunk(oversized, eof: false) == oversized)
++        let later = Data("later".utf8)
++        #expect(rewriter.rewriteNextChunk(later, eof: false) == later)
++    }
++}
