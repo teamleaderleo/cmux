@@ -84,10 +84,16 @@ jobs:
         run: swift --version
       - name: Pin revision
         run: git rev-parse HEAD
-      - name: Run normal remote-daemon package
+      - name: Run PTY preserve-after-timeout discriminator alone
         run: |
           swift test \
-            --package-path Packages/macOS/CmuxRemoteDaemon
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachPreservesHealthyTransportState
+      - name: Run blocked-cancellation discriminator alone
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter timedOutPTYAttachBoundsCancellationWrite
       - name: Run heavy write-admission scaling probe separately
         env:
           CMUX_FIELDWORK_SCALING: "1"
