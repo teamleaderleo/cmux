@@ -19,15 +19,6 @@ diff --git a/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
  }
  
  #[derive(Debug)]
-@@ -56,7 +57,7 @@ fn usage() -> ! {
-     eprintln!(
-         "usage: cargo run -p chatmux-relay --example fieldwork_journal_backlog -- \\
-          [--sessions N] [--records-per-session N] [--payload-bytes N] \\
--         [--mode ack|stall] [--settle-millis N] [--load-millis N]"
-+         [--mode ack|stall|recover] [--settle-millis N] [--load-millis N]"
-     );
-     std::process::exit(2);
- }
 @@ -80,6 +81,7 @@ fn parse_options() -> Options {
                  options.mode = match value().as_str() {
                      "ack" => HttpMode::Ack,
