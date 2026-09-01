@@ -1,0 +1,53 @@
+name: Fieldwork stale proxy red verifier
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cmux-stale-proxy-execution-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-stale-proxy-red-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RED_SHA: f1a91ab9090295f04d6b8fffef7bf6a4cfdd0371
+
+jobs:
+  red:
+    name: Prove stale proxy regression is red
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact test-only commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+
+      - name: Select repository Xcode
+        run: ./scripts/select-ci-xcode.sh
+
+      - name: Record toolchain
+        run: swift --version
+
+      - name: Prove the regression reaches the stale-owner failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteWorkspace \
+            --filter RemoteProxyBrokerStaleGenerationTests.staleFatalCallbackCannotStopSuccessor \
+            2>&1 | tee /tmp/stale-proxy-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected the test-only commit to fail"
+            exit 1
+          fi
+          grep -F "fatal callback from a replaced tunnel cannot stop its successor" /tmp/stale-proxy-red.log
+          grep -F "remote daemon tunnel is not ready" /tmp/stale-proxy-red.log
+          echo "observed expected stale-owner regression failure: $status"
