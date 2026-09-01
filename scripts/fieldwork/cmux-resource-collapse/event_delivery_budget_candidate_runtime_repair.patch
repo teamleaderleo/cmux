@@ -1,0 +1,13 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonEventDeliveryQueue.swift
+@@ -207,8 +207,8 @@ final class RemoteDaemonEventDeliveryQueue<Event: Sendable>: @unchecked Sendabl
+     }
+ 
+     private func scheduleDrainBlock() {
+-        queue.async { [weak self] in
+-            self?.drainBatch()
++        queue.async {
++            self.drainBatch()
+         }
+     }
