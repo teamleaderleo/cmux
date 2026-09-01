@@ -1,0 +1,260 @@
+diff --git a/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift b/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift
+@@ -0,0 +1,267 @@
++import Darwin
++import Foundation
++import Testing
++import CmuxFoundation
++@testable import CmuxRemoteSession
++
++private let fieldworkReachabilityProbeEnabled =
++    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_REACHABILITY_OVERLAP"] == "1"
++
++@Suite(
++    "RemoteHostReachabilityProbe overlap measurement",
++    .serialized,
++    .enabled(if: fieldworkReachabilityProbeEnabled)
++)
++struct RemoteHostReachabilityOverlapProbeTests {
++    @Test("repeated probes for one endpoint keep every ssh-resolution child alive until its own deadline")
++    func repeatedProbeOverlap() throws {
++        let environment = ProcessInfo.processInfo.environment
++        let probes = max(1, Int(environment["CMUX_FIELDWORK_REACHABILITY_PROBES"] ?? "1") ?? 1)
++        let holdMillis = max(250, Int(environment["CMUX_FIELDWORK_REACHABILITY_HOLD_MS"] ?? "2000") ?? 2000)
++        let runner = FieldworkSlowSSHConfigRunner(holdMillis: holdMillis)
++        let probe = RemoteHostReachabilityProbe(commandRunner: runner)
++        let completions = DispatchGroup()
++        let outcomes = FieldworkOutcomeCounter()
++
++        let baseline = fieldworkProcessMetrics()
++        let started = ContinuousClock.now
++        for _ in 0..<probes {
++            completions.enter()
++            probe.probe(
++                destination: "fieldwork.invalid",
++                port: nil,
++                identityFile: nil,
++                sshOptions: []
++            ) { outcome in
++                outcomes.record(outcome)
++                completions.leave()
++            }
++        }
++        let launchMillis = fieldworkMilliseconds(started.duration(to: .now))
++
++        #expect(
++            runner.waitForActive(probes, timeout: 5),
++            "expected all \(probes) detached resolution calls to overlap"
++        )
++        Thread.sleep(forTimeInterval: 0.1)
++        let loaded = fieldworkProcessMetrics()
++        let loadedRunner = runner.snapshot()
++        let loadedSleepChildren = fieldworkLiveSleepChildren()
++
++        #expect(loadedRunner.active == probes)
++        #expect(loadedRunner.peak == probes)
++        #expect(
++            loadedSleepChildren >= probes,
++            "expected at least \(probes) real sleep children, saw \(loadedSleepChildren)"
++        )
++
++        let settled = completions.wait(timeout: .now() + 12) == .success
++        #expect(settled, "reachability probes did not settle after child resolution completed")
++        #expect(runner.waitForActive(0, timeout: 3))
++        Thread.sleep(forTimeInterval: 0.2)
++        let cleanup = fieldworkProcessMetrics()
++        let cleanupRunner = runner.snapshot()
++        let cleanupSleepChildren = fieldworkLiveSleepChildren()
++
++        fieldworkPrintJSON([
++            "probes": probes,
++            "hold_millis": holdMillis,
++            "launch_millis": launchMillis,
++            "baseline_rss_kib": baseline.rssKiB,
++            "loaded_rss_kib": loaded.rssKiB,
++            "cleanup_rss_kib": cleanup.rssKiB,
++            "baseline_fds": baseline.fds,
++            "loaded_fds": loaded.fds,
++            "cleanup_fds": cleanup.fds,
++            "baseline_threads": baseline.threads,
++            "loaded_threads": loaded.threads,
++            "cleanup_threads": cleanup.threads,
++            "runner_active": loadedRunner.active,
++            "runner_peak": loadedRunner.peak,
++            "live_sleep_children": loadedSleepChildren,
++            "cleanup_runner_active": cleanupRunner.active,
++            "cleanup_sleep_children": cleanupSleepChildren,
++            "completion_count": outcomes.count,
++        ])
++
++        #expect(cleanupRunner.active == 0)
++        #expect(cleanupSleepChildren == 0)
++        #expect(outcomes.count == probes)
++    }
++}
++
++private final class FieldworkSlowSSHConfigRunner: @unchecked Sendable, CommandRunning {
++    private let holdMillis: Int
++    private let lock = NSLock()
++    private var active = 0
++    private var peak = 0
++    private var pids: Set<Int32> = []
++
++    init(holdMillis: Int) {
++        self.holdMillis = holdMillis
++    }
++
++    func run(
++        directory: String,
++        executable: String,
++        arguments: [String],
++        timeout: TimeInterval?
++    ) async -> CommandResult {
++        let process = Process()
++        process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
++        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
++        process.arguments = [String(format: "%.3f", Double(holdMillis) / 1000.0)]
++        // Production CommandRunner captures both streams for ssh -G. Keep real
++        // pipes open here so FD growth reflects one child plus capture pipes.
++        let stdout = Pipe()
++        let stderr = Pipe()
++        process.standardOutput = stdout
++        process.standardError = stderr
++        do {
++            try process.run()
++        } catch {
++            return CommandResult(
++                stdout: nil,
++                stderr: nil,
++                exitStatus: nil,
++                timedOut: false,
++                executionError: error.localizedDescription
++            )
++        }
++
++        lock.lock()
++        active += 1
++        peak = max(peak, active)
++        pids.insert(process.processIdentifier)
++        lock.unlock()
++
++        await withCheckedContinuation { continuation in
++            process.terminationHandler = { _ in
++                continuation.resume()
++            }
++        }
++
++        lock.lock()
++        active = max(0, active - 1)
++        pids.remove(process.processIdentifier)
++        lock.unlock()
++        return CommandResult(
++            stdout: "hostname 127.0.0.1\nport 9\n",
++            stderr: "",
++            exitStatus: process.terminationStatus,
++            timedOut: false,
++            executionError: nil
++        )
++    }
++
++    func snapshot() -> (active: Int, peak: Int, pids: [Int32]) {
++        lock.lock()
++        defer { lock.unlock() }
++        return (active, peak, Array(pids))
++    }
++
++    func waitForActive(_ expected: Int, timeout: TimeInterval) -> Bool {
++        fieldworkWaitUntil(timeout: timeout) { self.snapshot().active == expected }
++    }
++}
++
++private final class FieldworkOutcomeCounter: @unchecked Sendable {
++    private let lock = NSLock()
++    private var value = 0
++
++    var count: Int {
++        lock.lock()
++        defer { lock.unlock() }
++        return value
++    }
++
++    func record(_ outcome: RemoteHostProbeOutcome) {
++        _ = outcome
++        lock.lock()
++        value += 1
++        lock.unlock()
++    }
++}
++
++private struct FieldworkProcessMetrics {
++    let rssKiB: Int
++    let fds: Int
++    let threads: Int
++}
++
++private func fieldworkProcessMetrics() -> FieldworkProcessMetrics {
++    var taskInfo = proc_taskinfo()
++    let taskInfoSize = MemoryLayout<proc_taskinfo>.stride
++    let read = proc_pidinfo(
++        getpid(),
++        PROC_PIDTASKINFO,
++        0,
++        &taskInfo,
++        Int32(taskInfoSize)
++    )
++    let rssKiB = read == Int32(taskInfoSize) ? Int(taskInfo.pti_resident_size / 1024) : -1
++    let threads = read == Int32(taskInfoSize) ? Int(taskInfo.pti_threadnum) : -1
++    let fds = (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
++    return FieldworkProcessMetrics(rssKiB: rssKiB, fds: fds, threads: threads)
++}
++
++private func fieldworkLiveSleepChildren() -> Int {
++    let process = Process()
++    let output = Pipe()
++    process.executableURL = URL(fileURLWithPath: "/bin/ps")
++    process.arguments = ["-axo", "pid=,ppid=,comm="]
++    process.standardOutput = output
++    process.standardError = FileHandle.nullDevice
++    do {
++        try process.run()
++        process.waitUntilExit()
++    } catch {
++        return -1
++    }
++    let data = output.fileHandleForReading.readDataToEndOfFile()
++    guard let text = String(data: data, encoding: .utf8) else { return -1 }
++    let parent = Int(getpid())
++    return text.split(separator: "\n").reduce(into: 0) { count, rawLine in
++        let fields = rawLine.split(whereSeparator: { $0 == " " || $0 == "\t" }, maxSplits: 2)
++        guard fields.count == 3,
++              Int(fields[1]) == parent,
++              fields[2].hasSuffix("sleep") else {
++            return
++        }
++        count += 1
++    }
++}
++
++private func fieldworkWaitUntil(timeout: TimeInterval, predicate: () -> Bool) -> Bool {
++    let deadline = Date().addingTimeInterval(timeout)
++    repeat {
++        if predicate() { return true }
++        Thread.sleep(forTimeInterval: 0.01)
++    } while Date() < deadline
++    return predicate()
++}
++
++private func fieldworkMilliseconds(_ duration: Duration) -> Int {
++    let components = duration.components
++    return Int(components.seconds * 1000) + Int(components.attoseconds / 1_000_000_000_000_000)
++}
++
++private func fieldworkPrintJSON(_ object: [String: Any]) {
++    guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
++          let text = String(data: data, encoding: .utf8) else {
++        return
++    }
++    print("FIELDWORK_REACHABILITY_OVERLAP \(text)")
++}
