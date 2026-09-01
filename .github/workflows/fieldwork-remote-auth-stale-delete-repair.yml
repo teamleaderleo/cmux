@@ -1,0 +1,163 @@
+name: Fieldwork remote auth stale-delete repair
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/remote-auth-repair-verifier-base
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-remote-auth-stale-delete-repair-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 594eb0461e0ae4d57a99180e19097cea5e5091e0
+  PRIOR_RED_SHA: 15210b38244e289ad750fe65ee07fc51f8854a56
+  TARGET_BRANCH: fieldwork/cmux-remote-auth-stale-delete-repair
+
+jobs:
+  verify:
+    name: Prove and publish remote auth stale-delete repair
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Materialize exact current-main RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$BASE_SHA"
+          git config user.name "Fieldwork verifier"
+          git config user.email "fieldwork-verifier@users.noreply.github.com"
+          test_path=daemon/remote/cmd/cmuxd-remote/ws_lease_generation_test.go
+          git show "$PRIOR_RED_SHA:$test_path" > "$test_path"
+          git add "$test_path"
+          git commit -m "test(remote): reproduce stale lease generation deletion"
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          test "$(git diff --name-only "$BASE_SHA" HEAD)" = "$test_path"
+          git diff --check "$BASE_SHA" HEAD
+
+      - name: Prove current source is RED at replacement deletion
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/cmuxd-remote -run '^TestLeaseInstallAfterSingleUseConsumptionSurvives$' -count=1
+          set +e
+          go test ./cmd/cmuxd-remote -run '^TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration$' -count=1 2>&1 | tee /tmp/remote-auth-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected current source to fail the stale-generation regression"
+            exit 1
+          fi
+          grep -F "single-use cleanup for lease A deleted replacement lease B" /tmp/remote-auth-red.log
+
+      - name: Apply serialized atomic lease publication repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('daemon/remote/cmd/cmuxd-remote/ws_pty.go')
+          text = path.read_text()
+          old = '''func writeLeaseFile(path string, lease *wsLease) error {
+          \tif strings.TrimSpace(path) == "" {
+          \t\treturn errors.New("lease path is empty")
+          \t}
+          \treturn writeJSONFile(path, lease)
+          }
+          '''
+          new = '''func writeLeaseFile(path string, lease *wsLease) error {
+          \tif strings.TrimSpace(path) == "" {
+          \t\treturn errors.New("lease path is empty")
+          \t}
+          \twsLeaseMu.Lock()
+          \tdefer wsLeaseMu.Unlock()
+          \treturn writeLeaseFileAtomic(path, lease)
+          }
+          
+          func writeLeaseFileAtomic(path string, lease *wsLease) error {
+          \tdir := filepath.Dir(path)
+          \tif err := os.MkdirAll(dir, 0o700); err != nil {
+          \t\treturn err
+          \t}
+          \tdata, err := json.Marshal(lease)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tdata = append(data, '\\n')
+          
+          \ttmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \ttmpPath := tmp.Name()
+          \tdefer func() {
+          \t\t_ = tmp.Close()
+          \t\t_ = os.Remove(tmpPath)
+          \t}()
+          \tif err := tmp.Chmod(0o600); err != nil {
+          \t\treturn err
+          \t}
+          \tif _, err := tmp.Write(data); err != nil {
+          \t\treturn err
+          \t}
+          \tif err := tmp.Sync(); err != nil {
+          \t\treturn err
+          \t}
+          \tif err := tmp.Close(); err != nil {
+          \t\treturn err
+          \t}
+          \treturn os.Rename(tmpPath, path)
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'writeLeaseFile source fence failed: {text.count(old)} matches')
+          path.write_text(text.replace(old, new))
+          PY
+          gofmt -w daemon/remote/cmd/cmuxd-remote/ws_pty.go
+          git add daemon/remote/cmd/cmuxd-remote/ws_pty.go
+          git commit -m "fix(remote): serialize websocket lease generations"
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+
+      - name: Prove repaired generation repeatedly
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./cmd/cmuxd-remote \
+            -run '^(TestSingleUseLeaseConsumptionDoesNotDeleteReplacementGeneration|TestLeaseInstallAfterSingleUseConsumptionSurvives)$' \
+            -count=25
+
+      - name: Run full remote daemon suite
+        working-directory: daemon/remote
+        run: go test ./...
+
+      - name: Cross-build remote daemon
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in "darwin arm64" "darwin amd64" "linux arm64" "linux amd64"; do
+            read -r goos goarch <<<"$target"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -o "/tmp/cmuxd-remote-${goos}-${goarch}" ./cmd/cmuxd-remote
+          done
+
+      - name: Publish clean candidate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$RED_SHA"
+          test "$(git rev-parse "$RED_SHA^")" = "$BASE_SHA"
+          git push --force origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "FIELDWORK_BASE=$BASE_SHA"
+          echo "FIELDWORK_RED=$RED_SHA"
+          echo "FIELDWORK_GREEN=$GREEN_SHA"
