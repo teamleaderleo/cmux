@@ -14,14 +14,14 @@ concurrency:
 
 env:
   BASE_SHA: 6044a8b3f43152d2e6fc17f771fd4b277b393118
-  RED_SHA: 441fb2036d3248a4013da7c638d53984760f779a
-  GREEN_SHA: 8678eb4f1b3f6021d04d68276ff00e1955abcac9
+  RED_SHA: 3fcfdc334a2459ea353dc6316d5325be48a20e40
+  GREEN_SHA: 2df7cd900dd038bdd18b4c7c35dcd809878f1344
 
 jobs:
   verify:
-    name: Prove cloud CLI socket red-green
+    name: Prove hardened cloud CLI socket red-green
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout exact green candidate
         uses: actions/checkout@v4
@@ -42,32 +42,59 @@ jobs:
         working-directory: daemon/remote
         run: go version
 
-      - name: Prove regression commit is red at stale socket ownership
+      - name: Prove regression commit is red at every ownership boundary
         working-directory: daemon/remote
         shell: bash
         run: |
           set -euo pipefail
           git checkout --detach "$RED_SHA"
-          set +e
-          go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1 2>&1 | tee /tmp/cloud-cli-red.log
-          status=${PIPESTATUS[0]}
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "expected the test-only commit to fail"
-            exit 1
-          fi
-          grep -F "second bridge took over the socket while the first owner was still alive" /tmp/cloud-cli-red.log
-          echo "observed expected red test exit: $status"
+          tests=(
+            TestCloudCLIBridgeRejectsOverlappingSocketOwner
+            TestCloudCLIBridgeRejectsSymlinkedSocketLock
+            TestCloudCLIBridgeRejectsFIFOSocketLockWithoutBlocking
+            TestCloudCLIBridgeRejectsHardLinkedSocketLockWithoutChmod
+            TestCloudCLIBridgeMigratesOwnedSocketLockToPrivateMode
+          )
+          markers=(
+            "second bridge took over the socket while the first owner was still alive"
+            "symlinked cloud CLI socket lock was accepted"
+            "FIFO cloud CLI socket lock was accepted"
+            "hard-linked cloud CLI socket lock was accepted"
+            "owned lock mode = 644, want 600"
+          )
+          for index in "${!tests[@]}"; do
+            log="/tmp/cloud-cli-red-${index}.log"
+            set +e
+            go test ./cmd/cmuxd-remote -run "^${tests[$index]}$" -count=1 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "expected ${tests[$index]} to fail on the test-only commit"
+              exit 1
+            fi
+            grep -F "${markers[$index]}" "$log"
+          done
 
-      - name: Prove fix commit is green repeatedly
+      - name: Prove hardened fix is green repeatedly
         working-directory: daemon/remote
         shell: bash
         run: |
           set -euo pipefail
           git checkout --detach "$GREEN_SHA"
-          for iteration in $(seq 1 25); do
-            go test ./cmd/cmuxd-remote -run '^TestCloudCLIBridgeRejectsOverlappingSocketOwner$' -count=1
+          go test ./cmd/cmuxd-remote \
+            -run '^TestCloudCLIBridge(RejectsOverlappingSocketOwner|RejectsSymlinkedSocketLock|RejectsFIFOSocketLockWithoutBlocking|RejectsHardLinkedSocketLockWithoutChmod|MigratesOwnedSocketLockToPrivateMode)$' \
+            -count=25
+
+      - name: Cross-compile daemon and Darwin test target
+        working-directory: daemon/remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in "darwin arm64" "darwin amd64" "linux arm64" "linux amd64"; do
+            read -r goos goarch <<<"$target"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -o "/tmp/cmuxd-remote-${goos}-${goarch}" ./cmd/cmuxd-remote
           done
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c ./cmd/cmuxd-remote -o /tmp/cmuxd-remote-darwin-arm64.test
 
       - name: Run full remote daemon package tests
         working-directory: daemon/remote
