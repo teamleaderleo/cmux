@@ -1,0 +1,135 @@
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+Events.swift
+@@ -143,18 +143,24 @@ extension RemoteDaemonRPCClient {
+         let retainedBytes: Int
+         let terminal: Bool
+         switch eventName {
+         case "proxy.stream.data":
+-            subscription = streamSubscriptions[streamID]
++            guard let current = streamSubscriptions[streamID] else { return }
++            subscription = current
+             let data = Self.decodeBase64Data(payload["data_base64"])
+             event = .data(data)
+             retainedBytes = data.count
+             terminal = false
+ 
+         case "proxy.stream.eof":
+-            subscription = streamSubscriptions[streamID]
++            guard let current = streamSubscriptions[streamID] else { return }
++            subscription = current
+             let data = Self.decodeBase64Data(payload["data_base64"])
+             event = .eof(data)
+             retainedBytes = data.count
+             terminal = true
+ 
+         case "proxy.stream.error":
+-            subscription = streamSubscriptions[streamID]
++            guard let current = streamSubscriptions[streamID] else { return }
++            subscription = current
+             let detail = ((payload["error"] as? String)?
+                 .trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                 ?? "stream error"
+@@ -166,6 +172,11 @@ extension RemoteDaemonRPCClient {
+         }
+ 
+         guard let subscription, let event else { return }
++        if terminal, streamSubscriptions[streamID] === subscription {
++            streamSubscriptions.removeValue(forKey: streamID)
++        }
+         let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
+             guard let self, let subscription else { return }
+             self.stateQueue.async {
+@@ -180,6 +191,9 @@ extension RemoteDaemonRPCClient {
+             ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
+             : subscription.enqueue(event, retainedBytes: retainedBytes)
+         if case .overflow = result {
++            if streamSubscriptions[streamID] === subscription {
++                streamSubscriptions.removeValue(forKey: streamID)
++            }
+             subscription.fail(
+                 "proxy stream delivery queue exceeded its bounded capacity",
+                 afterDelivery: cleanup
+@@ -305,18 +319,24 @@ extension RemoteDaemonRPCClient {
+         let retainedBytes: Int
+         let terminal: Bool
+         switch eventName {
+         case "pty.ready":
+-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
++            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
++            subscription = current
+             event = .ready
+             retainedBytes = 0
+             terminal = false
+ 
+         case "pty.data":
+-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
++            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
++            subscription = current
+             let data = Self.decodeBase64Data(payload["data_base64"])
+             event = .data(data)
+             retainedBytes = data.count
+             terminal = false
+ 
+         case "pty.input_ack":
+-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
++            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
++            subscription = current
+             event = .inputAck(seq: rpcEventUInt64Value(payload["seq"]))
+             retainedBytes = 0
+             terminal = false
+ 
+         case "pty.exit":
+-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
++            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
++            subscription = current
+             event = .exit
+             retainedBytes = 0
+             terminal = true
+ 
+         case "pty.error":
+-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
++            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
++            subscription = current
+             let detail = ((payload["error"] as? String) ?? (payload["message"] as? String))?
+                 .trimmingCharacters(in: .whitespacesAndNewlines)
+             event = .error(detail?.isEmpty == false ? detail! : "PTY error")
+@@ -328,6 +348,14 @@ extension RemoteDaemonRPCClient {
+         }
+ 
+         guard let subscription, let event else { return true }
++        if terminal {
++            if ptySubscriptions[key] === subscription {
++                ptySubscriptions.removeValue(forKey: key)
++            }
++            if ptySubscriptions[legacyKey] === subscription {
++                ptySubscriptions.removeValue(forKey: legacyKey)
++            }
++        }
+         let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
+             guard let self, let subscription else { return }
+             self.stateQueue.async {
+@@ -346,6 +374,12 @@ extension RemoteDaemonRPCClient {
+             ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
+             : subscription.enqueue(event, retainedBytes: retainedBytes)
+         if case .overflow = result {
++            if ptySubscriptions[key] === subscription {
++                ptySubscriptions.removeValue(forKey: key)
++            }
++            if ptySubscriptions[legacyKey] === subscription {
++                ptySubscriptions.removeValue(forKey: legacyKey)
++            }
+             subscription.fail(
+                 "PTY delivery queue exceeded its bounded capacity",
+                 afterDelivery: cleanup
+diff --git a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+--- a/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
++++ b/Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonEventDeliveryQueueTests.swift
+@@ -124,6 +124,7 @@ struct RemoteDaemonEventDeliveryQueueTests {
+                 "data_base64": payload,
+             ])
+         }
++        #expect(client.stateQueue.sync { client.streamSubscriptions[streamID] == nil })
+         deliveryGate.signal()
+         #expect(terminal.wait(timeout: .now() + 2) == .success)
+         #expect(budget.snapshot() == .init(pendingBytes: 0, pendingEvents: 0))
