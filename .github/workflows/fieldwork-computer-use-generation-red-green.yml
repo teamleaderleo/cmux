@@ -1,0 +1,74 @@
+name: Fieldwork Computer Use generation red-green verifier
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cmux-computer-use-generation-execution-base
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fieldwork-computer-use-generation-red-green-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: 6044a8b3f43152d2e6fc17f771fd4b277b393118
+  RED_SHA: d13e9a7cb3a3712f9f7a7f507c13d3a312c41d20
+  GREEN_SHA: fbc7742dc04a5e7d14172a48aa43066296d24ac6
+  TEST_ID: cmuxTests/ComputerUseCrossGenerationIdentityTests/delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession
+
+jobs:
+  verify:
+    name: Prove Computer Use generation fence red-green
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact green candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.GREEN_SHA }}
+          fetch-depth: 0
+
+      - name: Verify candidate ancestry and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$RED_SHA^")" = "$BASE_SHA"
+          test "$(git rev-parse "$GREEN_SHA^")" = "$RED_SHA"
+          test "$(git diff --name-only "$BASE_SHA" "$RED_SHA")" = "cmuxTests/HostSettingsShortcutNotificationTests.swift"
+          expected=$'Sources/App/ComputerUseLiveSessionProjection.swift\ncmuxTests/HostSettingsShortcutNotificationTests.swift'
+          test "$(git diff --name-only "$BASE_SHA" "$GREEN_SHA")" = "$expected"
+          git diff --check "$BASE_SHA" "$GREEN_SHA"
+
+      - name: Select repository Xcode
+        run: ./scripts/select-ci-xcode.sh
+
+      - name: Prove regression commit is red
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$RED_SHA"
+          set +e
+          ./scripts/test-unit.sh test -only-testing:"$TEST_ID" 2>&1 | tee /tmp/computer-use-generation-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected the test-only commit to fail"
+            exit 1
+          fi
+          grep -F "delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession" /tmp/computer-use-generation-red.log
+          echo "observed expected red test exit: $status"
+
+      - name: Prove repair commit is green
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$GREEN_SHA"
+          ./scripts/test-unit.sh test -only-testing:"$TEST_ID"
+
+      - name: Run adjacent current-generation control
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseUXTests/computerUseHookResolutionAcceptsTheCurrentProcessGenerationWhenAgentIDsDiffer
