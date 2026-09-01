@@ -20,6 +20,7 @@ import {
   type CmuxRemoteAttachOptions,
   type CmuxRemoteEndpoint,
 } from "./drivers";
+import { withCmuxTuiMaterializationEnv } from "./drivers/cmuxTuiMaterialization";
 import { VmOperationUnsupportedError, VmProviderOperationError } from "./errors";
 
 export type VmProviderGatewayShape = {
@@ -106,7 +107,9 @@ function providerEffect<A>(
 
 export const VmProviderGatewayLive = Layer.succeed(VmProviderGateway, {
   create: (provider, options) =>
-    providerEffect(provider, "create", () => getProvider(provider).create(options)),
+    providerEffect(provider, "create", () =>
+      getProvider(provider).create(withCmuxTuiMaterializationEnv(provider, options))
+    ),
   destroy: (provider, vmId) =>
     providerEffect(provider, "destroy", () => getProvider(provider).destroy(vmId)),
   deleteHomeVolume: (provider, volumeName) =>
