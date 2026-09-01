@@ -194,6 +194,8 @@ fn materialize_under_lock(args: &Args) -> anyhow::Result<()> {
         .context("pending materialization marker has an invalid machine id")?;
     let enrollment_policy = parse_policy(&marker.enrollment_policy)?;
 
+    // Auth state first: its owner lease is held for the daemon lifetime, so a
+    // running daemon makes this fail closed before the root machine id changes.
     install_materialized_daemon_identity(&args.remote_state_dir, &identity, enrollment_policy)?;
     install_materialized_machine_id(&args.workspace_state_root, &machine_id)?;
 
