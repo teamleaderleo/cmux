@@ -276,7 +276,51 @@ extension RemoteDaemonRPCClient {
         }
     }
 
+    /// Runs one physical daemon write under the caller's absolute RPC deadline.
+    ///
+    /// `writeQueue.async` lets the synchronous caller own a deadline even while
+    /// an earlier writer holds the serial queue. A timeout returns without
+    /// waiting for that writer; the caller then stops the transport, which
+    /// closes the physical handle and releases every queued write. The send
+    /// error box remains alive in the queued closure after a timeout, so a late
+    /// write completion cannot touch caller stack state.
+    private func writePayload(
+        _ payload: Data,
+        before deadline: DispatchTime
+    ) throws -> Bool {
+        let completion = DispatchSemaphore(value: 0)
+        let sendErrorBox = RemoteDaemonSendErrorBox()
+        writeQueue.async { [self] in
+            defer { completion.signal() }
+            do {
+                try writePayload(payload)
+            } catch {
+                sendErrorBox.error = error
+            }
+        }
+        guard completion.wait(timeout: deadline) == .success else {
+            return false
+        }
+        if let error = sendErrorBox.error {
+            throw error
+        }
+        return true
+    }
+
+    private static func remainingTimeout(until deadline: DispatchTime) -> TimeInterval {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard deadline.uptimeNanoseconds > now else { return 0 }
+        return Double(deadline.uptimeNanoseconds - now) / 1_000_000_000
+    }
+
+    private static func timeoutError(method: String) -> NSError {
+        NSError(domain: "cmux.remote.daemon.rpc", code: 11, userInfo: [
+            NSLocalizedDescriptionKey: "daemon RPC timeout waiting for \(method) response",
+        ])
+    }
+
     func call(method: String, params: [String: Any], timeout: TimeInterval) throws -> [String: Any] {
+        let deadline = DispatchTime.now() + max(0, timeout)
         let pendingCall = pendingCalls.register()
         let payload: Data
         do {
@@ -286,20 +330,28 @@ extension RemoteDaemonRPCClient {
             throw error
         }
 
+        let writeCompleted: Bool
         do {
-            try writeQueue.sync {
-                try writePayload(payload)
-            }
+            writeCompleted = try writePayload(payload, before: deadline)
         } catch {
             pendingCalls.remove(pendingCall)
             throw error
+        }
+        guard writeCompleted else {
+            // This request is either still queued or physically blocked. It is
+            // unsafe to preserve a transport whose single write lane cannot
+            // honor an RPC deadline: remove this unanswered call first so the
+            // stop path cannot signal a semaphore the caller will never wait.
+            pendingCalls.remove(pendingCall)
+            stop(suppressTerminationCallback: false)
+            throw Self.timeoutError(method: method)
         }
 
         return try waitForCall(
             pendingCall,
             method: method,
             params: params,
-            timeout: timeout
+            timeout: Self.remainingTimeout(until: deadline)
         )
     }
 
@@ -358,9 +410,7 @@ extension RemoteDaemonRPCClient {
             } else {
                 stop(suppressTerminationCallback: false)
             }
-            throw NSError(domain: "cmux.remote.daemon.rpc", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "daemon RPC timeout waiting for \(method) response",
-            ])
+            throw Self.timeoutError(method: method)
         case .failure(let failure):
             throw NSError(domain: "cmux.remote.daemon.rpc", code: 12, userInfo: [
                 NSLocalizedDescriptionKey: failure,
