@@ -1,0 +1,187 @@
+name: Fieldwork terminal input ACK review repair v2
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-review-repair-v2-run]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          submodules: false
+
+      - name: Preserve repair recipe and reset reviewed candidate
+        run: |
+          cp .github/workflows/fieldwork-terminal-input-owner-ack-review-repair.yml /tmp/repair.yml
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/repair.yml').read_text()
+          block = text.split('      - name: Apply repair\n        run: |\n', 1)[1]
+          block = block.split('\n      - name: Require scoped product delta', 1)[0]
+          lines = []
+          for line in block.splitlines():
+              if line:
+                  if not line.startswith('          '):
+                      raise SystemExit(f'unexpected repair indentation: {line!r}')
+                  line = line[10:]
+              lines.append(line)
+          Path('/tmp/apply-repair.sh').write_text('\n'.join(lines) + '\n')
+          PY
+          git config user.name Fieldwork
+          git config user.email fieldwork@users.noreply.github.com
+          git checkout --detach a7fba4766f359963a375b67c6c62818240f53dda
+
+      - name: Init build dependencies
+        run: |
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize reviewed candidate full core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/before.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          failures=set(); active=False
+          for line in Path('/tmp/before.log').read_text(errors='replace').splitlines():
+              if line.strip() == 'failures:': active=True; continue
+              if active and line.startswith('test result:'): break
+              if active and re.match(r'^    [A-Za-z0-9_].*::', line): failures.add(line.strip())
+          Path('/tmp/before-failures.txt').write_text(''.join(f'{x}\n' for x in sorted(failures)))
+          PY
+          echo "before status=$status"
+          cat /tmp/before-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/before.log
+            test -s /tmp/before-failures.txt
+          fi
+
+      - name: Apply review repair v2
+        run: |
+          bash /tmp/apply-repair.sh
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def r(path, old, new):
+              p=Path(path); text=p.read_text(); count=text.count(old)
+              if count != 1: raise SystemExit(f'{path}: expected one match, found {count}')
+              p.write_text(text.replace(old,new,1))
+
+          registry='cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs'
+          r(registry,
+            '''// Version 15 quarantines terminal-input successes recorded before PTY-owner acknowledgements.\nconst SCHEMA_VERSION: i64 = 15;\nconst INPUT_ACK_RECEIPT_SCHEMA_VERSION: i64 = 15;''',
+            '''// Version 15 quarantines terminal-input successes recorded before PTY-owner acknowledgements.\nconst SCHEMA_VERSION: i64 = 15;\nconst INPUT_ACK_RECEIPT_MIGRATION_META_KEY: &str = "terminal_input_ack_receipts_v1";''')
+          r(registry,
+            '''use session_journal::{\n    ResourceEffectJournalState, append_resource_effect_journal_record,\n    append_resource_journal_record, create_session_journal_schema,''',
+            '''use session_journal::{\n    ResourceEffectJournalState, append_resource_effect_journal_correction,\n    append_resource_effect_journal_record, append_resource_journal_record,\n    create_session_journal_schema,''')
+          r(registry,
+            '''        if stored_schema.is_some_and(|schema| schema < INPUT_ACK_RECEIPT_SCHEMA_VERSION) {\n            let tx = connection.unchecked_transaction()?;\n            quarantine_pre_input_ack_terminal_successes(&tx)?;\n            tx.commit()?;\n        }''',
+            '''        if meta_value(&connection, INPUT_ACK_RECEIPT_MIGRATION_META_KEY)?.is_none() {\n            let tx = connection.unchecked_transaction()?;\n            quarantine_pre_input_ack_terminal_successes(&tx)?;\n            tx.execute(\n                "INSERT INTO meta(key, value) VALUES(?1, '1')\n                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",\n                [INPUT_ACK_RECEIPT_MIGRATION_META_KEY],\n            )?;\n            tx.commit()?;\n        }''')
+
+          journal='cmux-tui/crates/cmux-tui-core/src/workspace_registry/session_journal.rs'
+          r(journal,
+            '''pub(super) fn append_resource_effect_journal_record(\n    transaction: &Transaction<'_>,\n    idempotency_key: &str,\n    operation: &str,\n    intent: &Value,\n    outcome: Option<&Value>,\n    state: ResourceEffectJournalState,\n) -> anyhow::Result<()> {\n    validate_identifier("journal operation", operation)?;''',
+            '''pub(super) fn append_resource_effect_journal_record(\n    transaction: &Transaction<'_>,\n    idempotency_key: &str,\n    operation: &str,\n    intent: &Value,\n    outcome: Option<&Value>,\n    state: ResourceEffectJournalState,\n) -> anyhow::Result<()> {\n    append_resource_effect_journal_record_inner(\n        transaction, idempotency_key, operation, intent, outcome, state, None,\n    )\n}\n\npub(super) fn append_resource_effect_journal_correction(\n    transaction: &Transaction<'_>,\n    idempotency_key: &str,\n    operation: &str,\n    intent: &Value,\n    outcome: Option<&Value>,\n    state: ResourceEffectJournalState,\n    correction: &str,\n) -> anyhow::Result<()> {\n    validate_identifier("journal effect correction", correction)?;\n    append_resource_effect_journal_record_inner(\n        transaction, idempotency_key, operation, intent, outcome, state, Some(correction),\n    )\n}\n\nfn append_resource_effect_journal_record_inner(\n    transaction: &Transaction<'_>,\n    idempotency_key: &str,\n    operation: &str,\n    intent: &Value,\n    outcome: Option<&Value>,\n    state: ResourceEffectJournalState,\n    correction: Option<&str>,\n) -> anyhow::Result<()> {\n    validate_identifier("journal operation", operation)?;''')
+          r(journal,
+            '''    let mut event_digest = Sha256::new();\n    event_digest.update(b"cmux.resource-effect.v1\\0");\n    event_digest.update(session_id.as_bytes());\n    event_digest.update(b"\\0");\n    event_digest.update(idempotency_key.as_bytes());\n    let event_id = format!("event_effect_{}", encode_bytes_hex(&event_digest.finalize()));''',
+            '''    let (event_domain, event_prefix): (&[u8], &str) = if correction.is_some() {\n        (b"cmux.resource-effect-correction.v1\\0", "event_effect_correction_")\n    } else {\n        (b"cmux.resource-effect.v1\\0", "event_effect_")\n    };\n    let mut event_digest = Sha256::new();\n    event_digest.update(event_domain);\n    event_digest.update(session_id.as_bytes());\n    event_digest.update(b"\\0");\n    event_digest.update(idempotency_key.as_bytes());\n    let event_id = format!("{event_prefix}{}", encode_bytes_hex(&event_digest.finalize()));''')
+          r(journal,
+            '''    let payload = serde_json::json!({\n        "format":"cmux.resource-effect.v1",\n        "operation":operation,\n        "idempotency_key":idempotency_key,\n        "correlation_key":creation.as_ref().map(|(correlation_key, _)| correlation_key),\n        "attempt":attempt.map(|attempt| attempt.to_string()),\n        "state":state_name,\n        "intent":intent,\n        "outcome":outcome,\n    });\n    append_journal_record(''',
+            '''    let mut payload = serde_json::json!({\n        "format":"cmux.resource-effect.v1",\n        "operation":operation,\n        "idempotency_key":idempotency_key,\n        "correlation_key":creation.as_ref().map(|(correlation_key, _)| correlation_key),\n        "attempt":attempt.map(|attempt| attempt.to_string()),\n        "state":state_name,\n        "intent":intent,\n        "outcome":outcome,\n    });\n    if let Some(correction) = correction {\n        payload["correction"] = serde_json::json!(correction);\n    }\n    append_journal_record(''')
+
+          effects='cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs'
+          r(effects,
+            '''        append_resource_effect_journal_record(\n            transaction,\n            &idempotency_key,\n            &operation,\n            &serde_json::from_str(&intent_json)?,\n            None,\n            ResourceEffectJournalState::Indeterminate,\n        )?;''',
+            '''        append_resource_effect_journal_correction(\n            transaction,\n            &idempotency_key,\n            &operation,\n            &serde_json::from_str(&intent_json)?,\n            None,\n            ResourceEffectJournalState::Indeterminate,\n            "pre_input_ack_success_quarantine",\n        )?;''')
+          PY
+          cd cmux-tui
+          cargo fmt --all
+          cd ..
+          git diff --check
+
+      - name: Require scoped product delta
+        run: |
+          git diff --name-only a7fba4766f359963a375b67c6c62818240f53dda | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/session_journal.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Run focused regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib hosted_input_ack_is_a_targeted_control_response --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib legacy_record_is_adoptable_shape_but_never_unsafely_reaped --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Check specs and bindings
+        run: |
+          python3 cmux-tui/scripts/test_check_spec_inventory.py
+          python3 cmux-tui/scripts/check-spec-inventory.py
+          python3 cmux-tui/scripts/test_check_resource_api_boundary.py
+          python3 cmux-tui/scripts/check-resource-api-boundary.py
+          python3 cmux-tui/bindings/codegen/generate.py --check
+
+      - name: Require no new full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/after.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          failures=set(); active=False
+          for line in Path('/tmp/after.log').read_text(errors='replace').splitlines():
+              if line.strip() == 'failures:': active=True; continue
+              if active and line.startswith('test result:'): break
+              if active and re.match(r'^    [A-Za-z0-9_].*::', line): failures.add(line.strip())
+          Path('/tmp/after-failures.txt').write_text(''.join(f'{x}\n' for x in sorted(failures)))
+          PY
+          echo "after status=$status"
+          cat /tmp/after-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/after.log
+            test -s /tmp/after-failures.txt
+          fi
+          comm -13 /tmp/before-failures.txt /tmp/after-failures.txt > /tmp/new-failures.txt
+          test ! -s /tmp/new-failures.txt || { cat /tmp/new-failures.txt >&2; exit 1; }
+
+      - name: Publish repaired candidate
+        run: |
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs \
+                  cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry/session_journal.rs
+          git diff --cached --check
+          git commit -m "fix(cmux-tui): complete terminal input owner ack repair"
+          repaired=$(git rev-parse HEAD)
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-review-repair-candidate --force
+          echo "repaired=$repaired"
