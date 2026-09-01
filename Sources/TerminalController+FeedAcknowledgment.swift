@@ -13,6 +13,7 @@ extension TerminalController {
                 data: nil
             )
         }
+        let ingressProcessGenerations = events.map(\.feedIngressProcessGenerationEvent)
         // Return an unavailable response before the Pi CLI's four-second socket deadline.
         let deliveryTimeout: TimeInterval = 3
         let deliveryDeadline: ContinuousClock.Instant = .now + .seconds(deliveryTimeout)
@@ -57,7 +58,16 @@ extension TerminalController {
 
             if let ingestion,
                case .accepted(let authoritativeEvents, let authoritativeItemIds) = ingestion {
-                for (event, itemId) in zip(authoritativeEvents, authoritativeItemIds) {
+                for ((event, itemId), ingressProcessGeneration) in zip(
+                    zip(authoritativeEvents, authoritativeItemIds),
+                    ingressProcessGenerations
+                ) {
+                    if let ingressProcessGeneration {
+                        NotificationCenter.default.post(
+                            name: .workstreamEventReceived,
+                            object: ingressProcessGeneration.replacingEvent(event)
+                        )
+                    }
                     CmuxEventBus.shared.publishWorkstreamEvent(event, phase: "received")
                     let result = FeedCoordinator.IngestBlockingResult.acknowledged(itemId: itemId)
                     CmuxEventBus.shared.publishWorkstreamEvent(
@@ -133,6 +143,7 @@ extension TerminalController {
         _ event: WorkstreamEvent,
         waitTimeout: TimeInterval
     ) -> V2CallResult {
+        let ingressProcessGeneration = event.feedIngressProcessGenerationEvent
         let waitsForDecision = waitTimeout > 0 && event.requestId != nil
         let outcome = FeedCoordinator.shared.ingestBlockingWithOutcome(
             event: event,
@@ -143,6 +154,12 @@ extension TerminalController {
             onAccepted: { authoritativeEvent in
                 self.v2MainSync {
                     self.agentChatTranscriptService?.noteHookEvent(authoritativeEvent)
+                }
+                if let ingressProcessGeneration {
+                    NotificationCenter.default.post(
+                        name: .workstreamEventReceived,
+                        object: ingressProcessGeneration.replacingEvent(authoritativeEvent)
+                    )
                 }
                 CmuxEventBus.shared.publishWorkstreamEvent(authoritativeEvent, phase: "received")
                 if !waitsForDecision {
