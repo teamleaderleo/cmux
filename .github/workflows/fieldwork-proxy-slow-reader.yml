@@ -53,6 +53,33 @@ jobs:
                 --filter RemoteDaemonProxySessionSlowReaderProbeTests \
               2>&1 | tee -a proxy-slow-reader-results/drain.log
           done
+      - name: Active-reader offered-volume discriminator
+        env:
+          CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
+          CMUX_FIELDWORK_PROXY_DRAIN: "1"
+        run: |
+          for mib in 1 4 16 64; do
+            bytes=$((mib * 1024 * 1024))
+            echo "=== active-volume sessions=1 mib=${mib} ===" | tee -a proxy-slow-reader-results/active-volume.log
+            CMUX_FIELDWORK_PROXY_SESSIONS="1" \
+              CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION="${bytes}" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteWorkspace \
+                --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+              2>&1 | tee -a proxy-slow-reader-results/active-volume.log
+          done
+          for mib in 4 16; do
+            bytes=$((mib * 1024 * 1024))
+            echo "=== active-volume sessions=10 mib=${mib} ===" | tee -a proxy-slow-reader-results/active-volume.log
+            CMUX_FIELDWORK_PROXY_SESSIONS="10" \
+              CMUX_FIELDWORK_PROXY_BYTES_PER_SESSION="${bytes}" \
+              swift test \
+                --skip-build \
+                --package-path Packages/macOS/CmuxRemoteWorkspace \
+                --filter RemoteDaemonProxySessionSlowReaderProbeTests \
+              2>&1 | tee -a proxy-slow-reader-results/active-volume.log
+          done
       - name: Slow-reader scaling
         env:
           CMUX_FIELDWORK_PROXY_SLOW_READER: "1"
