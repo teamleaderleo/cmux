@@ -1,0 +1,211 @@
+name: Fieldwork terminal input ACK current-main restack
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-current-restack-run
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require source continuity and preserve patchers
+        run: |
+          old_main=6044a8b3f43152d2e6fc17f771fd4b277b393118
+          current_main=61bc1e4a6d1c882d552199f4b2785ea45c177ae2
+          test "$(git merge-base "$old_main" "$current_main")" = "$old_main"
+          owner_paths=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+            cmux-tui/crates/cmux-tui/tests/cli.rs
+            cmux-tui/spec/inventory.json
+            cmux-tui/spec/terminal-host.md
+          )
+          git diff --quiet "$old_main" "$current_main" -- "${owner_paths[@]}"
+          cp -a .fieldwork /tmp/terminal-input-fieldwork
+
+      - name: Rebuild synchronous owner-ACK baseline on current main
+        run: |
+          git config user.name "Fieldwork"
+          git config user.email "fieldwork@users.noreply.github.com"
+          git checkout --detach 61bc1e4a6d1c882d552199f4b2785ea45c177ae2
+          git cherry-pick a61624869fb9c27f4131ee4757e5e4e987f22580
+          baseline=$(git rev-parse HEAD)
+          echo "$baseline" > /tmp/current-baseline-sha
+          git diff --name-only 61bc1e4a6d1c882d552199f4b2785ea45c177ae2 "$baseline" | sort > /tmp/current-baseline-files.txt
+          cat > /tmp/expected-baseline-files.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+          cmux-tui/crates/cmux-tui/tests/cli.rs
+          cmux-tui/spec/inventory.json
+          cmux-tui/spec/terminal-host.md
+          EOF
+          diff -u /tmp/expected-baseline-files.txt /tmp/current-baseline-files.txt
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-baseline-current --force
+          echo "current baseline=$baseline"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize current-main synchronous baseline full core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/baseline-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lines = Path('/tmp/baseline-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/baseline-failures.txt').write_text(
+              ''.join(f'{name}\n' for name in sorted(failures))
+          )
+          PY
+          echo "baseline full-core exit status: $status"
+          cat /tmp/baseline-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/baseline-core.log
+            test -s /tmp/baseline-failures.txt
+          fi
+
+      - name: Apply split-phase repair
+        run: |
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_split_phase.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_split_phase_controls.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_delivery_classification.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_visibility.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_rustfmt.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_interactive_control.py
+
+      - name: Require exact split-phase product delta
+        run: |
+          baseline=$(cat /tmp/current-baseline-sha)
+          git diff --check
+          git diff --name-only "$baseline" | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/spec/terminal-host.md
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Check Rust formatting
+        working-directory: cmux-tui
+        run: cargo fmt --all -- --check
+
+      - name: Check protocol inventory and resource boundary
+        run: |
+          python3 cmux-tui/scripts/test_check_spec_inventory.py
+          python3 cmux-tui/scripts/check-spec-inventory.py
+          python3 cmux-tui/scripts/test_check_resource_api_boundary.py
+          python3 cmux-tui/scripts/check-resource-api-boundary.py
+          python3 cmux-tui/bindings/codegen/generate.py --check
+
+      - name: Run focused terminal input ACK tests
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_the_pty_write --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
+
+      - name: Run focused resource-router tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Require no new full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/candidate-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lines = Path('/tmp/candidate-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/candidate-failures.txt').write_text(
+              ''.join(f'{name}\n' for name in sorted(failures))
+          )
+          PY
+          echo "candidate full-core exit status: $status"
+          cat /tmp/candidate-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/candidate-core.log
+            test -s /tmp/candidate-failures.txt
+          fi
+          comm -13 /tmp/baseline-failures.txt /tmp/candidate-failures.txt > /tmp/candidate-only-failures.txt
+          if [ -s /tmp/candidate-only-failures.txt ]; then
+            echo "candidate introduced full-core failures absent from current-main synchronous baseline:" >&2
+            cat /tmp/candidate-only-failures.txt >&2
+            exit 1
+          fi
+          echo "candidate introduced no new full-core failing tests"
+
+      - name: Publish current-main clean candidate
+        run: |
+          product_paths=(
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+            cmux-tui/crates/cmux-tui-core/src/surface.rs
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+            cmux-tui/spec/terminal-host.md
+          )
+          git add "${product_paths[@]}"
+          git diff --cached --check
+          git commit -m "fix(cmux-tui): pipeline receipted terminal input acknowledgements"
+          candidate=$(git rev-parse HEAD)
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-split-phase --force
+          echo "candidate=$candidate"
