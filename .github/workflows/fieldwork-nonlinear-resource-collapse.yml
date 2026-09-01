@@ -1,0 +1,44 @@
+name: Fieldwork nonlinear resource collapse
+
+on:
+  push:
+    branches:
+      - fieldwork/nonlinear-resource-collapse
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  journal-model:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin revision
+        run: git rev-parse HEAD
+      - name: Run source-pinned journal backlog model
+        run: |
+          python3 scripts/fieldwork/cmux-resource-collapse/journal_backlog_model.py
+          python3 scripts/fieldwork/cmux-resource-collapse/journal_backlog_model.py \
+            --recovery-service-records-per-second 2000 \
+            --json > journal-backlog-model.json
+      - name: Preserve model output
+        uses: actions/upload-artifact@v4
+        with:
+          name: journal-backlog-model
+          path: journal-backlog-model.json
+
+  macos-rpc-write-admission:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      - name: Pin revision
+        run: git rev-parse HEAD
+      - name: Run responsive and stalled write-admission scaling tests
+        run: |
+          swift test \
+            --package-path Packages/macOS/CmuxRemoteDaemon \
+            --filter RemoteDaemonRPCClientWriteAdmissionScalingTests
