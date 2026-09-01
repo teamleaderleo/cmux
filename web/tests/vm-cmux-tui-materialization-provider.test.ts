@@ -5,12 +5,17 @@ import {
   withCmuxTuiMaterializationEnv,
 } from "../services/vms/drivers/cmuxTuiMaterialization";
 import type { CreateOptions, ProviderId } from "../services/vms/drivers/types";
+import { VmProviderGatewayLive } from "../services/vms/providerGateway";
 
 function options(envs: Readonly<Record<string, string>> = {}): CreateOptions {
   return { image: "snapshot-test", envs };
 }
 
 describe("cmux-tui new-machine materialization env", () => {
+  test("live provider gateway compiles with the materialization create wrapper", () => {
+    expect(VmProviderGatewayLive).toBeDefined();
+  });
+
   test("E2B gets a reserved create token without losing caller env", () => {
     const result = withCmuxTuiMaterializationEnv(
       "e2b",
