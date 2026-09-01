@@ -1,0 +1,59 @@
+diff --git a/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift b/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift
+--- a/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift
++++ b/Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteHostReachabilityOverlapProbeTests.swift
+@@ -129,10 +129,7 @@ private final class FieldworkSlowSSHConfigRunner: @unchecked Sendable, CommandR
+             )
+         }
+ 
+-        lock.lock()
+-        active += 1
+-        peak = max(peak, active)
+-        pids.insert(process.processIdentifier)
+-        lock.unlock()
++        markStarted(process.processIdentifier)
+ 
+         await withCheckedContinuation { continuation in
+             process.terminationHandler = { _ in
+@@ -140,10 +137,7 @@ private final class FieldworkSlowSSHConfigRunner: @unchecked Sendable, CommandR
+             }
+         }
+ 
+-        lock.lock()
+-        active = max(0, active - 1)
+-        pids.remove(process.processIdentifier)
+-        lock.unlock()
++        markFinished(process.processIdentifier)
+         return CommandResult(
+             stdout: "hostname 127.0.0.1\nport 9\n",
+             stderr: "",
+@@ -153,6 +147,22 @@ private final class FieldworkSlowSSHConfigRunner: @unchecked Sendable, CommandR
+         )
+     }
+ 
++    private func markStarted(_ pid: Int32) {
++        lock.lock()
++        defer { lock.unlock() }
++        active += 1
++        peak = max(peak, active)
++        pids.insert(pid)
++    }
++
++    private func markFinished(_ pid: Int32) {
++        lock.lock()
++        defer { lock.unlock() }
++        active = max(0, active - 1)
++        pids.remove(pid)
++    }
++
+     func snapshot() -> (active: Int, peak: Int, pids: [Int32]) {
+         lock.lock()
+         defer { lock.unlock() }
+@@ -210,7 +220,7 @@ private func fieldworkLiveSleepChildren() -> Int {
+     guard let text = String(data: data, encoding: .utf8) else { return -1 }
+     let parent = Int(getpid())
+     return text.split(separator: "\n").reduce(into: 0) { count, rawLine in
+-        let fields = rawLine.split(whereSeparator: { $0 == " " || $0 == "\t" }, maxSplits: 2)
++        let fields = rawLine.split(maxSplits: 2, whereSeparator: { $0 == " " || $0 == "\t" })
+         guard fields.count == 3,
+               Int(fields[1]) == parent,
+               fields[2].hasSuffix("sleep") else {
