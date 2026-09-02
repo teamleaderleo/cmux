@@ -109,7 +109,7 @@ while True:
             "start":"tail",
             "retry":{"max_attempts":3,"backoff_ms":10}
         },
-        "permissions":[]
+        "permissions":["journal.read"]
     });
     let installed = cli(
         &harness.socket,
