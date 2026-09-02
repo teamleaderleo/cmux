@@ -1,0 +1,62 @@
+name: Fieldwork terminal input ACK schema11 diagnostic
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-schema11-diagnostic]
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init build dependencies
+        run: |
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Reproduce schema 11 migration and inspect database
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          RUST_BACKTRACE=1 cargo test -p cmux-tui-core --lib schema_eleven_receipts_gain_origin_scope_without_losing_replays --locked -- --nocapture 2>&1 | tee /tmp/schema11.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          import glob, os, sqlite3
+          candidates=[]
+          for pattern in [
+              '/tmp/*schema-eleven-journal-receipts*/*/workspace-registry.sqlite3',
+              '/tmp/*schema-eleven-journal-receipts*/**/workspace-registry.sqlite3',
+              '/tmp/cmux-*/**/workspace-registry.sqlite3',
+          ]:
+              candidates.extend(glob.glob(pattern, recursive=True))
+          seen=set()
+          for path in candidates:
+              if path in seen or not os.path.isfile(path):
+                  continue
+              seen.add(path)
+              print(f'=== DB {path} ===')
+              db=sqlite3.connect(path)
+              try:
+                  print('meta=', db.execute("SELECT key,value FROM meta WHERE key IN ('schema_version','terminal_input_ack_receipts_v1') ORDER BY key").fetchall())
+                  print('effect_columns=', db.execute("PRAGMA table_info(resource_effect_receipts)").fetchall())
+                  print('effect_sql=', db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='resource_effect_receipts'").fetchone())
+                  print('effect_indexes=', db.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND tbl_name='resource_effect_receipts' ORDER BY name").fetchall())
+                  print('journal_operation_columns=', db.execute("PRAGMA table_info(journal_operation_receipts)").fetchall())
+                  print('journal_ingress_columns=', db.execute("PRAGMA table_info(journal_ingress_receipts)").fetchall())
+              finally:
+                  db.close()
+          print('schema11_status=', status if False else 'reported by shell')
+          PY
+          exit $status
