@@ -1,0 +1,98 @@
+name: Fieldwork terminal input ACK materialize v6
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-review-repair-v6-run]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          submodules: false
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Extract exact v5 repair recipe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def extract(path, start, end, output):
+              text = Path(path).read_text()
+              block = text.split(start, 1)[1].split(end, 1)[0]
+              lines = []
+              for line in block.splitlines():
+                  if line:
+                      if not line.startswith('          '):
+                          raise SystemExit(f'unexpected workflow indentation: {line!r}')
+                      line = line[10:]
+                  lines.append(line)
+              Path(output).write_text('\n'.join(lines) + '\n')
+
+          extract(
+              '.github/workflows/fieldwork-terminal-input-owner-ack-review-repair.yml',
+              '      - name: Apply repair\n        run: |\n',
+              '\n      - name: Require scoped product delta',
+              '/tmp/apply-repair.sh',
+          )
+          extract(
+              '.github/workflows/fieldwork-terminal-input-owner-ack-review-repair-v2.yml',
+              '      - name: Apply review repair v2\n        run: |\n',
+              '\n      - name: Require scoped product delta',
+              '/tmp/apply-v2.sh',
+          )
+          p = Path('/tmp/apply-v2.sh')
+          text = p.read_text()
+          text = text.replace('bash /tmp/apply-repair.sh', 'bash -e /tmp/apply-repair.sh', 1)
+          helper = '''def r(path, old, new):\n    p=Path(path); text=p.read_text(); count=text.count(old)\n    if count != 1: raise SystemExit(f'{path}: expected one match, found {count}')\n    p.write_text(text.replace(old,new,1))\n'''
+          replacement = helper + '''\ndef r_first(path, old, new):\n    p=Path(path); text=p.read_text()\n    if old not in text: raise SystemExit(f'{path}: expected at least one match')\n    p.write_text(text.replace(old,new,1))\n'''
+          if text.count(helper) != 1:
+              raise SystemExit('could not install first-match helper')
+          text = text.replace(helper, replacement, 1)
+          needle = '''effects='cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs'\nr(effects,\n  ''' + "'''        append_resource_effect_journal_record("
+          if text.count(needle) != 1:
+              raise SystemExit(f'could not narrow quarantine journal edit: {text.count(needle)} matches')
+          text = text.replace(needle, needle.replace('\nr(effects,', '\nr_first(effects,'), 1)
+          p.write_text(text)
+
+          extract(
+              '.github/workflows/fieldwork-terminal-input-owner-ack-review-repair-v5.yml',
+              '      - name: Apply review repair v5\n        run: |\n',
+              '\n      - name: Require scoped product delta',
+              '/tmp/apply-v5.sh',
+          )
+          PY
+          git config user.name Fieldwork
+          git config user.email fieldwork@users.noreply.github.com
+          git checkout --detach a7fba4766f359963a375b67c6c62818240f53dda
+
+      - name: Materialize repaired product commit
+        run: |
+          bash -e /tmp/apply-v5.sh
+          git diff --check
+          git diff --name-only a7fba4766f359963a375b67c6c62818240f53dda | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/session_journal.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs \
+                  cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry/effect_store.rs \
+                  cmux-tui/crates/cmux-tui-core/src/workspace_registry/session_journal.rs
+          git commit -m "fix(cmux-tui): complete terminal input owner ack repair"
+          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-review-repair-candidate-v5 --force
+          git rev-parse HEAD
