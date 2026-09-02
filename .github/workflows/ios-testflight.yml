@@ -46,7 +46,7 @@ permissions:
 jobs:
   decide:
     name: Order main uploads and resolve prior build
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 360
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
@@ -658,7 +658,7 @@ jobs:
     name: Assign build to internal TestFlight group
     needs: [decide, upload]
     if: github.ref == 'refs/heads/main' && needs.upload.result == 'success' && needs.upload.outputs.assign_internal_group == '1'
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 40
     env:
       ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}

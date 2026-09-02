@@ -38,7 +38,7 @@ concurrency:
 jobs:
   version:
     name: derive package version
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     permissions:
       contents: read
     outputs:
@@ -87,7 +87,7 @@ jobs:
     name: dispatch verified artifacts to registries
     if: ${{ inputs.publish_npm || inputs.publish_pypi }}
     needs: build-package
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     permissions:
       actions: write
       contents: read

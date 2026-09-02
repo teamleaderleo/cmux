@@ -1105,22 +1105,19 @@ check_tmux_terminal_nightly_isolation() {
   echo "PASS: tmux corpus terminal-nightly uses isolated DerivedData, noninteractive xcodebuild, and expected-failure handling"
 }
 
-check_no_bare_github_hosted_runners() {
-  # Every job must route its runner through a repo variable (LINUX_RUNNER,
-  # MACOS_RUNNER_*) so the Blacksmith<->Warp / Blacksmith<->macos-26 overflow
-  # switch is a single repo-variable flip with no PR. A bare GitHub-hosted
-  # label (ubuntu-*, macos-NN) cannot be redirected, so it is forbidden.
-  # Bare paid-provider labels (blacksmith-*, warp-*, depot-*) stay allowed for
-  # deliberate single-runner pins such as the testmanagerd-wedged
-  # `app-host-unit-tests` job.
+check_fork_linux_runner_policy() {
+  # This is a personal fork. Ordinary Linux CI must work on GitHub-hosted
+  # runners without access to the upstream organization's paid runner fleet.
+  # LINUX_RUNNER remains an optional override, but stale paid Linux provider
+  # labels are forbidden because they queue forever when the provider is absent.
   local hits
-  hits="$(grep -rnE "runs-on:[[:space:]]*(ubuntu-[a-z0-9.]+|macos-[a-z0-9]+)([[:space:]]*$|[[:space:]]+#)" "$ROOT_DIR/.github/workflows" | grep -v "github-hosted-required" || true)"
+  hits="$(grep -rnE 'runs-on:.*(blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)' "$ROOT_DIR/.github/workflows" || true)"
   if [[ -n "$hits" ]]; then
-    echo "FAIL: these jobs use a bare GitHub-hosted runner; route them through vars.LINUX_RUNNER / vars.MACOS_RUNNER_IOS so Blacksmith<->overflow stays a repo-variable flip:"
+    echo "FAIL: workflow still references an unavailable paid Linux runner in this fork:"
     echo "$hits"
     exit 1
   fi
-  echo "PASS: no workflow pins a bare GitHub-hosted runner; all route through runner repo variables"
+  echo "PASS: fork Linux CI defaults to GitHub-hosted runners; no stale paid Linux provider labels remain"
 }
 
 check_no_self_hosted_fleet_runners() {
@@ -1238,7 +1235,7 @@ check_no_self_hosted_fleet_runners() {
 }
 
 # ci.yml jobs
-check_no_bare_github_hosted_runners
+check_fork_linux_runner_policy
 check_no_self_hosted_fleet_runners
 check_macos_runner "$CI_FILE" "app-host-unit-tests"
 check_macos_runner "$CI_FILE" "tests-build-and-lag"
