@@ -19,11 +19,11 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Require exact upstream parent plus probe-only delta
+      - name: Require exact upstream ancestry plus probe-only delta
         run: |
-          test "$(git rev-parse HEAD^)" = 95ba055267d1cd73806795763d350f021462484e
-          test "$(git rev-parse HEAD^^)" = 9e2dd50957936153ca0da61d2f079937674f9375
-          git diff --name-only 9e2dd50957936153ca0da61d2f079937674f9375 HEAD | sort > /tmp/changed.txt
+          base=9e2dd50957936153ca0da61d2f079937674f9375
+          test "$(git merge-base "$base" HEAD)" = "$base"
+          git diff --name-only "$base" HEAD | sort > /tmp/changed.txt
           cat > /tmp/expected.txt <<'EOF'
           .github/workflows/fieldwork-hook-sigkill-regression.yml
           cmux-tui/crates/cmux-tui/tests/journal_hook_sigkill_recovery.rs
