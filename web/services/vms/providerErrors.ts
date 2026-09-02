@@ -116,3 +116,31 @@ export function isProviderIdentityNotFoundError(err: unknown): boolean {
   if (candidate.cause) return isProviderIdentityNotFoundError(candidate.cause);
   return false;
 }
+
+export const PROVIDER_CREATE_INDETERMINATE_CODE = "provider_create_indeterminate";
+
+/**
+ * The provider may have committed a create, but the client cannot yet prove
+ * either success or absence. Billing and the durable attempt identity must be
+ * retained until the exact attempt is reconciled.
+ */
+export class ProviderCreateIndeterminateError extends Error {
+  readonly code = PROVIDER_CREATE_INDETERMINATE_CODE;
+
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "ProviderCreateIndeterminateError";
+  }
+}
+
+export function isProviderCreateIndeterminateError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as {
+    readonly code?: unknown;
+    readonly name?: unknown;
+    readonly cause?: unknown;
+  };
+  if (candidate.code === PROVIDER_CREATE_INDETERMINATE_CODE) return true;
+  if (candidate.name === "ProviderCreateIndeterminateError") return true;
+  return candidate.cause !== err && isProviderCreateIndeterminateError(candidate.cause);
+}

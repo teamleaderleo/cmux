@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   ProviderError,
   type AttachEndpoint,
@@ -22,6 +22,7 @@ import {
   type CmuxRemoteEndpoint,
 } from "./types";
 import { VmOperationUnsupportedError } from "../errors";
+import { ProviderCreateIndeterminateError } from "../providerErrors";
 import { withVmSpan } from "../telemetry";
 import { shellQuote } from "./wsLease";
 import {
@@ -853,7 +854,13 @@ export class BlaxelProvider implements VMProvider {
           const perMachineHomeVolume = !!homeVolumeSpec?.includes("{machine}");
           const resolveHomeVolume = (machineName: string): string | undefined =>
             homeVolumeSpec?.replace("{machine}", machineName);
-          let name = friendlyVmName();
+          const createIdentity = typeof options.providerMetadata?.createIdentity === "string"
+            ? options.providerMetadata.createIdentity.trim() || undefined
+            : undefined;
+          let name = createIdentity ? vmNameForCreateIdentity(createIdentity) : friendlyVmName();
+          const sandboxCreateUrl = createIdentity
+            ? `${CONTROL_PLANE_BASE}/sandboxes?createIfNotExist=true`
+            : `${CONTROL_PLANE_BASE}/sandboxes`;
           let homeVolume = resolveHomeVolume(name);
           let created: BlaxelSandbox | null = null;
           for (let attempt = 0; attempt < 4 && !created; attempt += 1) {
@@ -863,7 +870,7 @@ export class BlaxelProvider implements VMProvider {
               volumeCreated = await timedStep("ensure_home_volume", () => this.ensureHomeVolume(volume, homeVolumeMb));
             }
             try {
-              created = await timedStep("create_sandbox", () => blaxelFetch<BlaxelSandbox>("POST", `${CONTROL_PLANE_BASE}/sandboxes`, {
+              created = await timedStep("create_sandbox", () => blaxelFetch<BlaxelSandbox>("POST", sandboxCreateUrl, {
                 metadata: { name },
                 spec: {
                   runtime: {
@@ -876,11 +883,46 @@ export class BlaxelProvider implements VMProvider {
                 },
               }));
             } catch (err) {
-              // A per-machine volume this call just created for a sandbox that never
-              // came to exist is already orphaned — a retried create picks a fresh
-              // name, so nothing ever reattaches it. Delete it before moving on. A
-              // pre-existing volume (409 on ensure) is left alone: it may belong to
-              // the live sandbox this name conflicted with.
+              if (createIdentity && ambiguousSandboxCreateFailure(err)) {
+                let recovered: BlaxelSandbox;
+                try {
+                  recovered = await timedStep("recover_ambiguous_create", () => this.getSandbox(name));
+                } catch (recoveryErr) {
+                  // A failed or stale read is not proof that the POST had no effect.
+                  // Preserve any just-created per-machine volume; the same-key retry
+                  // reuses this create identity, sandbox name, and volume name. Mark
+                  // the outcome explicitly so the workflow retains the billing debit
+                  // while it waits to reconcile this exact provider attempt.
+                  if (!(recoveryErr instanceof ProviderError && /-> 404/.test(recoveryErr.message))) {
+                    console.warn(`[blaxel] ambiguous create recovery for ${name} failed`, recoveryErr);
+                  }
+                  throw new ProviderCreateIndeterminateError(
+                    `Blaxel sandbox create ${name} may have committed but could not be reconciled`,
+                    { createError: err, recoveryError: recoveryErr },
+                  );
+                }
+                const recoveredName = recovered.metadata?.name?.trim();
+                if (recoveredName && recoveredName !== name) {
+                  throw new ProviderError(
+                    "blaxel",
+                    `recovered sandbox identity mismatch: expected ${name}, got ${recoveredName}`,
+                  );
+                }
+                const recoveredImage = recovered.spec?.runtime?.image?.trim();
+                if (recoveredImage && recoveredImage !== image) {
+                  throw new ProviderError(
+                    "blaxel",
+                    `recovered sandbox ${name} uses unexpected image ${recoveredImage}`,
+                  );
+                }
+                created = recovered;
+                break;
+              }
+
+              // For a definite failed create, a per-machine volume made by this call
+              // has no owner and can be removed. Ambiguous deterministic creates exit
+              // above without cleanup so a committed-but-unobserved sandbox keeps its
+              // durable home intact.
               if (homeVolume && perMachineHomeVolume && volumeCreated) {
                 const volume = homeVolume;
                 await this.deleteHomeVolume(volume).catch((cleanupErr) => {
@@ -888,7 +930,7 @@ export class BlaxelProvider implements VMProvider {
                 });
               }
               const conflict = err instanceof ProviderError && /-> 409/.test(err.message);
-              if (!conflict || attempt === 3) throw err;
+              if (createIdentity || !conflict || attempt === 3) throw err;
               name = friendlyVmName(attempt >= 1);
               homeVolume = resolveHomeVolume(name);
             }
@@ -953,6 +995,7 @@ export class BlaxelProvider implements VMProvider {
             createdAt: Date.now(),
             providerMetadata: homeVolume
               ? {
+                  ...(options.providerMetadata ?? {}),
                   sandboxUrl,
                   previewUrl,
                   homeVolume,
@@ -963,7 +1006,7 @@ export class BlaxelProvider implements VMProvider {
                   // this marker is that ownership record.
                   ...(perMachineHomeVolume ? { homeVolumePerMachine: true } : {}),
                 }
-              : { sandboxUrl, previewUrl, image, memoryMb },
+              : { ...(options.providerMetadata ?? {}), sandboxUrl, previewUrl, image, memoryMb },
           };
         } catch (err) {
           throw err instanceof ProviderError ? err : new ProviderError("blaxel", `create(${image}) failed`, err);
@@ -1870,6 +1913,22 @@ export function friendlyVmName(withSuffix = false): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
   const suffix = Array.from(randomBytes(4), (byte) => alphabet[byte % alphabet.length]).join("");
   return `${base}-${suffix}`;
+}
+
+function vmNameForCreateIdentity(createIdentity: string): string {
+  const digest = createHash("sha256").update(createIdentity).digest();
+  const adjective = NAME_ADJECTIVES[digest[0] % NAME_ADJECTIVES.length];
+  const animal = NAME_ANIMALS[digest[1] % NAME_ANIMALS.length];
+  const suffix = digest.toString("hex").slice(0, 16);
+  return `${adjective}-${animal}-${suffix}`;
+}
+
+function ambiguousSandboxCreateFailure(error: unknown): boolean {
+  if (!(error instanceof ProviderError)) return true;
+  const statusMatch = /-> (\d{3})/.exec(error.message);
+  if (!statusMatch) return true;
+  const status = Number(statusMatch[1]);
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
 export function resolveBlaxelMemoryMb(

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -97,6 +98,11 @@ export type VmRepositoryShape = {
     readonly maxActiveVms: number;
     readonly idempotencyKey?: string;
   }) => Effect.Effect<BeginCreateResult, VmDatabaseError | VmCreateDisabledError | VmAccountDeletionInProgressError | VmLimitExceededError>;
+  readonly markCreateAttemptReady?: (id: string) => Effect.Effect<CloudVmRow, VmDatabaseError>;
+  readonly claimStaleCreateAttempt?: (input: {
+    readonly id: string;
+    readonly before: Date;
+  }) => Effect.Effect<CloudVmRow | null, VmDatabaseError>;
   readonly beginBaseOpen: (input: {
     readonly userId: string;
     readonly billingTeamId: string;
@@ -509,6 +515,7 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
     Effect.tryPromise({
       try: async () => {
         const idempotencyKey = input.idempotencyKey?.trim() || undefined;
+        let createIdentity = input.provider === "blaxel" ? randomUUID() : undefined;
         const db = cloudDb();
         try {
           return await db.transaction(async (tx) => {
@@ -539,6 +546,16 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
               if (existing) {
                 if (!isRetryableFailedCreate(existing, new Date())) {
                   return { inserted: false as const, vm: existing };
+                }
+                if (
+                  input.provider === "blaxel" &&
+                  existing.provider === "blaxel" &&
+                  existing.failureCode === PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE
+                ) {
+                  const previousCreateIdentity = existing.providerMetadata?.createIdentity;
+                  if (typeof previousCreateIdentity === "string" && previousCreateIdentity.trim()) {
+                    createIdentity = previousCreateIdentity.trim();
+                  }
                 }
                 await tx
                   .update(cloudVms)
@@ -576,6 +593,7 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
                 imageVersion: input.imageVersion ?? null,
                 status: "provisioning",
                 idempotencyKey,
+                ...(createIdentity ? { providerMetadata: { createIdentity } } : {}),
               })
               .returning();
             if (!vm) throw new Error("insert returned no VM row");
@@ -592,6 +610,46 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
       catch: (cause) => isVmCreateDisabledError(cause) || isVmAccountDeletionInProgressError(cause) || isVmLimitExceededError(cause)
         ? cause
         : new VmDatabaseError({ operation: "beginCreate", cause }),
+    }),
+
+  markCreateAttemptReady: (id) =>
+    dbEffect("markCreateAttemptReady", async () => {
+      const db = cloudDb();
+      const [vm] = await db
+        .update(cloudVms)
+        .set({
+          providerMetadata: sql`coalesce(${cloudVms.providerMetadata}, '{}'::jsonb) || '{"providerCreateReady":true}'::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(cloudVms.id, id),
+          eq(cloudVms.status, "provisioning"),
+          eq(cloudVms.provider, "blaxel"),
+          isNull(cloudVms.providerVmId),
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'createIdentity', '') <> ''`,
+        ))
+        .returning();
+      if (!vm) throw new Error(`create attempt ${id} is no longer provider-eligible`);
+      return vm;
+    }),
+
+  claimStaleCreateAttempt: (input) =>
+    dbEffect("claimStaleCreateAttempt", async () => {
+      const db = cloudDb();
+      const [vm] = await db
+        .update(cloudVms)
+        .set({ updatedAt: new Date() })
+        .where(and(
+          eq(cloudVms.id, input.id),
+          eq(cloudVms.status, "provisioning"),
+          eq(cloudVms.provider, "blaxel"),
+          isNull(cloudVms.providerVmId),
+          lt(cloudVms.updatedAt, input.before),
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'providerCreateReady', 'false') = 'true'`,
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'createIdentity', '') <> ''`,
+        ))
+        .returning();
+      return vm ?? null;
     }),
 
   beginBaseOpen: (input) =>
