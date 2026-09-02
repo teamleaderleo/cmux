@@ -45,6 +45,8 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
     private let connection: NWConnection
     private let rpcClient: any RemoteDaemonTunnelRPCClient
     private let queue: DispatchQueue
+    private let outputBudget: RemoteProxyOutputBudget
+    private let outputLimits: RemoteProxySessionOutputLimits
     private let onClose: (UUID) -> Void
 
     private var isClosed = false
@@ -55,18 +57,25 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
     private var localInputEOF = false
     private var rewritesLoopbackHTTPHeaders = false
     private var loopbackRequestHeaderRewriter: RemoteLoopbackHTTPRequestStreamRewriter?
-    private var pendingRemoteHTTPHeaderBytes = Data()
-    private var hasForwardedRemoteHTTPHeaders = false
+    private var loopbackResponseHeaderRewriter: RemoteLoopbackHTTPResponseStreamRewriter?
+    private var fieldworkPendingLocalSendCount = 0
+    private var fieldworkPendingLocalSendBytes = 0
+    private var fieldworkPeakLocalSendCount = 0
+    private var fieldworkPeakLocalSendBytes = 0
 
     init(
         connection: NWConnection,
         rpcClient: any RemoteDaemonTunnelRPCClient,
         queue: DispatchQueue,
+        outputBudget: RemoteProxyOutputBudget = .shared,
+        outputLimits: RemoteProxySessionOutputLimits = .production,
         onClose: @escaping (UUID) -> Void
     ) {
         self.connection = connection
         self.rpcClient = rpcClient
         self.queue = queue
+        self.outputBudget = outputBudget
+        self.outputLimits = outputLimits
         self.onClose = onClose
     }
 
@@ -88,6 +97,15 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
 
     func stop() {
         close(reason: nil)
+    }
+
+    func fieldworkLocalSendSnapshot() -> (pendingCount: Int, pendingBytes: Int, peakCount: Int, peakBytes: Int) {
+        (
+            fieldworkPendingLocalSendCount,
+            fieldworkPendingLocalSendBytes,
+            fieldworkPeakLocalSendCount,
+            fieldworkPeakLocalSendBytes
+        )
     }
 
     private func receiveNext() {
@@ -314,8 +332,9 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
             loopbackRequestHeaderRewriter = rewritesLoopbackHTTPHeaders
                 ? RemoteLoopbackHTTPRequestStreamRewriter(aliasHost: Self.remoteLoopbackProxyAliasHost)
                 : nil
-            pendingRemoteHTTPHeaderBytes = Data()
-            hasForwardedRemoteHTTPHeaders = false
+            loopbackResponseHeaderRewriter = rewritesLoopbackHTTPHeaders
+                ? RemoteLoopbackHTTPResponseStreamRewriter(aliasHost: Self.remoteLoopbackProxyAliasHost)
+                : nil
             let targetHost = Self.normalizedProxyTargetHost(host)
             let streamID = try rpcClient.openStream(host: targetHost, port: port, timeoutMs: 10_000)
             self.streamID = streamID
@@ -377,8 +396,26 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
     private func forwardRemotePayloadToLocal(_ data: Data, eof: Bool) {
         let localData = rewriteRemoteResponseIfNeeded(data, eof: eof)
         if !localData.isEmpty {
-            connection.send(content: localData, completion: .contentProcessed { [weak self] error in
+            let sendBytes = localData.count
+            let localBytesAvailable = max(0, outputLimits.maxPendingBytes - fieldworkPendingLocalSendBytes)
+            guard fieldworkPendingLocalSendCount < outputLimits.maxPendingSends,
+                  sendBytes <= localBytesAvailable else {
+                close(reason: "proxy client output queue exceeded per-session limit")
+                return
+            }
+            guard let reservation = outputBudget.reserve(bytes: sendBytes) else {
+                close(reason: "proxy client output queue exceeded process limit")
+                return
+            }
+            fieldworkPendingLocalSendCount += 1
+            fieldworkPendingLocalSendBytes += sendBytes
+            fieldworkPeakLocalSendCount = max(fieldworkPeakLocalSendCount, fieldworkPendingLocalSendCount)
+            fieldworkPeakLocalSendBytes = max(fieldworkPeakLocalSendBytes, fieldworkPendingLocalSendBytes)
+            connection.send(content: localData, completion: .contentProcessed { [weak self, reservation] error in
+                reservation.release()
                 guard let self else { return }
+                self.fieldworkPendingLocalSendCount = max(0, self.fieldworkPendingLocalSendCount - 1)
+                self.fieldworkPendingLocalSendBytes = max(0, self.fieldworkPendingLocalSendBytes - sendBytes)
                 if let error {
                     self.close(reason: "proxy client send error: \(error)")
                     return
@@ -397,26 +434,10 @@ final class RemoteDaemonProxySession: @unchecked Sendable {
 
     private func rewriteRemoteResponseIfNeeded(_ data: Data, eof: Bool) -> Data {
         guard rewritesLoopbackHTTPHeaders else { return data }
-        guard !data.isEmpty else { return data }
-        guard !hasForwardedRemoteHTTPHeaders else { return data }
-
-        pendingRemoteHTTPHeaderBytes.append(data)
-        let marker = Data([0x0D, 0x0A, 0x0D, 0x0A])
-        guard pendingRemoteHTTPHeaderBytes.range(of: marker) != nil else {
-            guard eof else { return Data() }
-            hasForwardedRemoteHTTPHeaders = true
-            let payload = pendingRemoteHTTPHeaderBytes
-            pendingRemoteHTTPHeaderBytes = Data()
-            return payload
-        }
-
-        hasForwardedRemoteHTTPHeaders = true
-        let payload = pendingRemoteHTTPHeaderBytes
-        pendingRemoteHTTPHeaderBytes = Data()
-        return RemoteLoopbackHTTPResponseRewriter.rewriteIfNeeded(
-            data: payload,
-            aliasHost: Self.remoteLoopbackProxyAliasHost
-        )
+        guard var rewriter = loopbackResponseHeaderRewriter else { return data }
+        let rewritten = rewriter.rewriteNextChunk(data, eof: eof)
+        loopbackResponseHeaderRewriter = rewriter
+        return rewritten
     }
 
     private func close(reason: String?) {

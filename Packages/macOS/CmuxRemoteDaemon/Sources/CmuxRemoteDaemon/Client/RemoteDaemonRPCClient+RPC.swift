@@ -80,9 +80,10 @@ extension RemoteDaemonRPCClient {
     public func unregisterStream(streamID: String) {
         let trimmedStreamID = streamID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedStreamID.isEmpty else { return }
-        _ = stateQueue.sync {
+        let subscription = stateQueue.sync {
             streamSubscriptions.removeValue(forKey: trimmedStreamID)
         }
+        subscription?.cancel()
     }
 
     /// Unsubscribes locally, then best-effort closes the stream daemon-side
@@ -271,9 +272,10 @@ extension RemoteDaemonRPCClient {
             attachmentID: attachmentID,
             attachmentToken: attachmentToken
         )
-        _ = stateQueue.sync {
+        let subscription = stateQueue.sync {
             ptySubscriptions.removeValue(forKey: key)
         }
+        subscription?.cancel()
     }
 
     /// Separate liveness budget for the serialized non-WebSocket write lane.

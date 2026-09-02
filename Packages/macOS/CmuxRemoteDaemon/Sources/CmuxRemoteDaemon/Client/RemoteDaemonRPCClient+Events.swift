@@ -164,29 +164,62 @@ extension RemoteDaemonRPCClient {
 
         let subscription: StreamSubscription?
         let event: RemoteDaemonStreamEvent?
+        let retainedBytes: Int
+        let terminal: Bool
         switch eventName {
         case "proxy.stream.data":
-            subscription = streamSubscriptions[streamID]
-            event = .data(Self.decodeBase64Data(payload["data_base64"]))
+            guard let current = streamSubscriptions[streamID] else { return }
+            subscription = current
+            let data = Self.decodeBase64Data(payload["data_base64"])
+            event = .data(data)
+            retainedBytes = data.count
+            terminal = false
 
         case "proxy.stream.eof":
-            subscription = streamSubscriptions.removeValue(forKey: streamID)
-            event = .eof(Self.decodeBase64Data(payload["data_base64"]))
+            guard let current = streamSubscriptions[streamID] else { return }
+            subscription = current
+            let data = Self.decodeBase64Data(payload["data_base64"])
+            event = .eof(data)
+            retainedBytes = data.count
+            terminal = true
 
         case "proxy.stream.error":
-            subscription = streamSubscriptions.removeValue(forKey: streamID)
+            guard let current = streamSubscriptions[streamID] else { return }
+            subscription = current
             let detail = ((payload["error"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
                 ?? "stream error"
             event = .error(detail)
+            retainedBytes = 0
+            terminal = true
 
         default:
             return
         }
 
         guard let subscription, let event else { return }
-        subscription.queue.async {
-            subscription.handler(event)
+        if terminal, streamSubscriptions[streamID] === subscription {
+            streamSubscriptions.removeValue(forKey: streamID)
+        }
+        let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
+            guard let self, let subscription else { return }
+            self.stateQueue.async {
+                if self.streamSubscriptions[streamID] === subscription {
+                    self.streamSubscriptions.removeValue(forKey: streamID)
+                }
+            }
+        }
+        let result = terminal
+            ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
+            : subscription.enqueue(event, retainedBytes: retainedBytes)
+        if case .overflow = result {
+            if streamSubscriptions[streamID] === subscription {
+                streamSubscriptions.removeValue(forKey: streamID)
+            }
+            subscription.fail(
+                "proxy stream delivery queue exceeded its bounded capacity",
+                afterDelivery: cleanup
+            )
         }
     }
 
@@ -257,38 +290,85 @@ extension RemoteDaemonRPCClient {
         let legacyKey = Self.ptySubscriptionKey(sessionID: sessionID, attachmentID: attachmentID)
         let subscription: PTYSubscription?
         let event: RemoteDaemonPTYEvent?
+        let retainedBytes: Int
+        let terminal: Bool
         switch eventName {
         case "pty.ready":
-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
+            subscription = current
             event = .ready
+            retainedBytes = 0
+            terminal = false
 
         case "pty.data":
-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
-            event = .data(Self.decodeBase64Data(payload["data_base64"]))
+            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
+            subscription = current
+            let data = Self.decodeBase64Data(payload["data_base64"])
+            event = .data(data)
+            retainedBytes = data.count
+            terminal = false
 
         case "pty.input_ack":
-            subscription = ptySubscriptions[key] ?? ptySubscriptions[legacyKey]
+            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
+            subscription = current
             event = .inputAck(seq: rpcEventUInt64Value(payload["seq"]))
+            retainedBytes = 0
+            terminal = false
 
         case "pty.exit":
-            subscription = ptySubscriptions.removeValue(forKey: key)
-                ?? ptySubscriptions.removeValue(forKey: legacyKey)
+            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
+            subscription = current
             event = .exit
+            retainedBytes = 0
+            terminal = true
 
         case "pty.error":
-            subscription = ptySubscriptions.removeValue(forKey: key)
-                ?? ptySubscriptions.removeValue(forKey: legacyKey)
+            guard let current = ptySubscriptions[key] ?? ptySubscriptions[legacyKey] else { return true }
+            subscription = current
             let detail = ((payload["error"] as? String) ?? (payload["message"] as? String))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             event = .error(detail?.isEmpty == false ? detail! : "PTY error")
+            retainedBytes = 0
+            terminal = true
 
         default:
             return true
         }
 
         guard let subscription, let event else { return true }
-        subscription.queue.async {
-            subscription.handler(event)
+        if terminal {
+            if ptySubscriptions[key] === subscription {
+                ptySubscriptions.removeValue(forKey: key)
+            }
+            if ptySubscriptions[legacyKey] === subscription {
+                ptySubscriptions.removeValue(forKey: legacyKey)
+            }
+        }
+        let cleanup: @Sendable () -> Void = { [weak self, weak subscription] in
+            guard let self, let subscription else { return }
+            self.stateQueue.async {
+                if self.ptySubscriptions[key] === subscription {
+                    self.ptySubscriptions.removeValue(forKey: key)
+                }
+                if self.ptySubscriptions[legacyKey] === subscription {
+                    self.ptySubscriptions.removeValue(forKey: legacyKey)
+                }
+            }
+        }
+        let result = terminal
+            ? subscription.finish(event, retainedBytes: retainedBytes, afterDelivery: cleanup)
+            : subscription.enqueue(event, retainedBytes: retainedBytes)
+        if case .overflow = result {
+            if ptySubscriptions[key] === subscription {
+                ptySubscriptions.removeValue(forKey: key)
+            }
+            if ptySubscriptions[legacyKey] === subscription {
+                ptySubscriptions.removeValue(forKey: legacyKey)
+            }
+            subscription.fail(
+                "PTY delivery queue exceeded its bounded capacity",
+                afterDelivery: cleanup
+            )
         }
         return true
     }
@@ -327,6 +407,7 @@ extension RemoteDaemonRPCClient {
         stdoutHandle = nil
         stderrHandle?.readabilityHandler = nil
         stderrHandle = nil
+        cancelStreamSubscriptionsLocked()
         streamSubscriptions.removeAll(keepingCapacity: false)
         failPTYSubscriptionsLocked(detail)
         signalPendingFailureLocked(detail)
@@ -345,6 +426,7 @@ extension RemoteDaemonRPCClient {
         webSocketTask = nil
         webSocketSession = nil
         webSocketDelegate = nil
+        cancelStreamSubscriptionsLocked()
         streamSubscriptions.removeAll(keepingCapacity: false)
         failPTYSubscriptionsLocked(detail)
         signalPendingFailureLocked(detail)

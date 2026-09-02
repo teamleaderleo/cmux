@@ -90,15 +90,79 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
     // @unchecked Sendable: the handler is only ever invoked via
     // `queue.async` on the queue stored beside it (the legacy
     // callback-queue contract); the record itself is confined to stateQueue.
-    struct StreamSubscription: @unchecked Sendable {
-        let queue: DispatchQueue
-        let handler: (RemoteDaemonStreamEvent) -> Void
+    final class StreamSubscription: @unchecked Sendable {
+        private let delivery: RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>
+
+        init(
+            queue: DispatchQueue,
+            handler: @escaping (RemoteDaemonStreamEvent) -> Void,
+            budget: RemoteDaemonEventDeliveryBudget = .shared,
+            limits: RemoteDaemonEventDeliveryLimits = .proxy
+        ) {
+            delivery = RemoteDaemonEventDeliveryQueue(
+                queue: queue,
+                handler: handler,
+                budget: budget,
+                limits: limits
+            )
+        }
+
+        func enqueue(_ event: RemoteDaemonStreamEvent, retainedBytes: Int) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.EnqueueResult {
+            delivery.enqueue(event, retainedBytes: retainedBytes)
+        }
+
+        func finish(
+            _ event: RemoteDaemonStreamEvent,
+            retainedBytes: Int,
+            afterDelivery: (@Sendable () -> Void)?
+        ) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.EnqueueResult {
+            delivery.finish(event, retainedBytes: retainedBytes, afterDelivery: afterDelivery)
+        }
+
+        func fail(_ detail: String, afterDelivery: (@Sendable () -> Void)? = nil) {
+            delivery.fail(.error(detail), afterDelivery: afterDelivery)
+        }
+
+        func cancel() { delivery.cancel() }
+        func snapshot() -> RemoteDaemonEventDeliveryQueue<RemoteDaemonStreamEvent>.Snapshot { delivery.snapshot() }
     }
 
     // See StreamSubscription for the @unchecked Sendable justification.
-    struct PTYSubscription: @unchecked Sendable {
-        let queue: DispatchQueue
-        let handler: (RemoteDaemonPTYEvent) -> Void
+    final class PTYSubscription: @unchecked Sendable {
+        private let delivery: RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>
+
+        init(
+            queue: DispatchQueue,
+            handler: @escaping (RemoteDaemonPTYEvent) -> Void,
+            budget: RemoteDaemonEventDeliveryBudget = .shared,
+            limits: RemoteDaemonEventDeliveryLimits = .pty
+        ) {
+            delivery = RemoteDaemonEventDeliveryQueue(
+                queue: queue,
+                handler: handler,
+                budget: budget,
+                limits: limits
+            )
+        }
+
+        func enqueue(_ event: RemoteDaemonPTYEvent, retainedBytes: Int) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.EnqueueResult {
+            delivery.enqueue(event, retainedBytes: retainedBytes)
+        }
+
+        func finish(
+            _ event: RemoteDaemonPTYEvent,
+            retainedBytes: Int,
+            afterDelivery: (@Sendable () -> Void)?
+        ) -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.EnqueueResult {
+            delivery.finish(event, retainedBytes: retainedBytes, afterDelivery: afterDelivery)
+        }
+
+        func fail(_ detail: String, afterDelivery: (@Sendable () -> Void)? = nil) {
+            delivery.fail(.error(detail), afterDelivery: afterDelivery)
+        }
+
+        func cancel() { delivery.cancel() }
+        func snapshot() -> RemoteDaemonEventDeliveryQueue<RemoteDaemonPTYEvent>.Snapshot { delivery.snapshot() }
     }
 
     let configuration: WorkspaceRemoteConfiguration
@@ -258,18 +322,30 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
         shouldReportTermination = true
         stdoutBuffer = Data()
         stderrBuffer = ""
+        cancelStreamSubscriptionsLocked()
+        cancelPTYSubscriptionsLocked()
         streamSubscriptions.removeAll(keepingCapacity: false)
         ptySubscriptions.removeAll(keepingCapacity: false)
         advertisedCapabilities.removeAll(keepingCapacity: false)
+    }
+
+    func cancelStreamSubscriptionsLocked() {
+        for subscription in streamSubscriptions.values {
+            subscription.cancel()
+        }
+    }
+
+    func cancelPTYSubscriptionsLocked() {
+        for subscription in ptySubscriptions.values {
+            subscription.cancel()
+        }
     }
 
     func failPTYSubscriptionsLocked(_ detail: String) {
         let subscriptions = Array(ptySubscriptions.values)
         ptySubscriptions.removeAll(keepingCapacity: false)
         for subscription in subscriptions {
-            subscription.queue.async {
-                subscription.handler(.error(detail))
-            }
+            subscription.fail(detail)
         }
     }
 
@@ -303,6 +379,7 @@ public final class RemoteDaemonRPCClient: @unchecked Sendable {
             webSocketTask = nil
             webSocketSession = nil
             webSocketDelegate = nil
+            cancelStreamSubscriptionsLocked()
             streamSubscriptions.removeAll(keepingCapacity: false)
             failPTYSubscriptionsLocked(detail)
             return (

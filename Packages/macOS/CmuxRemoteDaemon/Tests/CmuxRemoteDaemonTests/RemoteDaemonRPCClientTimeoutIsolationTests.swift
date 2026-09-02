@@ -65,7 +65,9 @@ struct RemoteDaemonRPCClientTimeoutIsolationTests {
 
         let result = try client.call(method: "hello", params: [:], timeout: 1)
         #expect(result["transport"] as? String == "alive")
-        #expect(existingPTYEvent.wait(timeout: .now() + 1) == .success)
+        // Event delivery is asynchronous and is not the deadline under test.
+        // Keep this assertion about subscription survival rather than root-queue scheduling latency.
+        #expect(existingPTYEvent.wait(timeout: .now() + 3) == .success)
         #expect(unexpectedTermination.wait(timeout: .now()) == .timedOut)
     }
 
@@ -78,7 +80,7 @@ struct RemoteDaemonRPCClientTimeoutIsolationTests {
             )
         }
 
-        let stalledAttachRead = DispatchSemaphore(value: 0)
+        let stalledAttachReadMarker = executable + ".stalled-read"
         let unexpectedTermination = DispatchSemaphore(value: 0)
         let client = RemoteDaemonRPCClient(
             configuration: configuration(),
@@ -102,17 +104,18 @@ struct RemoteDaemonRPCClientTimeoutIsolationTests {
             command: nil,
             requireExisting: true,
             queue: .global()
-        ) { event in
-            if case .data(let data) = event, data == Data("attach-read".utf8) {
-                stalledAttachRead.signal()
-            }
-        }
+        ) { _ in }
 
         let writeBlockEntered = DispatchSemaphore(value: 0)
         let releaseWrite = DispatchSemaphore(value: 0)
         let writeBlockQueue = DispatchQueue(label: "com.cmux.tests.remote-daemon.block-cancellation-write")
         writeBlockQueue.async {
-            guard stalledAttachRead.wait(timeout: .now() + 2) == .success else {
+            let markerDeadline = Date().addingTimeInterval(2)
+            while !FileManager.default.fileExists(atPath: stalledAttachReadMarker),
+                  Date() < markerDeadline {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+            guard FileManager.default.fileExists(atPath: stalledAttachReadMarker) else {
                 releaseWrite.signal()
                 return
             }
@@ -215,7 +218,7 @@ struct RemoteDaemonRPCClientTimeoutIsolationTests {
           exit 1
         fi
         stalled_id=$(read_id "$stalled_attach")
-        printf '{"event":"pty.data","session_id":"existing-session","attachment_id":"existing-attachment","attachment_token":"%s","data_base64":"YXR0YWNoLXJlYWQ="}\\n' "$existing_token"
+        : > "$0.stalled-read"
         if IFS= read -r line; then
           cancel_request_id=$(printf '%s\\n' "$line" | sed -n 's/.*"request_id":\\([0-9][0-9]*\\).*/\\1/p')
           cancel_session=$(printf '%s\\n' "$line" | sed -n 's/.*"session_id":"\\([^"]*\\)".*/\\1/p')
