@@ -8,6 +8,7 @@ on:
       - .github/workflows/fieldwork-journal-recovery-validation.yml
       - scripts/fieldwork/cmux-resource-collapse/journal_validation_instrument.py
       - scripts/fieldwork/cmux-resource-collapse/journal_validation_generator_repair.py
+      - scripts/fieldwork/cmux-resource-collapse/journal_validation_runtime_repair.py
       - scripts/fieldwork/cmux-resource-collapse/journal_backlog_base.rs
   workflow_dispatch:
 
@@ -26,6 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           cp scripts/fieldwork/cmux-resource-collapse/journal_backlog_base.rs /tmp/fieldwork_journal_backlog.rs
+          cp scripts/fieldwork/cmux-resource-collapse/journal_validation_runtime_repair.py /tmp/journal_validation_runtime_repair.py
           git remote add upstream https://github.com/manaflow-ai/cmux.git || true
           git fetch --no-tags upstream 9e2dd50957936153ca0da61d2f079937674f9375
           git checkout --detach 9e2dd50957936153ca0da61d2f079937674f9375
@@ -35,6 +37,7 @@ jobs:
           set -euo pipefail
           mkdir -p cmux-tui/crates/chatmux-relay/examples
           cp /tmp/fieldwork_journal_backlog.rs cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+          python3 /tmp/journal_validation_runtime_repair.py cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
       - name: Build upstream backlog harness
         working-directory: cmux-tui
         run: cargo build -p chatmux-relay --example fieldwork_journal_backlog
@@ -71,6 +74,7 @@ jobs:
           set -euo pipefail
           mkdir -p cmux-tui/crates/chatmux-relay/examples
           cp scripts/fieldwork/cmux-resource-collapse/journal_backlog_base.rs cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+          python3 scripts/fieldwork/cmux-resource-collapse/journal_validation_runtime_repair.py cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
       - name: Generate recovery harness and measurement counters
         run: |
           set -euo pipefail
