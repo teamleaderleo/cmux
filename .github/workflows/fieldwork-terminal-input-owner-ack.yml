@@ -1,0 +1,115 @@
+name: fieldwork terminal input owner ack
+
+on:
+  push:
+    branches:
+      - fieldwork/cmux-terminal-input-owner-ack
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-terminal-input-owner-ack
+  cancel-in-progress: false
+
+jobs:
+  red-green:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Classify candidate state
+        id: state
+        shell: bash
+        run: |
+          if grep -Fq 'InputAck = 23' cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs; then
+            echo 'materialized=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'materialized=false' >> "$GITHUB_OUTPUT"
+            test "$(git merge-base HEAD eaa899cb20bd411019744fbd2bdedeb397f3070b)" = eaa899cb20bd411019744fbd2bdedeb397f3070b
+          fi
+
+      - name: Init ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Require the baseline discriminator to fail for false success
+        if: steps.state.outputs.materialized == 'false'
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui --test terminal_input_owner_ack \
+            receipted_terminal_input_waits_for_the_host_pty_write_boundary \
+            -- --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/baseline.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo '::error::baseline unexpectedly passed the owner-ack discriminator' >&2
+            exit 1
+          fi
+          grep -F \
+            'receipted input completed while the authoritative terminal host was stopped' \
+            "$RUNNER_TEMP/baseline.log"
+
+      - name: Apply candidate transform
+        if: steps.state.outputs.materialized == 'false'
+        run: python3 fieldwork/apply_terminal_input_owner_ack.py
+
+      - name: Format candidate
+        working-directory: cmux-tui
+        run: cargo fmt
+
+      - name: Inspect candidate diff
+        run: |
+          git diff --check
+          git diff --stat
+          git diff -- \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+            cmux-tui/crates/cmux-tui-core/src/surface.rs \
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs \
+            cmux-tui/crates/cmux-tui/tests/terminal_input_owner_ack.rs \
+            cmux-tui/spec/terminal-host.md
+
+      - name: Run owner-boundary regression
+        working-directory: cmux-tui
+        run: >-
+          cargo test -p cmux-tui --test terminal_input_owner_ack
+          receipted_terminal_input_waits_for_the_host_pty_write_boundary
+          -- --exact --nocapture
+
+      - name: Run terminal-host protocol unit tests
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib terminal_host_protocol::tests::
+
+      - name: Materialize green candidate on the owned fork
+        if: steps.state.outputs.materialized == 'false'
+        shell: bash
+        run: |
+          git config user.name 'Fieldwork automation'
+          git config user.email 'fieldwork@users.noreply.github.com'
+          git add \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+            cmux-tui/crates/cmux-tui-core/src/surface.rs \
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs \
+            cmux-tui/crates/cmux-tui/tests/terminal_input_owner_ack.rs \
+            cmux-tui/spec/terminal-host.md
+          test -n "$(git diff --cached --name-only)"
+          git commit -m 'fix(cmux-tui): wait for terminal host input acknowledgement'
+          git push origin HEAD:fieldwork/cmux-terminal-input-owner-ack
