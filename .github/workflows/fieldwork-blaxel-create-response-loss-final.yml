@@ -1,0 +1,157 @@
+name: Fieldwork Blaxel create final validation
+
+on:
+  push:
+    branches:
+      - fieldwork/blaxel-create-response-loss-final-carrier-20260902
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 5a453950eac6e765e9d2eeb98fa45a68016f98b9
+  FINAL_SHA: c3ecae669d87c31d0126c320177bd3a5dc6e1309
+  EXECUTED_SHA: 49ed8e224a91bb8d05a817b23377fd59e7ff1224
+  LEGACY_RED_SHA: 6c268876c5695621ca2b4a227cd9b1fb6da5c0fb
+  FINAL_BRANCH: fieldwork/blaxel-create-response-loss-final-20260902
+  EXECUTED_BRANCH: fieldwork/blaxel-create-response-loss-billing-fence-20260901
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout clean final branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FINAL_BRANCH }}
+          fetch-depth: 0
+
+      - name: Verify clean ancestry, bounded diff, and executed blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FINAL_SHA"
+          test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
+          expected=$'web/services/vms/drivers/blaxel.ts\nweb/services/vms/providerErrors.ts\nweb/services/vms/repository.ts\nweb/services/vms/workflows.ts\nweb/tests/vm-blaxel-create-billing-fence.test.ts\nweb/tests/vm-blaxel-create-response-loss-repair.test.ts\nweb/tests/vm-blaxel-create-response-loss-resume.test.ts'
+          test "$(git diff --name-only "$BASE_SHA" HEAD | sort)" = "$expected"
+          git diff --check "$BASE_SHA" HEAD
+          git fetch origin "$EXECUTED_BRANCH"
+          git diff --exit-code "$EXECUTED_SHA" HEAD -- \
+            web/services/vms/drivers/blaxel.ts \
+            web/services/vms/providerErrors.ts \
+            web/services/vms/repository.ts \
+            web/services/vms/workflows.ts \
+            web/tests/vm-blaxel-create-billing-fence.test.ts \
+            web/tests/vm-blaxel-create-response-loss-repair.test.ts \
+            web/tests/vm-blaxel-create-response-loss-resume.test.ts
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Start and migrate isolated test database
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: |
+          set -euo pipefail
+          ./scripts/db-local.sh up
+          bunx drizzle-kit migrate --config drizzle.config.ts
+
+      - name: Run billing fence and indeterminate-attempt tests
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-billing-fence.test.ts
+
+      - name: Run restart and exact-attempt adoption tests
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-response-loss-resume.test.ts
+
+      - name: Run provider-native response-loss repair tests
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-response-loss-repair.test.ts
+
+      - name: Run Blaxel provider controls
+        working-directory: web
+        run: |
+          set -euo pipefail
+          bun test tests/vm-blaxel-fetch-retry.test.ts
+          bun test tests/vm-blaxel-provider.test.ts
+
+      - name: Run existing transient create retry control
+        working-directory: web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: >-
+          bun test --max-concurrency=1 tests/vm-workflows.test.ts
+          -t 'transient provider create failure does not poison the idempotency key'
+
+      - name: Exercise canonical controls on clean repair
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$LEGACY_RED_SHA":web/tests/vm-blaxel-response-loss.test.ts > web/tests/vm-blaxel-response-loss.test.ts
+          cd web
+          bun test --max-concurrency=1 tests/vm-blaxel-response-loss.test.ts \
+            -t 'same-key retry after a definite pre-effect provider failure creates only one remote machine'
+          set +e
+          bun test --max-concurrency=1 tests/vm-blaxel-response-loss.test.ts \
+            -t 'same-key retry must not create B while response-lost Blaxel create A still exists' \
+            2>&1 | tee /tmp/legacy-red-on-clean-repair.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'same-key retry created B while response-lost provider effect A remained live and unowned' /tmp/legacy-red-on-clean-repair.log
+          echo 'legacy gateway fake remains RED because it ignores the provider-attempt identity contract'
+          cd ..
+          rm web/tests/vm-blaxel-response-loss.test.ts
+
+      - name: Tear down test database
+        if: always()
+        working-directory: web
+        env:
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+        run: ./scripts/db-local.sh down || true
