@@ -6,7 +6,7 @@ text = path.read_text()
 old = 'harness = replace_once(harness, old_handle, new_handle, "http handler")'
 new = '''harness, replacements = re.subn(
     r"async fn handle_http\\(.*?\\n}\\n\\nasync fn run_http_server\\(",
-    new_handle + "\\nasync fn run_http_server(",
+    lambda _match: new_handle + "\\nasync fn run_http_server(",
     harness,
     count=1,
     flags=re.S,
@@ -20,7 +20,7 @@ text = text.replace(old, new, 1)
 old = 'harness = replace_once(harness, old_server, new_server, "http server")'
 new = '''harness, replacements = re.subn(
     r"async fn run_http_server\\(.*?\\n}\\n\\nasync fn wait_for_counter\\(",
-    new_server + "\\nasync fn wait_for_counter(",
+    lambda _match: new_server + "\\nasync fn wait_for_counter(",
     harness,
     count=1,
     flags=re.S,
