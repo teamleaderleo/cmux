@@ -1,5 +1,6 @@
 name: Fork CI mark PR ready
 
+# One-shot helper for PR #16 after all fork CI gates passed.
 on:
   push:
     branches:
