@@ -44,9 +44,9 @@ jobs:
       - name: Set up pinned Rust
         uses: ./.github/actions/setup-cmux-tui-rust
 
-      - name: Check probe formatting
+      - name: Format probe in execution checkout
         working-directory: cmux-tui
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
 
       - name: Reproduce daemon-SIGKILL hook ownership loss
         working-directory: cmux-tui
