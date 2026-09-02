@@ -95,7 +95,9 @@ jobs:
 
       - name: Run terminal-host protocol unit tests
         working-directory: cmux-tui
-        run: cargo test -p cmux-tui-core --lib terminal_host_protocol::tests::
+        run: >-
+          cargo test -p cmux-tui-core --lib
+          terminal_host_protocol::tests::
 
       - name: Materialize green candidate on the owned fork
         if: steps.state.outputs.materialized == 'false'
