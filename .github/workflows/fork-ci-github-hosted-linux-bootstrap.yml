@@ -56,28 +56,28 @@ jobs:
           text = guard.read_text()
           start = text.index('check_no_bare_github_hosted_runners() {')
           end = text.index('\n\ncheck_no_self_hosted_fleet_runners() {', start)
-          replacement = '''check_fork_linux_runner_policy() {
-  # This is a personal fork. Ordinary Linux CI must work on GitHub-hosted
-  # runners without access to the upstream organization's paid runner fleet.
-  # LINUX_RUNNER remains an optional override, but stale paid Linux provider
-  # labels are forbidden because they queue forever when the provider is absent.
-  local hits
-  hits="$(grep -rnE "runs-on:.*(blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)" "$ROOT_DIR/.github/workflows" || true)"
-  if [[ -n "$hits" ]]; then
-    echo "FAIL: workflow still references an unavailable paid Linux runner in this fork:"
-    echo "$hits"
-    exit 1
-  fi
-  echo "PASS: fork Linux CI defaults to GitHub-hosted runners; no stale paid Linux provider labels remain"
-}'''
+          replacement = '\n'.join([
+              'check_fork_linux_runner_policy() {',
+              '  # This is a personal fork. Ordinary Linux CI must work on GitHub-hosted',
+              "  # runners without access to the upstream organization's paid runner fleet.",
+              '  # LINUX_RUNNER remains an optional override, but stale paid Linux provider',
+              '  # labels are forbidden because they queue forever when the provider is absent.',
+              '  local hits',
+              '  hits="$(grep -rnE \'runs-on:.*(blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)\' "$ROOT_DIR/.github/workflows" || true)"',
+              '  if [[ -n "$hits" ]]; then',
+              '    echo "FAIL: workflow still references an unavailable paid Linux runner in this fork:"',
+              '    echo "$hits"',
+              '    exit 1',
+              '  fi',
+              '  echo "PASS: fork Linux CI defaults to GitHub-hosted runners; no stale paid Linux provider labels remain"',
+              '}',
+          ])
           new = text[:start] + replacement + text[end:]
           new = new.replace(
               '# ci.yml jobs\ncheck_no_bare_github_hosted_runners\n',
               '# ci.yml jobs\ncheck_fork_linux_runner_policy\n',
               1,
           )
-          if new == text:
-              raise SystemExit('runner guard transformation made no change')
           guard.write_text(new)
           changed.append(str(guard))
 
