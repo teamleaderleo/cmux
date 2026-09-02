@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BASE_SHA: 060143a87548674fbbacd6558358c9a18a8798f3
-  TEST_SHA: 42096ee926e1f7a776e5d830bde1be30b2e3da36
+  TEST_SHA: b5e23cbbd331b5d337d50daca91ff688fc8f1357
   LEGACY_RED_SHA: 6c268876c5695621ca2b4a227cd9b1fb6da5c0fb
   CANDIDATE_BRANCH: fieldwork/blaxel-create-response-loss-resume-20260901
 
@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TEST_SHA"
-          test "$(git rev-parse HEAD^1)" = "$BASE_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
           test "$(git diff --name-only "$BASE_SHA" HEAD)" = "web/tests/vm-blaxel-create-response-loss-resume.test.ts"
           git diff --check "$BASE_SHA" HEAD
 
