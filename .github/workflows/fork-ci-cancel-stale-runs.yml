@@ -1,0 +1,38 @@
+name: Fork CI cancel stale runs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/fork-ci-cancel-stale-runs.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-stale:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Cancel queued and pending historical runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cancelled=0
+          for state in queued pending waiting requested; do
+            while IFS= read -r run_id; do
+              [[ -n "$run_id" ]] || continue
+              [[ "$run_id" != "$GITHUB_RUN_ID" ]] || continue
+              echo "Cancelling $state run $run_id"
+              if gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel" >/dev/null 2>&1; then
+                cancelled=$((cancelled + 1))
+              fi
+            done < <(
+              gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs?status=$state&per_page=100" \
+                --jq '.workflow_runs[].id'
+            )
+          done
+          echo "Cancelled $cancelled stale queued/pending runs"
