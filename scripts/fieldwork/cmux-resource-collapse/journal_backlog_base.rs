@@ -1,25 +1,20 @@
-#![cfg(unix)]
-
+use std::env;
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chatmux_relay::config::ManagedEvents;
+use chatmux_relay::config::{ManagedEvents, ManagedEventsMode};
 use chatmux_relay::journal_forwarder;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, TcpStream, UnixListener};
+use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-
-const PROTOCOL: &str = "cmux.protocol/2";
-const IDENTITY_ID: &str = "chatmux-journal-identity";
-const SUBSCRIBE_ID: &str = "chatmux-journal-subscribe";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HttpMode {
@@ -27,7 +22,7 @@ enum HttpMode {
     Stall,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct Options {
     sessions: usize,
     records_per_session: usize,
@@ -37,53 +32,47 @@ struct Options {
     load_millis: Option<u64>,
 }
 
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            sessions: 1,
-            records_per_session: 2_000,
-            payload_bytes: 2_048,
-            mode: HttpMode::Stall,
-            settle_millis: 750,
-            load_millis: None,
-        }
-    }
-}
-
 fn usage() -> ! {
     eprintln!(
-        "usage: cargo run -p chatmux-relay --example fieldwork_journal_backlog -- \\\n         [--sessions N] [--records-per-session N] [--payload-bytes N] \\\n         [--mode ack|stall] [--settle-millis N] [--load-millis N]"
+        "usage: fieldwork_journal_backlog [--sessions N] [--records-per-session N] [--payload-bytes N] [--mode ack|stall] [--settle-millis N] [--load-millis N]"
     );
     std::process::exit(2);
 }
 
 fn parse_options() -> Options {
-    let mut options = Options::default();
-    let mut args = std::env::args().skip(1);
-    while let Some(flag) = args.next() {
-        let mut value = || args.next().unwrap_or_else(|| usage());
-        match flag.as_str() {
-            "--sessions" => options.sessions = value().parse().unwrap_or_else(|_| usage()),
+    let mut options = Options {
+        sessions: 1,
+        records_per_session: 1000,
+        payload_bytes: 2048,
+        mode: HttpMode::Stall,
+        settle_millis: 500,
+        load_millis: None,
+    };
+    let mut args = env::args().skip(1);
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--sessions" => {
+                options.sessions = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
+            }
             "--records-per-session" => {
-                options.records_per_session = value().parse().unwrap_or_else(|_| usage())
+                options.records_per_session = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
             }
             "--payload-bytes" => {
-                options.payload_bytes = value().parse().unwrap_or_else(|_| usage())
+                options.payload_bytes = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
             }
             "--mode" => {
-                options.mode = match value().as_str() {
+                options.mode = match args.next().unwrap_or_else(|| usage()).as_str() {
                     "ack" => HttpMode::Ack,
                     "stall" => HttpMode::Stall,
                     _ => usage(),
-                }
+                };
             }
             "--settle-millis" => {
-                options.settle_millis = value().parse().unwrap_or_else(|_| usage())
+                options.settle_millis = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
             }
             "--load-millis" => {
-                options.load_millis = Some(value().parse().unwrap_or_else(|_| usage()))
+                options.load_millis = Some(args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage()));
             }
-            "-h" | "--help" => usage(),
             _ => usage(),
         }
     }
@@ -121,7 +110,10 @@ fn temporary_root() -> io::Result<PathBuf> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("cmux-fieldwork-journal-{}-{nonce}", std::process::id()));
+    // macOS Unix-domain sockets have a short SUN_LEN pathname ceiling. Use a
+    // deliberately compact experiment root instead of the much longer
+    // per-user path returned by temp_dir().
+    let root = PathBuf::from("/tmp").join(format!("jfw-{}-{nonce:x}", std::process::id()));
     fs::create_dir_all(&root)?;
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
     Ok(root)
@@ -154,19 +146,10 @@ fn current_fd_count() -> Option<usize> {
     None
 }
 
-async fn write_json_line<W: AsyncWriteExt + Unpin>(writer: &mut W, value: &Value) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
-    bytes.push(b'\n');
-    writer.write_all(&bytes).await
-}
-
-async fn read_json_line<R: AsyncBufReadExt + Unpin>(reader: &mut R) -> io::Result<Value> {
-    let mut line = String::new();
-    let read = reader.read_line(&mut line).await?;
-    if read == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "peer closed"));
-    }
-    serde_json::from_str(line.trim_end()).map_err(io::Error::other)
+async fn write_json_line(stream: &mut tokio::net::unix::OwnedWriteHalf, value: &Value) -> io::Result<()> {
+    let mut line = serde_json::to_vec(value)?;
+    line.push(b'\n');
+    stream.write_all(&line).await
 }
 
 async fn run_fake_session(
@@ -186,66 +169,52 @@ async fn run_fake_session(
     accepted.fetch_add(1, Ordering::SeqCst);
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
-
-    let identity = read_json_line(&mut reader).await?;
-    if identity.get("id").and_then(Value::as_str) != Some(IDENTITY_ID) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected identity request"));
+    let mut request = String::new();
+    tokio::select! {
+        _ = cancellation.cancelled() => return Ok(()),
+        read = reader.read_line(&mut request) => {
+            if read? == 0 {
+                return Ok(());
+            }
+        }
     }
-    let name = format!("fieldwork-{session_index:04}");
-    write_json_line(
-        &mut write_half,
-        &json!({
-            "protocol": PROTOCOL,
-            "type": "response",
-            "id": IDENTITY_ID,
-            "ok": true,
-            "result": [{"name": name}],
-        }),
-    )
-    .await?;
-
-    let subscribe = read_json_line(&mut reader).await?;
-    if subscribe.get("id").and_then(Value::as_str) != Some(SUBSCRIBE_ID) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected subscribe request"));
-    }
-    let stream_id = subscribe
-        .pointer("/params/stream_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing stream_id"))?
-        .to_owned();
-    let generation = format!("generation-{session_index:04}");
-    write_json_line(
-        &mut write_half,
-        &json!({
-            "protocol": PROTOCOL,
-            "type": "response",
-            "id": SUBSCRIBE_ID,
-            "ok": true,
-            "result": {"cursor": {"generation": generation, "revision": "0"}},
-        }),
-    )
-    .await?;
+    let generation = format!("fieldwork-generation-{session_index:04}");
+    let hello = json!({
+        "id": "chatmux-journal-subscribe",
+        "result": {
+            "protocol": "cmux.protocol/2",
+            "session": format!("fieldwork-{session_index:04}"),
+            "generation": generation,
+        }
+    });
+    write_json_line(&mut write_half, &hello).await?;
 
     let payload = "x".repeat(payload_bytes);
     for sequence in 1..=records {
         let envelope = json!({
-            "protocol": PROTOCOL,
-            "type": "stream_item",
-            "stream_id": stream_id,
-            "cursor": {
-                "generation": generation,
-                "revision": sequence.to_string(),
-            },
-            "sequence": sequence.to_string(),
-            "kind": "agent.fieldwork",
-            "payload": {"blob": payload},
+            "method": "session.stream",
+            "params": {
+                "type": "stream_item",
+                "sequence": sequence.to_string(),
+                "cursor": {
+                    "generation": generation,
+                    "revision": sequence.to_string(),
+                },
+                "payload": {
+                    "session": session_index,
+                    "sequence": sequence,
+                    "blob": payload,
+                }
+            }
         });
         let result = tokio::select! {
             _ = cancellation.cancelled() => return Ok(()),
             result = write_json_line(&mut write_half, &envelope) => result,
         };
-        result?;
-        generated.fetch_add(1, Ordering::Relaxed);
+        if result.is_err() {
+            return result;
+        }
+        generated.fetch_add(1, Ordering::SeqCst);
     }
     completed.fetch_add(1, Ordering::SeqCst);
     cancellation.cancelled().await;
@@ -253,46 +222,38 @@ async fn run_fake_session(
 }
 
 async fn read_http_request(stream: &mut TcpStream) -> io::Result<()> {
-    const MAX_REQUEST: usize = 8 * 1024 * 1024;
     let mut bytes = Vec::new();
-    let mut chunk = [0_u8; 16 * 1024];
-    let (header_end, content_length) = loop {
-        let read = stream.read(&mut chunk).await?;
+    let mut buffer = [0_u8; 8192];
+    let mut header_end = None;
+    let mut content_length = 0_usize;
+    loop {
+        let read = stream.read(&mut buffer).await?;
         if read == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "HTTP request closed"));
+            return Ok(());
         }
-        bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > MAX_REQUEST {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "HTTP request too large"));
+        bytes.extend_from_slice(&buffer[..read]);
+        if header_end.is_none() {
+            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let end = position + 4;
+                let header = String::from_utf8_lossy(&bytes[..end]);
+                content_length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                header_end = Some(end);
+            }
         }
-        if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            let header_end = index + 4;
-            let headers = std::str::from_utf8(&bytes[..header_end])
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "HTTP headers are not UTF-8"))?;
-            let content_length = headers
-                .lines()
-                .find_map(|line| {
-                    let (name, value) = line.split_once(':')?;
-                    name.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse::<usize>().ok())
-                        .flatten()
-                })
-                .unwrap_or(0);
-            break (header_end, content_length);
-        }
-    };
-    let required = header_end.saturating_add(content_length);
-    while bytes.len() < required {
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "HTTP body closed"));
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > MAX_REQUEST {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "HTTP request too large"));
+        if let Some(end) = header_end {
+            if bytes.len() >= end.saturating_add(content_length) {
+                return Ok(());
+            }
         }
     }
-    Ok(())
 }
 
 async fn handle_http(
@@ -308,7 +269,7 @@ async fn handle_http(
             cancellation.cancelled().await;
         }
         HttpMode::Ack => {
-            let body = br#"{"cursors":{}}"#;
+            let body = br#"{\"cursors\":{}}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
