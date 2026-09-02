@@ -31,4 +31,8 @@ if text.count(old) != 1:
     raise AssertionError("missing strict http server replacement")
 text = text.replace(old, new, 1)
 
+# The generator embeds Rust response strings inside Python strings. Preserve the
+# Rust escape sequences instead of letting Python turn them into literal CRLFs.
+text = text.replace(r"\r\n", r"\\r\\n")
+
 path.write_text(text)
