@@ -1,0 +1,51 @@
+name: Fieldwork terminal input owner ACK tree identity
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-tree-identity
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+
+      - name: Preserve exact refiners and fetch current upstream
+        run: |
+          cp -a .fieldwork /tmp/terminal-input-fieldwork
+          git remote add upstream https://github.com/manaflow-ai/cmux.git
+          git fetch --no-tags upstream 9e2dd50957936153ca0da61d2f079937674f9375
+
+      - name: Rebuild exact synchronous tree
+        run: |
+          git config user.name Fieldwork
+          git config user.email fieldwork@users.noreply.github.com
+          git checkout --detach 9e2dd50957936153ca0da61d2f079937674f9375
+          git cherry-pick a61624869fb9c27f4131ee4757e5e4e987f22580
+          test "$(git rev-parse 'HEAD^{tree}')" = 300ed73dd3d49872b67041dfd28462b3d8d6c934
+
+      - name: Regenerate split-phase refinement and require exact tree
+        run: |
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_split_phase.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_split_phase_controls.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_delivery_classification.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_visibility.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_rustfmt.py
+          python3 /tmp/terminal-input-fieldwork/refine_terminal_input_owner_ack_interactive_control.py
+          git diff --check
+          git add \
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs \
+            cmux-tui/crates/cmux-tui-core/src/surface.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+            cmux-tui/spec/terminal-host.md
+          test "$(git write-tree)" = a56a8e828a906b87df9169790b2beb053373648f
