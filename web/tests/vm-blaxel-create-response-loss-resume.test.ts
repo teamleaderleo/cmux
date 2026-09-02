@@ -161,6 +161,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
   // only the durable attempt identity and no committed provider_vm_id.
   const providerState = new Set<string>([committedA]);
   let createCalls = 0;
+  const observedCreateIdentities: string[] = [];
   const provider: VmProviderGatewayShape = {
     ...unusedProviderMethods(),
     create: (_provider, options) => Effect.sync(() => {
@@ -168,7 +169,8 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
       const observed = typeof options.providerMetadata?.createIdentity === "string"
         ? options.providerMetadata.createIdentity.trim()
         : "";
-      expect(observed).toBe(identity);
+      expect(observed.length).toBeGreaterThan(0);
+      observedCreateIdentities.push(observed);
       const providerVmId = externalId(observed);
       // Model Blaxel createIfNotExist: replay returns the already-committed A.
       providerState.add(providerVmId);
@@ -190,6 +192,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
   const recovered = await Effect.runPromise(createVm(input).pipe(Effect.provide(layer)));
   expect(recovered.providerVmId).toBe(committedA);
   expect(createCalls).toBe(1);
+  expect(observedCreateIdentities).toEqual([identity]);
   expect([...providerState]).toEqual([committedA]);
 
   // Crash after provider identity commit but before user-visible success: the
@@ -197,6 +200,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
   const repeated = await Effect.runPromise(createVm(input).pipe(Effect.provide(layer)));
   expect(repeated.providerVmId).toBe(committedA);
   expect(createCalls).toBe(1);
+  expect(observedCreateIdentities).toEqual([identity]);
   expect([...providerState]).toEqual([committedA]);
 
   const visible = await Effect.runPromise(
@@ -219,5 +223,8 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
   const fresh = await Effect.runPromise(createVm(freshInput).pipe(Effect.provide(layer)));
   expect(fresh.providerVmId).not.toBe(committedA);
   expect(createCalls).toBe(2);
+  expect(observedCreateIdentities).toHaveLength(2);
+  expect(observedCreateIdentities[0]).toBe(identity);
+  expect(observedCreateIdentities[1]).not.toBe(identity);
   expect([...providerState]).toEqual([fresh.providerVmId]);
 });
