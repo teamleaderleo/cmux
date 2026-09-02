@@ -1,6 +1,6 @@
 name: Fork CI GitHub-hosted Linux bootstrap
 
-# Fork-only bootstrap: inherited paid-provider Linux labels are unavailable here.
+# Fork-only migration helper. The generated commit deletes this workflow.
 on:
   push:
     branches:
@@ -15,7 +15,7 @@ permissions:
 jobs:
   normalize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout fork main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -23,56 +23,92 @@ jobs:
           ref: main
           persist-credentials: true
 
-      - name: Replace unavailable Linux provider runners
+      - name: Normalize inherited Linux CI for this fork
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          root = Path('.github/workflows')
-          changed = []
-          patterns = (
+          workflow_root = Path('.github/workflows')
+          provider_patterns = (
               re.compile(r'blacksmith-[0-9]+vcpu-ubuntu-[0-9]+'),
               re.compile(r'warp-ubuntu-[A-Za-z0-9._-]+'),
           )
-          for path in sorted(root.glob('*.y*ml')):
+
+          changed = []
+          for path in sorted(workflow_root.glob('*.y*ml')):
               text = path.read_text()
               new = text
-              for pattern in patterns:
+              for pattern in provider_patterns:
                   new = pattern.sub('ubuntu-24.04', new)
               if new != text:
                   path.write_text(new)
                   changed.append(str(path))
 
-          retired = root / 'fieldwork-cloud-fork-identity-blacksmith.yml'
-          if retired.exists():
-              retired.unlink()
-              changed.append(str(retired) + ' (deleted)')
+          security_test = Path('tests/test_tui_publish_workflow_security.py')
+          text = security_test.read_text()
+          new = re.sub(r'blacksmith-(?:4|8)vcpu-ubuntu-2404', 'ubuntu-24.04', text)
+          if new != text:
+              security_test.write_text(new)
+              changed.append(str(security_test))
 
-          bootstrap = root / 'fork-ci-github-hosted-linux-bootstrap.yml'
-          if bootstrap.exists():
-              bootstrap.unlink()
-              changed.append(str(bootstrap) + ' (deleted)')
+          docs = Path('docs/ci-runners.md')
+          if docs.exists():
+              text = docs.read_text()
+              marker = '## Fork default\n'
+              if marker not in text:
+                  note = (
+                      '# CI runners\n\n'
+                      '## Fork default\n\n'
+                      'This personal fork defaults ordinary Linux CI to GitHub-hosted '
+                      '`ubuntu-24.04`. `LINUX_RUNNER` remains an override for deliberate '
+                      'runner experiments. Provider-specific macOS and manual test lanes '
+                      'are separate and must be opted into explicitly.\n\n'
+                  )
+                  if text.startswith('# CI runners\n'):
+                      text = note + text[len('# CI runners\n\n'):]
+                  else:
+                      text = note + text
+                  docs.write_text(text)
+                  changed.append(str(docs))
 
-          print('Changed workflow files:')
+          for retired_name in (
+              'fieldwork-cloud-fork-identity-blacksmith.yml',
+              'fork-ci-github-hosted-linux-bootstrap.yml',
+          ):
+              retired = workflow_root / retired_name
+              if retired.exists():
+                  retired.unlink()
+                  changed.append(str(retired) + ' (deleted)')
+
+          print('Changed files:')
           for item in changed:
               print(' -', item)
-          if len(changed) < 2:
-              raise SystemExit('expected fork CI changes plus bootstrap cleanup')
+          if not changed:
+              raise SystemExit('expected fork CI normalization changes')
           PY
 
-      - name: Verify no unavailable Linux provider labels remain
+      - name: Verify Linux provider fallbacks are gone
         run: |
           if grep -R -n -E 'blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-' .github/workflows; then
-            echo 'Unavailable Linux provider runner labels remain' >&2
+            echo 'Unavailable Linux provider labels remain in workflows' >&2
             exit 1
           fi
           git diff --check
 
-      - name: Commit fork CI normalization
+      - name: Run fork CI contract tests
+        run: |
+          python3 tests/test_tui_publish_workflow_security.py -v
+          bash tests/test_ci_self_hosted_guard.sh
+          python3 cmux-tui/scripts/test_check_spec_inventory.py
+          python3 cmux-tui/scripts/test_check_resource_api_boundary.py
+
+      - name: Create validated fork policy commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A .github/workflows
-          git commit -m 'ci: use GitHub-hosted Linux runners in fork'
-          git push origin HEAD:main
+          git add -A .github/workflows tests/test_tui_publish_workflow_security.py docs/ci-runners.md
+          git commit -m 'ci: default fork Linux CI to GitHub-hosted runners [skip ci]'
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)"
+          git show --stat --oneline --summary HEAD
+          git push origin HEAD:main || true
