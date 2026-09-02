@@ -1,5 +1,6 @@
 name: Fork CI disable upstream automation
 
+# One-shot migration: keep upstream release automation manual-only in this fork.
 on:
   push:
     branches:
