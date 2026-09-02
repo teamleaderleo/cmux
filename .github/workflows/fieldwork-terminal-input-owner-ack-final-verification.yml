@@ -1,0 +1,90 @@
+name: Fieldwork terminal input ACK final verification
+
+on:
+  push:
+    branches: [fieldwork/terminal-input-owner-ack-final-verification]
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init build dependencies
+        run: |
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Focused repair regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib hosted_input_ack_is_a_targeted_control_response --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib schema_eleven_receipts_gain_origin_scope_without_losing_replays --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib legacy_record_is_adoptable_shape_but_never_unsafely_reaped --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Check specs and bindings
+        run: |
+          python3 cmux-tui/scripts/test_check_spec_inventory.py
+          python3 cmux-tui/scripts/check-spec-inventory.py
+          python3 cmux-tui/scripts/test_check_resource_api_boundary.py
+          python3 cmux-tui/scripts/check-resource-api-boundary.py
+          python3 cmux-tui/bindings/codegen/generate.py --check
+
+      - name: Require only reproduced baseline full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          cat > /tmp/allowed-failures.txt <<'EOF'
+          mux::tests::available_agent_report_wakes_pending_hook_projection_retry
+          mux::tests::committed_agent_hook_events_drive_the_terminal_agent_record
+          mux::tests::direct_hook_report_with_new_session_can_follow_hook_end
+          mux::tests::new_non_hook_session_can_start_after_hook_session_end
+          mux::tests::permanently_failed_hook_projection_is_quarantined
+          mux::tests::reopened_ended_hook_fence_rejects_late_events
+          mux::tests::sessionless_legacy_hook_identity_survives_restart
+          resource_api::tests::snapshot_cursor_and_auxiliary_values_share_one_durable_cut
+          workspace_registry::tests::current_schema_canonicalizes_equivalent_formatted_browser_view_predicate_once
+          EOF
+          sort -o /tmp/allowed-failures.txt /tmp/allowed-failures.txt
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/full.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          failures=set(); active=False
+          for line in Path('/tmp/full.log').read_text(errors='replace').splitlines():
+              if line.strip() == 'failures:':
+                  active=True
+                  continue
+              if active and line.startswith('test result:'):
+                  break
+              if active and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/full-failures.txt').write_text(''.join(f'{x}\n' for x in sorted(failures)))
+          PY
+          echo "full status=$status"
+          cat /tmp/full-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/full.log
+            test -s /tmp/full-failures.txt
+          fi
+          comm -23 /tmp/full-failures.txt /tmp/allowed-failures.txt > /tmp/unexpected.txt
+          if [ -s /tmp/unexpected.txt ]; then
+            echo 'unexpected failures:' >&2
+            cat /tmp/unexpected.txt >&2
+            exit 1
+          fi
