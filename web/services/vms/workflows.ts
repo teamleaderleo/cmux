@@ -100,6 +100,9 @@ const ACTIVE_IDENTITY_REVOKE_HOT_PATH_LIMIT = 8;
 const ACCOUNT_DELETION_IDENTITY_REVOKE_BATCH = 8;
 const VM_STATUS_RECONCILE_BATCH_LIMIT = 200;
 const PREVIEW_ENDPOINT_LEASE_TTL_MS = 12 * 60 * 60 * 1000;
+// API VM create requests may run for ten minutes. A provisioning row older than
+// this has outlived the request that owned it and can be claimed by one retry.
+const BLAXEL_CREATE_RESUME_AFTER_MS = 11 * 60 * 1000;
 
 type ExistingVmAccessInput = {
   readonly userId: string;
@@ -341,6 +344,83 @@ export function createVm(input: {
         );
       }
       if (!existing.providerVmId) {
+        const createIdentity = existing.providerMetadata?.createIdentity;
+        if (
+          input.provider === "blaxel" &&
+          existing.provider === "blaxel" &&
+          typeof createIdentity === "string" &&
+          createIdentity.trim() &&
+          repo.claimStaleCreateAttempt
+        ) {
+          const claimed = yield* repo.claimStaleCreateAttempt({
+            id: existing.id,
+            before: new Date(Date.now() - BLAXEL_CREATE_RESUME_AFTER_MS),
+          });
+          if (claimed) {
+            const handle = yield* measureVmEffect(
+              input.timing,
+              "provider_create_resume",
+              providers.create(input.provider, {
+                image: input.image,
+                providerMetadata: claimed.providerMetadata,
+                bakedFreestyleSignedAdmin: input.bakedFreestyleSignedAdmin,
+                homeVolume: input.perMachineHome
+                  ? homeVolumeTemplateForUser(input.userId)
+                  : input.persistentHome
+                    ? homeVolumeNameForUser(input.userId)
+                    : undefined,
+                memoryMb: input.memoryMb,
+                envs: input.envs,
+              }),
+            ).pipe(
+              Effect.tapError((err) =>
+                repo.recordUsageEvent({
+                  userId: input.userId,
+                  billingTeamId: input.billingTeamId,
+                  billingPlanId: input.billingPlanId,
+                  vmId: claimed.id,
+                  eventType: "vm.create.reconcile_failed",
+                  provider: input.provider,
+                  imageId: input.image,
+                  metadata: { operation: err.operation, message: errorMessage(err.cause) },
+                }).pipe(Effect.catchAll(() => Effect.void)),
+              ),
+            );
+
+            const running = yield* measureVmEffect(
+              input.timing,
+              "mark_running_resume",
+              repo.markCreateRunning({
+                id: claimed.id,
+                providerVmId: handle.providerVmId,
+                image: handle.image,
+                imageVersion: input.imageVersion ?? null,
+                providerMetadata: handle.providerMetadata ?? claimed.providerMetadata,
+              }),
+            ).pipe(
+              Effect.catchAll((err) =>
+                Effect.gen(function* () {
+                  yield* rollbackProviderCreate(providers, input.provider, handle);
+                  yield* repo.markCreateFailed({
+                    id: claimed.id,
+                    code: "database_finalize_failed",
+                    message: "Cloud VM state update failed after create recovery.",
+                  }).pipe(Effect.catchAll(() => Effect.void));
+                  yield* recordCreateFailureEvent(
+                    repo,
+                    input,
+                    claimed,
+                    "database_finalize_failed",
+                    errorMessage(err.cause),
+                  ).pipe(Effect.catchAll(() => Effect.void));
+                  return yield* Effect.fail(err);
+                }),
+              ),
+            );
+            yield* recordCreateSuccessEvents(repo, input, running);
+            return vmEntryFromRow(running);
+          }
+        }
         return yield* Effect.fail(
           new VmCreateInProgressError({ idempotencyKey: input.idempotencyKey ?? "" }),
         );

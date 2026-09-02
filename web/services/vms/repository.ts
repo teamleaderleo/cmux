@@ -98,6 +98,10 @@ export type VmRepositoryShape = {
     readonly maxActiveVms: number;
     readonly idempotencyKey?: string;
   }) => Effect.Effect<BeginCreateResult, VmDatabaseError | VmCreateDisabledError | VmAccountDeletionInProgressError | VmLimitExceededError>;
+  readonly claimStaleCreateAttempt?: (input: {
+    readonly id: string;
+    readonly before: Date;
+  }) => Effect.Effect<CloudVmRow | null, VmDatabaseError>;
   readonly beginBaseOpen: (input: {
     readonly userId: string;
     readonly billingTeamId: string;
@@ -605,6 +609,22 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
       catch: (cause) => isVmCreateDisabledError(cause) || isVmAccountDeletionInProgressError(cause) || isVmLimitExceededError(cause)
         ? cause
         : new VmDatabaseError({ operation: "beginCreate", cause }),
+    }),
+
+  claimStaleCreateAttempt: (input) =>
+    dbEffect("claimStaleCreateAttempt", async () => {
+      const db = cloudDb();
+      const [vm] = await db
+        .update(cloudVms)
+        .set({ updatedAt: new Date() })
+        .where(and(
+          eq(cloudVms.id, input.id),
+          eq(cloudVms.status, "provisioning"),
+          isNull(cloudVms.providerVmId),
+          lt(cloudVms.updatedAt, input.before),
+        ))
+        .returning();
+      return vm ?? null;
     }),
 
   beginBaseOpen: (input) =>

@@ -186,7 +186,7 @@ test("Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous 
       });
 
     if (method === "POST" && url.endsWith("/volumes")) return respond(200, {});
-    if (method === "POST" && url.endsWith("/sandboxes")) {
+    if (method === "POST" && url.endsWith("/sandboxes?createIfNotExist=true")) {
       const parsed = JSON.parse(String(init?.body)) as { metadata?: { name?: string } };
       machineName = parsed.metadata?.name ?? "";
       // Remote commit happened. The response path then disappeared.
@@ -225,7 +225,7 @@ test("Blaxel re-reads the deterministic sandbox before cleaning up an ambiguous 
 
     expect(machineName).not.toBe("");
     expect(machineName.endsWith(`-${expectedSuffix}`)).toBe(true);
-    const createPost = calls.findIndex((call) => call.method === "POST" && call.url.endsWith("/sandboxes"));
+    const createPost = calls.findIndex((call) => call.method === "POST" && call.url.endsWith("/sandboxes?createIfNotExist=true"));
     const recoveryGet = calls.findIndex((call) => call.method === "GET" && call.url.endsWith(`/sandboxes/${machineName}`));
     const volumeDelete = calls.findIndex((call) => call.method === "DELETE" && call.url.endsWith(`/volumes/cmux-home-fieldwork-${machineName}`));
     expect(createPost).toBeGreaterThan(-1);

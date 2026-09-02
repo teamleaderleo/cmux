@@ -857,6 +857,9 @@ export class BlaxelProvider implements VMProvider {
             ? options.providerMetadata.createIdentity.trim() || undefined
             : undefined;
           let name = createIdentity ? vmNameForCreateIdentity(createIdentity) : friendlyVmName();
+          const sandboxCreateUrl = createIdentity
+            ? `${CONTROL_PLANE_BASE}/sandboxes?createIfNotExist=true`
+            : `${CONTROL_PLANE_BASE}/sandboxes`;
           let homeVolume = resolveHomeVolume(name);
           let created: BlaxelSandbox | null = null;
           for (let attempt = 0; attempt < 4 && !created; attempt += 1) {
@@ -866,7 +869,7 @@ export class BlaxelProvider implements VMProvider {
               volumeCreated = await timedStep("ensure_home_volume", () => this.ensureHomeVolume(volume, homeVolumeMb));
             }
             try {
-              created = await timedStep("create_sandbox", () => blaxelFetch<BlaxelSandbox>("POST", `${CONTROL_PLANE_BASE}/sandboxes`, {
+              created = await timedStep("create_sandbox", () => blaxelFetch<BlaxelSandbox>("POST", sandboxCreateUrl, {
                 metadata: { name },
                 spec: {
                   runtime: {
