@@ -1,0 +1,72 @@
+name: Fork CI policy
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "docs/ci-runners.md"
+      - "tests/test_ci_self_hosted_guard.sh"
+      - "tests/test_tui_publish_workflow_security.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "docs/ci-runners.md"
+      - "tests/test_ci_self_hosted_guard.sh"
+      - "tests/test_tui_publish_workflow_security.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Reject unavailable upstream Linux runner providers
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          bad = re.compile(r'(?:blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)')
+          offenders = []
+          for path in sorted(Path('.github/workflows').glob('*.y*ml')):
+              for number, line in enumerate(path.read_text().splitlines(), 1):
+                  if bad.search(line):
+                      offenders.append(f'{path}:{number}: {line.strip()}')
+          if offenders:
+              raise SystemExit(
+                  'Unavailable upstream Linux provider labels are forbidden in this fork:\n'
+                  + '\n'.join(offenders)
+              )
+          PY
+
+      - name: Keep upstream publishing automation opt-in
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          for filename in ('nightly.yml', 'ios-testflight.yml'):
+              path = Path('.github/workflows') / filename
+              text = path.read_text()
+              start = text.index('on:\n')
+              end = text.index('\nconcurrency:\n', start)
+              block = text[start:end]
+              assert '  workflow_dispatch:' in block, f'{filename} must remain manually runnable'
+              assert '  schedule:' not in block, f'{filename} must not schedule itself in this fork'
+              assert '  push:' not in block, f'{filename} must not auto-run on fork pushes'
+          PY
+
+      - name: Run runner safety contract
+        run: bash tests/test_ci_self_hosted_guard.sh
