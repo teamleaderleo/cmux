@@ -46,6 +46,14 @@ jobs:
       - name: Select repository Xcode
         run: ./scripts/select-ci-xcode.sh
 
+      - name: Provision pinned GhosttyKit
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/download-prebuilt-ghosttykit.sh
+          test -f GhosttyKit.xcframework/Info.plist
+          echo "GhosttyKit revision: $(git -C ghostty rev-parse HEAD)"
+
       - name: Prove regression commit is red
         shell: bash
         run: |
