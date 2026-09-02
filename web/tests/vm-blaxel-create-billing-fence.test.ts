@@ -8,6 +8,7 @@ import {
   noOpVmBillingGateway,
   type VmBillingGatewayShape,
 } from "../services/vms/billingGateway";
+import { VmProviderOperationError } from "../services/vms/errors";
 import {
   VmProviderGateway,
   type VmProviderGatewayShape,
@@ -126,6 +127,15 @@ dbTest("fresh Blaxel create durably fences provider start after billing succeeds
   expect(created.providerVmId.startsWith("blaxel-")).toBe(true);
   expect(order).toEqual(["billing", "provider"]);
   expect(observedMetadata?.providerCreateReady).toBe(true);
+
+  const rows = await sql<{ providerMetadata: Record<string, unknown> }[]>`
+    select provider_metadata as "providerMetadata"
+    from cloud_vms
+    where provider_vm_id = ${created.providerVmId}
+  `;
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.providerMetadata.providerCreateReady).toBe(true);
+  expect(rows[0]?.providerMetadata.createIdentity).toBe(observedMetadata?.createIdentity);
 });
 
 dbTest("stale Blaxel row before durable billing fence never reaches provider", async () => {
@@ -182,4 +192,119 @@ dbTest("stale Blaxel row before durable billing fence never reaches provider", a
     where id = ${intent.vm.id}
   `;
   expect(rows).toEqual([{ status: "provisioning", providerVmId: null }]);
+});
+
+dbTest("indeterminate Blaxel create retains one billing reservation until exact attempt is adopted", async () => {
+  if (!sql) throw new Error("test database not initialized");
+  await sql`truncate cloud_vm_billing_grants, cloud_vm_usage_events, cloud_vm_leases, cloud_vms restart identity cascade`;
+
+  const input = createInput("indeterminate-create-retains-billing");
+  let reserveCalls = 0;
+  let refundCalls = 0;
+  let providerCalls = 0;
+  const providerState = new Map<string, string>();
+
+  const billing: VmBillingGatewayShape = {
+    ...noOpVmBillingGateway(),
+    reserveCreate: () => Effect.sync(() => {
+      reserveCalls += 1;
+      return {
+        kind: "stack_item" as const,
+        itemId: "fieldwork-credit",
+        customerType: "team" as const,
+        customerId: input.billingTeamId,
+        amount: 1,
+      };
+    }),
+    refundCreate: () => Effect.sync(() => {
+      refundCalls += 1;
+    }),
+  };
+
+  const provider: VmProviderGatewayShape = {
+    ...unusedProviderMethods(),
+    create: (_provider, options) => {
+      providerCalls += 1;
+      expect(options.providerMetadata?.providerCreateReady).toBe(true);
+      const identity = options.providerMetadata?.createIdentity;
+      expect(typeof identity).toBe("string");
+      const createIdentity = String(identity);
+      const existing = providerState.get(createIdentity);
+      if (existing) {
+        return Effect.succeed({
+          provider: "blaxel" as const,
+          providerVmId: existing,
+          status: "running" as const,
+          image: input.image,
+          createdAt: Date.now(),
+          providerMetadata: options.providerMetadata,
+        });
+      }
+
+      providerState.set(createIdentity, "blaxel-indeterminate-A");
+      const outcomeUnknown = Object.assign(new Error("sandbox POST response lost"), {
+        code: "provider_create_indeterminate",
+      });
+      return Effect.fail(new VmProviderOperationError({
+        provider: "blaxel",
+        operation: "create",
+        cause: outcomeUnknown,
+      }));
+    },
+    destroy: () => Effect.void,
+  };
+
+  let firstFailed = false;
+  try {
+    await Effect.runPromise(createVm(input).pipe(Effect.provide(testLayer(provider, billing))));
+  } catch {
+    firstFailed = true;
+  }
+  expect(firstFailed).toBe(true);
+  expect(reserveCalls).toBe(1);
+  expect(refundCalls).toBe(0);
+  expect(providerCalls).toBe(1);
+  expect(providerState.size).toBe(1);
+
+  const pendingRows = await sql<{
+    id: string;
+    status: string;
+    providerVmId: string | null;
+    providerMetadata: Record<string, unknown>;
+  }[]>`
+    select id, status, provider_vm_id as "providerVmId", provider_metadata as "providerMetadata"
+    from cloud_vms
+    where idempotency_key = ${input.idempotencyKey}
+  `;
+  expect(pendingRows).toHaveLength(1);
+  const pending = pendingRows[0]!;
+  expect(pending.status).toBe("provisioning");
+  expect(pending.providerVmId).toBeNull();
+  expect(pending.providerMetadata.providerCreateReady).toBe(true);
+  const firstIdentity = pending.providerMetadata.createIdentity;
+  expect(typeof firstIdentity).toBe("string");
+  await ageIntent(pending.id);
+
+  const recovered = await Effect.runPromise(
+    createVm(input).pipe(Effect.provide(testLayer(provider, billing))),
+  );
+  expect(recovered.providerVmId).toBe("blaxel-indeterminate-A");
+  expect(reserveCalls).toBe(1);
+  expect(refundCalls).toBe(0);
+  expect(providerCalls).toBe(2);
+  expect(providerState.size).toBe(1);
+
+  const runningRows = await sql<{
+    status: string;
+    providerVmId: string | null;
+    providerMetadata: Record<string, unknown>;
+  }[]>`
+    select status, provider_vm_id as "providerVmId", provider_metadata as "providerMetadata"
+    from cloud_vms
+    where id = ${pending.id}
+  `;
+  expect(runningRows).toHaveLength(1);
+  expect(runningRows[0]?.status).toBe("running");
+  expect(runningRows[0]?.providerVmId).toBe("blaxel-indeterminate-A");
+  expect(runningRows[0]?.providerMetadata.createIdentity).toBe(firstIdentity);
 });
