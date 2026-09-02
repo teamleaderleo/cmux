@@ -257,7 +257,7 @@ fn wait_for_starts(path: &Path, count: usize) -> Vec<HookStart> {
 
 fn process_alive(pid: libc::pid_t) -> bool {
     // SAFETY: signal zero only probes process existence.
-    unsafe { libc::kill(pid, 0) } == 0
+    (unsafe { libc::kill(pid, 0) }) == 0
 }
 
 fn kill_process(pid: libc::pid_t) {
