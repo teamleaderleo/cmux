@@ -22,8 +22,8 @@ jobs:
 
       - name: Require source continuity and preserve patchers
         run: |
-          old_main=6044a8b3f43152d2e6fc17f771fd4b277b393118
-          current_main=61bc1e4a6d1c882d552199f4b2785ea45c177ae2
+          old_main=61bc1e4a6d1c882d552199f4b2785ea45c177ae2
+          current_main=9e2dd50957936153ca0da61d2f079937674f9375
           test "$(git merge-base "$old_main" "$current_main")" = "$old_main"
           owner_paths=(
             cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
@@ -42,11 +42,11 @@ jobs:
         run: |
           git config user.name "Fieldwork"
           git config user.email "fieldwork@users.noreply.github.com"
-          git checkout --detach 61bc1e4a6d1c882d552199f4b2785ea45c177ae2
+          git checkout --detach 9e2dd50957936153ca0da61d2f079937674f9375
           git cherry-pick a61624869fb9c27f4131ee4757e5e4e987f22580
           baseline=$(git rev-parse HEAD)
           echo "$baseline" > /tmp/current-baseline-sha
-          git diff --name-only 61bc1e4a6d1c882d552199f4b2785ea45c177ae2 "$baseline" | sort > /tmp/current-baseline-files.txt
+          git diff --name-only 9e2dd50957936153ca0da61d2f079937674f9375 "$baseline" | sort > /tmp/current-baseline-files.txt
           cat > /tmp/expected-baseline-files.txt <<'EOF'
           cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
           cmux-tui/crates/cmux-tui-core/src/surface.rs
