@@ -98,6 +98,7 @@ export type VmRepositoryShape = {
     readonly maxActiveVms: number;
     readonly idempotencyKey?: string;
   }) => Effect.Effect<BeginCreateResult, VmDatabaseError | VmCreateDisabledError | VmAccountDeletionInProgressError | VmLimitExceededError>;
+  readonly markCreateAttemptReady?: (id: string) => Effect.Effect<CloudVmRow, VmDatabaseError>;
   readonly claimStaleCreateAttempt?: (input: {
     readonly id: string;
     readonly before: Date;
@@ -611,6 +612,27 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
         : new VmDatabaseError({ operation: "beginCreate", cause }),
     }),
 
+  markCreateAttemptReady: (id) =>
+    dbEffect("markCreateAttemptReady", async () => {
+      const db = cloudDb();
+      const [vm] = await db
+        .update(cloudVms)
+        .set({
+          providerMetadata: sql`coalesce(${cloudVms.providerMetadata}, '{}'::jsonb) || '{"providerCreateReady":true}'::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(cloudVms.id, id),
+          eq(cloudVms.status, "provisioning"),
+          eq(cloudVms.provider, "blaxel"),
+          isNull(cloudVms.providerVmId),
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'createIdentity', '') <> ''`,
+        ))
+        .returning();
+      if (!vm) throw new Error(`create attempt ${id} is no longer provider-eligible`);
+      return vm;
+    }),
+
   claimStaleCreateAttempt: (input) =>
     dbEffect("claimStaleCreateAttempt", async () => {
       const db = cloudDb();
@@ -620,8 +642,11 @@ export const VmRepositoryLive = Layer.succeed(VmRepository, {
         .where(and(
           eq(cloudVms.id, input.id),
           eq(cloudVms.status, "provisioning"),
+          eq(cloudVms.provider, "blaxel"),
           isNull(cloudVms.providerVmId),
           lt(cloudVms.updatedAt, input.before),
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'providerCreateReady', 'false') = 'true'`,
+          sql`coalesce(${cloudVms.providerMetadata} ->> 'createIdentity', '') <> ''`,
         ))
         .returning();
       return vm ?? null;

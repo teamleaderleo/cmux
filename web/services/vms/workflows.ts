@@ -33,12 +33,16 @@ import {
   VmSnapshotNotFoundError,
   isVmCreateCreditsInsufficientError,
   isVmLimitExceededError,
+  VmDatabaseError,
   vmWorkflowErrorCause,
-  type VmDatabaseError,
   type VmWorkflowError,
 } from "./errors";
 import { isVmFreeAccessExpired, maxActiveVmsForPlan, vmFreeAccessWindowDays } from "./entitlements";
-import { isProviderIdentityNotFoundError, isProviderNotFoundError } from "./providerErrors";
+import {
+  isProviderCreateIndeterminateError,
+  isProviderIdentityNotFoundError,
+  isProviderNotFoundError,
+} from "./providerErrors";
 import { VmProviderGateway, VmProviderGatewayLive, type VmProviderGatewayShape } from "./providerGateway";
 import {
   PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE,
@@ -350,6 +354,7 @@ export function createVm(input: {
           existing.provider === "blaxel" &&
           typeof createIdentity === "string" &&
           createIdentity.trim() &&
+          existing.providerMetadata?.providerCreateReady === true &&
           repo.claimStaleCreateAttempt
         ) {
           const claimed = yield* repo.claimStaleCreateAttempt({
@@ -379,10 +384,16 @@ export function createVm(input: {
                   billingTeamId: input.billingTeamId,
                   billingPlanId: input.billingPlanId,
                   vmId: claimed.id,
-                  eventType: "vm.create.reconcile_failed",
+                  eventType: isProviderCreateIndeterminateError(err)
+                    ? "vm.create.reconcile_pending"
+                    : "vm.create.reconcile_failed",
                   provider: input.provider,
                   imageId: input.image,
-                  metadata: { operation: err.operation, message: errorMessage(err.cause) },
+                  metadata: {
+                    operation: err.operation,
+                    message: errorMessage(err.cause),
+                    billingReservationRetained: true,
+                  },
                 }).pipe(Effect.catchAll(() => Effect.void)),
               ),
             );
@@ -429,14 +440,35 @@ export function createVm(input: {
     }
 
     const creditReservation = yield* reserveCreateCredit(billing, repo, input, create.vm);
-    yield* recordCreateRequestedEvents(repo, input, create.vm, creditReservation);
+
+    let providerCreateVm = create.vm;
+    if (input.provider === "blaxel") {
+      const markCreateAttemptReady = repo.markCreateAttemptReady;
+      if (!markCreateAttemptReady) {
+        return yield* Effect.fail(new VmDatabaseError({
+          operation: "markCreateAttemptReady",
+          cause: new Error("Blaxel provider-start fencing is unavailable"),
+        }));
+      }
+      // Stack's item decrement has no external operation identity. Provider work
+      // is therefore permitted only after billing returned success and this bit
+      // is durably committed. If the process dies earlier, restart fails closed
+      // instead of replaying either billing or provider create.
+      providerCreateVm = yield* measureVmEffect(
+        input.timing,
+        "mark_provider_create_ready",
+        markCreateAttemptReady(create.vm.id),
+      );
+    }
+
+    yield* recordCreateRequestedEvents(repo, input, providerCreateVm, creditReservation);
 
     const handle = yield* measureVmEffect(
       input.timing,
       "provider_create",
       providers.create(input.provider, {
         image: input.image,
-        providerMetadata: create.vm.providerMetadata,
+        providerMetadata: providerCreateVm.providerMetadata,
         bakedFreestyleSignedAdmin: input.bakedFreestyleSignedAdmin,
         homeVolume: input.perMachineHome
           ? homeVolumeTemplateForUser(input.userId)
@@ -448,28 +480,42 @@ export function createVm(input: {
       }),
     ).pipe(
       Effect.tapError((err) =>
-        Effect.all([
-          refundCredit(billing, repo, create.vm, creditReservation),
-          repo.markCreateFailed({
-            id: create.vm.id,
-            // providers.create fails only with VmProviderOperationError, and
-            // the caller is told it is retryable (vm_cloud_service_unavailable,
-            // retryAfterSeconds ~5), so store the code that lets a same-key
-            // retry reach the provider again immediately.
-            code: PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE,
-            message: errorMessage(err.cause),
-          }),
-          repo.recordUsageEvent({
-            userId: input.userId,
-            billingTeamId: input.billingTeamId,
-            billingPlanId: input.billingPlanId,
-            vmId: create.vm.id,
-            eventType: "vm.create.failed",
-            provider: input.provider,
-            imageId: input.image,
-            metadata: { operation: err.operation, message: errorMessage(err.cause) },
-          }),
-        ], { discard: true }).pipe(Effect.catchAll(() => Effect.void))
+        isProviderCreateIndeterminateError(err)
+          ? repo.recordUsageEvent({
+              userId: input.userId,
+              billingTeamId: input.billingTeamId,
+              billingPlanId: input.billingPlanId,
+              vmId: providerCreateVm.id,
+              eventType: "vm.create.reconcile_pending",
+              provider: input.provider,
+              imageId: input.image,
+              metadata: {
+                operation: err.operation,
+                message: errorMessage(err.cause),
+                billingReservationRetained: creditReservation.kind !== "none",
+              },
+            }).pipe(Effect.catchAll(() => Effect.void))
+          : Effect.all([
+              refundCredit(billing, repo, providerCreateVm, creditReservation),
+              repo.markCreateFailed({
+                id: providerCreateVm.id,
+                // A definite provider create failure is safe to compensate and
+                // retry. Indeterminate outcomes stay provisioning above so the
+                // same external attempt is reconciled without refund/re-reserve.
+                code: PROVIDER_CREATE_UNAVAILABLE_FAILURE_CODE,
+                message: errorMessage(err.cause),
+              }),
+              repo.recordUsageEvent({
+                userId: input.userId,
+                billingTeamId: input.billingTeamId,
+                billingPlanId: input.billingPlanId,
+                vmId: providerCreateVm.id,
+                eventType: "vm.create.failed",
+                provider: input.provider,
+                imageId: input.image,
+                metadata: { operation: err.operation, message: errorMessage(err.cause) },
+              }),
+            ], { discard: true }).pipe(Effect.catchAll(() => Effect.void))
       ),
     );
 
@@ -477,26 +523,26 @@ export function createVm(input: {
       input.timing,
       "mark_running",
       repo.markCreateRunning({
-        id: create.vm.id,
+        id: providerCreateVm.id,
         providerVmId: handle.providerVmId,
         image: handle.image,
         imageVersion: input.imageVersion ?? null,
-        providerMetadata: handle.providerMetadata ?? create.vm.providerMetadata,
+        providerMetadata: handle.providerMetadata ?? providerCreateVm.providerMetadata,
       }),
     ).pipe(
       Effect.catchAll((err) =>
         Effect.gen(function* () {
           yield* rollbackProviderCreate(providers, input.provider, handle);
-          yield* refundCredit(billing, repo, create.vm, creditReservation);
+          yield* refundCredit(billing, repo, providerCreateVm, creditReservation);
           yield* repo.markCreateFailed({
-            id: create.vm.id,
+            id: providerCreateVm.id,
             code: "database_finalize_failed",
             message: "Cloud VM state update failed.",
           }).pipe(Effect.catchAll(() => Effect.void));
           yield* recordCreateFailureEvent(
             repo,
             input,
-            create.vm,
+            providerCreateVm,
             "database_finalize_failed",
             errorMessage(err.cause),
           ).pipe(Effect.catchAll(() => Effect.void));

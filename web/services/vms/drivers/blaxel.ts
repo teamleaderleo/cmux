@@ -22,6 +22,7 @@ import {
   type CmuxRemoteEndpoint,
 } from "./types";
 import { VmOperationUnsupportedError } from "../errors";
+import { ProviderCreateIndeterminateError } from "../providerErrors";
 import { withVmSpan } from "../telemetry";
 import { shellQuote } from "./wsLease";
 import {
@@ -883,33 +884,39 @@ export class BlaxelProvider implements VMProvider {
               }));
             } catch (err) {
               if (createIdentity && ambiguousSandboxCreateFailure(err)) {
+                let recovered: BlaxelSandbox;
                 try {
-                  const recovered = await timedStep("recover_ambiguous_create", () => this.getSandbox(name));
-                  const recoveredName = recovered.metadata?.name?.trim();
-                  if (recoveredName && recoveredName !== name) {
-                    throw new ProviderError(
-                      "blaxel",
-                      `recovered sandbox identity mismatch: expected ${name}, got ${recoveredName}`,
-                    );
-                  }
-                  const recoveredImage = recovered.spec?.runtime?.image?.trim();
-                  if (recoveredImage && recoveredImage !== image) {
-                    throw new ProviderError(
-                      "blaxel",
-                      `recovered sandbox ${name} uses unexpected image ${recoveredImage}`,
-                    );
-                  }
-                  created = recovered;
-                  break;
+                  recovered = await timedStep("recover_ambiguous_create", () => this.getSandbox(name));
                 } catch (recoveryErr) {
                   // A failed or stale read is not proof that the POST had no effect.
                   // Preserve any just-created per-machine volume; the same-key retry
-                  // reuses this create identity, sandbox name, and volume name.
+                  // reuses this create identity, sandbox name, and volume name. Mark
+                  // the outcome explicitly so the workflow retains the billing debit
+                  // while it waits to reconcile this exact provider attempt.
                   if (!(recoveryErr instanceof ProviderError && /-> 404/.test(recoveryErr.message))) {
                     console.warn(`[blaxel] ambiguous create recovery for ${name} failed`, recoveryErr);
                   }
-                  throw err;
+                  throw new ProviderCreateIndeterminateError(
+                    `Blaxel sandbox create ${name} may have committed but could not be reconciled`,
+                    { createError: err, recoveryError: recoveryErr },
+                  );
                 }
+                const recoveredName = recovered.metadata?.name?.trim();
+                if (recoveredName && recoveredName !== name) {
+                  throw new ProviderError(
+                    "blaxel",
+                    `recovered sandbox identity mismatch: expected ${name}, got ${recoveredName}`,
+                  );
+                }
+                const recoveredImage = recovered.spec?.runtime?.image?.trim();
+                if (recoveredImage && recoveredImage !== image) {
+                  throw new ProviderError(
+                    "blaxel",
+                    `recovered sandbox ${name} uses unexpected image ${recoveredImage}`,
+                  );
+                }
+                created = recovered;
+                break;
               }
 
               // For a definite failed create, a per-machine volume made by this call
