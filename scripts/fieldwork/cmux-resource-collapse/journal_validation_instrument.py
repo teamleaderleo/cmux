@@ -1,0 +1,436 @@
+from pathlib import Path
+import re
+
+source_path = Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+text = source_path.read_text()
+
+static_anchor = "#[cfg(unix)]\nstatic NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(1);\n"
+assert static_anchor in text
+text = text.replace(
+    static_anchor,
+    static_anchor
+    + """
+#[cfg(unix)]
+static FIELDWORK_PENDING_RECORDS: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_PENDING_BYTES: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_INFLIGHT_RECORDS: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_INFLIGHT_BYTES: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_PEAK_OWNED_RECORDS: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_PEAK_OWNED_BYTES: AtomicU64 = AtomicU64::new(0);
+#[cfg(unix)]
+static FIELDWORK_RETRY_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+""",
+    1,
+)
+
+body_anchor = """fn batch_body_bytes(sessions: &[SessionBatch]) -> usize {
+    serde_json::to_vec(&json!({ \"sessions\": sessions })).map_or(usize::MAX, |body| body.len())
+}
+"""
+assert body_anchor in text
+text = text.replace(
+    body_anchor,
+    body_anchor
+    + """
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+pub struct JournalFieldworkMetrics {
+    pub pending_records: u64,
+    pub pending_bytes: u64,
+    pub inflight_records: u64,
+    pub inflight_bytes: u64,
+    pub peak_owned_records: u64,
+    pub peak_owned_bytes: u64,
+    pub retry_attempts: u64,
+}
+
+#[cfg(unix)]
+pub fn fieldwork_journal_metrics() -> JournalFieldworkMetrics {
+    JournalFieldworkMetrics {
+        pending_records: FIELDWORK_PENDING_RECORDS.load(Ordering::Relaxed),
+        pending_bytes: FIELDWORK_PENDING_BYTES.load(Ordering::Relaxed),
+        inflight_records: FIELDWORK_INFLIGHT_RECORDS.load(Ordering::Relaxed),
+        inflight_bytes: FIELDWORK_INFLIGHT_BYTES.load(Ordering::Relaxed),
+        peak_owned_records: FIELDWORK_PEAK_OWNED_RECORDS.load(Ordering::Relaxed),
+        peak_owned_bytes: FIELDWORK_PEAK_OWNED_BYTES.load(Ordering::Relaxed),
+        retry_attempts: FIELDWORK_RETRY_ATTEMPTS.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(unix)]
+fn fieldwork_update_peak(target: &AtomicU64, candidate: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while candidate > current {
+        match target.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn fieldwork_refresh_owned_peaks() {
+    let records = FIELDWORK_PENDING_RECORDS
+        .load(Ordering::Relaxed)
+        .saturating_add(FIELDWORK_INFLIGHT_RECORDS.load(Ordering::Relaxed));
+    let bytes = FIELDWORK_PENDING_BYTES
+        .load(Ordering::Relaxed)
+        .saturating_add(FIELDWORK_INFLIGHT_BYTES.load(Ordering::Relaxed));
+    fieldwork_update_peak(&FIELDWORK_PEAK_OWNED_RECORDS, records);
+    fieldwork_update_peak(&FIELDWORK_PEAK_OWNED_BYTES, bytes);
+}
+
+#[cfg(unix)]
+fn fieldwork_set_pending(records: usize, bytes: usize) {
+    FIELDWORK_PENDING_RECORDS.store(records as u64, Ordering::Relaxed);
+    FIELDWORK_PENDING_BYTES.store(bytes as u64, Ordering::Relaxed);
+    fieldwork_refresh_owned_peaks();
+}
+
+#[cfg(unix)]
+fn fieldwork_set_inflight(sessions: &[SessionBatch]) {
+    let records = sessions.iter().map(|session| session.records.len()).sum::<usize>();
+    FIELDWORK_INFLIGHT_RECORDS.store(records as u64, Ordering::Relaxed);
+    FIELDWORK_INFLIGHT_BYTES.store(batch_body_bytes(sessions) as u64, Ordering::Relaxed);
+    fieldwork_refresh_owned_peaks();
+}
+
+#[cfg(unix)]
+fn fieldwork_clear_inflight() {
+    FIELDWORK_INFLIGHT_RECORDS.store(0, Ordering::Relaxed);
+    FIELDWORK_INFLIGHT_BYTES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn fieldwork_retry_attempt() {
+    FIELDWORK_RETRY_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+}
+""",
+    1,
+)
+
+text, replacements = re.subn(
+    r"(?P<indent>[ \t]*)pool\.pending_records = 0;\n(?P=indent)pool\.pending_bytes = 0;",
+    lambda match: (
+        f"{match.group('indent')}pool.pending_records = 0;\n"
+        f"{match.group('indent')}pool.pending_bytes = 0;\n"
+        f"{match.group('indent')}fieldwork_set_pending(0, 0);"
+    ),
+    text,
+)
+assert replacements >= 3, replacements
+
+pending_anchor = """    pool.pending_records = pool.pending_records.saturating_add(1);
+    pool.pending_bytes = pool.pending_bytes.saturating_add(record_bytes);
+"""
+assert pending_anchor in text
+text = text.replace(
+    pending_anchor,
+    pending_anchor + "    fieldwork_set_pending(pool.pending_records, pool.pending_bytes);\n",
+    1,
+)
+
+retry_loop_anchor = """        let mut attempt = 0_u32;
+        loop {
+"""
+assert retry_loop_anchor in text
+text = text.replace(
+    retry_loop_anchor,
+    """        let mut attempt = 0_u32;
+        loop {
+            fieldwork_set_inflight(&batches);
+""",
+    1,
+)
+
+retry_count = text.count("attempt = attempt.saturating_add(1);")
+assert retry_count == 2, retry_count
+text = text.replace(
+    "attempt = attempt.saturating_add(1);",
+    "attempt = attempt.saturating_add(1);\n                fieldwork_retry_attempt();",
+)
+
+post_anchor = "        let delivered = post_with_retry(shared, batches).await;\n"
+assert post_anchor in text
+text = text.replace(post_anchor, post_anchor + "        fieldwork_clear_inflight();\n", 1)
+
+shutdown_anchor = "    let _ = flusher.await;\n}\n"
+assert shutdown_anchor in text
+text = text.replace(
+    shutdown_anchor,
+    "    let _ = flusher.await;\n    fieldwork_set_pending(0, 0);\n    fieldwork_clear_inflight();\n}\n",
+    1,
+)
+source_path.write_text(text)
+
+harness_path = Path("cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs")
+harness = harness_path.read_text()
+
+harness = harness.replace(
+    """enum HttpMode {
+    Ack,
+    Stall,
+    Recover,
+}""",
+    """enum HttpMode {
+    Ack,
+    Stall,
+    Recover,
+    RetryRecover,
+}""",
+)
+harness = harness.replace("[--mode ack|stall]", "[--mode ack|stall|recover|retry-recover]")
+harness = harness.replace(
+    """                    \"recover\" => HttpMode::Recover,
+                    _ => usage(),""",
+    """                    \"recover\" => HttpMode::Recover,
+                    \"retry-recover\" => HttpMode::RetryRecover,
+                    _ => usage(),""",
+)
+harness = harness.replace(
+    "if options.mode == HttpMode::Recover && options.load_millis.is_none()",
+    "if matches!(options.mode, HttpMode::Recover | HttpMode::RetryRecover) && options.load_millis.is_none()",
+)
+
+recover_arm = """        HttpMode::Recover => {
+            if !recovered.load(Ordering::SeqCst) {
+                let mut wake = Box::pin(recovery_wake.notified());
+                wake.as_mut().enable();
+                if !recovered.load(Ordering::SeqCst) {
+                    tokio::select! {
+                        _ = cancellation.cancelled() => return Ok(()),
+                        _ = &mut wake => {}
+                    }
+                }
+            }
+            write_http_ack(&mut stream).await?;
+            delivered_records.fetch_add(record_count, Ordering::SeqCst);
+        }
+"""
+assert recover_arm in harness
+harness = harness.replace(
+    recover_arm,
+    recover_arm
+    + """        HttpMode::RetryRecover => {
+            if recovered.load(Ordering::SeqCst) {
+                write_http_ack(&mut stream).await?;
+                delivered_records.fetch_add(record_count, Ordering::SeqCst);
+            } else {
+                let body = br#\"{\\\"error\\\":\\\"fieldwork retry\\\"}\"#;
+                let response = format!(
+                    \"HTTP/1.1 503 Service Unavailable\\r\\ncontent-type: application/json\\r\\ncontent-length: {}\\r\\nconnection: close\\r\\n\\r\\n\",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await?;
+                stream.write_all(body).await?;
+                stream.shutdown().await?;
+            }
+        }
+""",
+    1,
+)
+harness = harness.replace(
+    "matches!(options.mode, HttpMode::Stall | HttpMode::Recover)",
+    "matches!(options.mode, HttpMode::Stall | HttpMode::Recover | HttpMode::RetryRecover)",
+)
+harness = harness.replace(
+    "if options.mode == HttpMode::Recover {",
+    "if matches!(options.mode, HttpMode::Recover | HttpMode::RetryRecover) {",
+)
+harness = harness.replace(
+    """            HttpMode::Recover => \"recover\",
+        },""",
+    """            HttpMode::Recover => \"recover\",
+            HttpMode::RetryRecover => \"retry-recover\",
+        },""",
+)
+
+fd_anchor = """fn current_fd_count() -> Option<usize> {
+    for path in [\"/proc/self/fd\", \"/dev/fd\"] {
+        if let Ok(entries) = fs::read_dir(path) {
+            return Some(entries.count());
+        }
+    }
+    None
+}
+"""
+assert fd_anchor in harness
+harness = harness.replace(
+    fd_anchor,
+    fd_anchor
+    + """
+fn current_thread_count() -> Option<usize> {
+    let output = Command::new(\"ps\")
+        .args([\"-M\", \"-p\", &std::process::id().to_string(), \"-o\", \"pid=\"])
+        .output()
+        .ok()?;
+    output.status.success().then(|| {
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    })
+}
+
+fn current_descendant_count() -> Option<usize> {
+    let output = Command::new(\"ps\").args([\"-axo\", \"ppid=,pid=\"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let pid = std::process::id();
+    let count = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let ppid = fields.next()?.parse::<u32>().ok()?;
+            let child = fields.next()?.parse::<u32>().ok()?;
+            Some((ppid, child))
+        })
+        .filter(|(ppid, _)| *ppid == pid)
+        .count();
+    Some(count.saturating_sub(1))
+}
+
+fn current_socket_count() -> Option<usize> {
+    let output = Command::new(\"lsof\")
+        .args([\"-nP\", \"-a\", \"-p\", &std::process::id().to_string(), \"-F\", \"t\"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| matches!(*line, \"tIPv4\" | \"tIPv6\" | \"tunix\"))
+            .count(),
+    )
+}
+""",
+    1,
+)
+
+baseline_anchor = """    let baseline_rss_kib = current_rss_kib();
+    let baseline_fds = current_fd_count();
+"""
+assert baseline_anchor in harness
+harness = harness.replace(
+    baseline_anchor,
+    baseline_anchor
+    + """    let baseline_threads = current_thread_count();
+    let baseline_descendants = current_descendant_count();
+    let baseline_sockets = current_socket_count();
+""",
+    1,
+)
+
+loaded_anchor = "    let loaded_delivered_records = delivered_records.load(Ordering::SeqCst);\n"
+assert loaded_anchor in harness
+harness = harness.replace(
+    loaded_anchor,
+    loaded_anchor
+    + """    let loaded_forwarder_metrics = journal_forwarder::fieldwork_journal_metrics();
+    let loaded_threads = current_thread_count();
+    let loaded_descendants = current_descendant_count();
+    let loaded_sockets = current_socket_count();
+""",
+    1,
+)
+
+recovered_decl_anchor = "    let mut recovered_delivered_records = None;\n"
+assert recovered_decl_anchor in harness
+harness = harness.replace(
+    recovered_decl_anchor,
+    recovered_decl_anchor
+    + """    let mut recovered_forwarder_metrics = None;
+    let mut recovered_threads = None;
+    let mut recovered_descendants = None;
+    let mut recovered_sockets = None;
+""",
+    1,
+)
+
+recovered_value_anchor = "        recovered_delivered_records = Some(delivered_records.load(Ordering::SeqCst));\n"
+assert recovered_value_anchor in harness
+harness = harness.replace(
+    recovered_value_anchor,
+    recovered_value_anchor
+    + """        recovered_forwarder_metrics = Some(journal_forwarder::fieldwork_journal_metrics());
+        recovered_threads = current_thread_count();
+        recovered_descendants = current_descendant_count();
+        recovered_sockets = current_socket_count();
+""",
+    1,
+)
+
+cleanup_anchor = """    let cleanup_rss_kib = current_rss_kib();
+    let cleanup_fds = current_fd_count();
+"""
+assert cleanup_anchor in harness
+harness = harness.replace(
+    cleanup_anchor,
+    cleanup_anchor
+    + """    let cleanup_forwarder_metrics = journal_forwarder::fieldwork_journal_metrics();
+    let cleanup_threads = current_thread_count();
+    let cleanup_descendants = current_descendant_count();
+    let cleanup_sockets = current_socket_count();
+""",
+    1,
+)
+
+json_anchor = '        \"http_requests\": http_requests,\n'
+assert json_anchor in harness
+harness = harness.replace(
+    json_anchor,
+    json_anchor
+    + """        \"loaded_pending_records\": loaded_forwarder_metrics.pending_records,
+        \"loaded_pending_bytes\": loaded_forwarder_metrics.pending_bytes,
+        \"loaded_inflight_records\": loaded_forwarder_metrics.inflight_records,
+        \"loaded_inflight_bytes\": loaded_forwarder_metrics.inflight_bytes,
+        \"peak_owned_records\": loaded_forwarder_metrics.peak_owned_records,
+        \"peak_owned_bytes\": loaded_forwarder_metrics.peak_owned_bytes,
+        \"retry_attempts_at_measurement\": loaded_forwarder_metrics.retry_attempts,
+        \"recovered_pending_records\": recovered_forwarder_metrics.map(|metrics| metrics.pending_records),
+        \"recovered_pending_bytes\": recovered_forwarder_metrics.map(|metrics| metrics.pending_bytes),
+        \"recovered_inflight_records\": recovered_forwarder_metrics.map(|metrics| metrics.inflight_records),
+        \"recovered_inflight_bytes\": recovered_forwarder_metrics.map(|metrics| metrics.inflight_bytes),
+        \"retry_attempts_after_recovery\": recovered_forwarder_metrics.map(|metrics| metrics.retry_attempts),
+        \"cleanup_pending_records\": cleanup_forwarder_metrics.pending_records,
+        \"cleanup_pending_bytes\": cleanup_forwarder_metrics.pending_bytes,
+        \"cleanup_inflight_records\": cleanup_forwarder_metrics.inflight_records,
+        \"cleanup_inflight_bytes\": cleanup_forwarder_metrics.inflight_bytes,
+""",
+    1,
+)
+
+resource_anchor = """        \"baseline_fds\": baseline_fds,
+        \"loaded_fds\": loaded_fds,
+        \"recovered_fds\": recovered_fds,
+        \"cleanup_fds\": cleanup_fds,
+"""
+assert resource_anchor in harness
+harness = harness.replace(
+    resource_anchor,
+    resource_anchor
+    + """        \"baseline_threads\": baseline_threads,
+        \"loaded_threads\": loaded_threads,
+        \"recovered_threads\": recovered_threads,
+        \"cleanup_threads\": cleanup_threads,
+        \"baseline_descendants\": baseline_descendants,
+        \"loaded_descendants\": loaded_descendants,
+        \"recovered_descendants\": recovered_descendants,
+        \"cleanup_descendants\": cleanup_descendants,
+        \"baseline_sockets\": baseline_sockets,
+        \"loaded_sockets\": loaded_sockets,
+        \"recovered_sockets\": recovered_sockets,
+        \"cleanup_sockets\": cleanup_sockets,
+""",
+    1,
+)
+
+harness_path.write_text(harness)
