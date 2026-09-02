@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - fieldwork/upstream-main-9e2dd509-github-hosted
     paths:
       - "cmux-tui/**"
       - ".github/workflows/cmux-tui-spec.yml"
@@ -22,54 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  fork-runner-bootstrap:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/fieldwork/upstream-main-9e2dd509-github-hosted'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: true
-
-      - name: Route ordinary fork PR checks to GitHub-hosted Linux
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          paths = [
-              Path('.github/workflows/cmux-skill-contract.yml'),
-              Path('.github/workflows/testbox-broker-guard.yml'),
-              Path('.github/workflows/cmux-tui-sdks.yml'),
-          ]
-          pattern = re.compile(r"blacksmith-[0-9]+vcpu-ubuntu-[0-9]+")
-          changed = []
-          for path in paths:
-              text = path.read_text()
-              new = pattern.sub('ubuntu-24.04', text)
-              if new != text:
-                  path.write_text(new)
-                  changed.append(str(path))
-          print('\n'.join(changed))
-          if len(changed) != 3:
-              raise SystemExit(f'expected three workflow changes, got {len(changed)}')
-          PY
-          git diff --check
-
-      - name: Commit runner override
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/cmux-skill-contract.yml \
-                  .github/workflows/testbox-broker-guard.yml \
-                  .github/workflows/cmux-tui-sdks.yml
-          git commit -m 'ci: use GitHub-hosted Linux for fork PR checks'
-          git push origin HEAD:fieldwork/upstream-main-9e2dd509-github-hosted
-
   inventory:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
