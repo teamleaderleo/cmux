@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BASE_SHA: f11eda12dbf85edc1f961ebe5c9db9adba36e767
-  TEST_SHA: eaedff9451d3927d38788d1e89c5fad772e99a4d
+  TEST_SHA: 9585a03fbe0e08776b75afc7dc78bbec21d4a7d6
   LEGACY_RED_SHA: 6c268876c5695621ca2b4a227cd9b1fb6da5c0fb
   CANDIDATE_BRANCH: fieldwork/blaxel-create-response-loss-billing-fence-20260901
 
@@ -89,15 +89,37 @@ jobs:
           test "$status" -ne 0
           echo "observed intended pre-fence RED exit: $status"
 
-      - name: Materialize durable provider-start fence
+      - name: Prove indeterminate create billing retention is RED before repair
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          bun test --max-concurrency=1 \
+            tests/vm-blaxel-create-billing-fence.test.ts \
+            -t 'indeterminate Blaxel create retains one billing reservation until exact attempt is adopted' \
+            2>&1 | tee /tmp/blaxel-indeterminate-billing-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          echo "observed intended indeterminate-billing RED exit: $status"
+
+      - name: Materialize durable provider-start and indeterminate-attempt protocol
         run: |
           set -euo pipefail
           cd candidate
           python3 ../carrier/scripts/fieldwork_blaxel_response_loss_billing_fence.py
-          test "$(git diff --name-only | sort)" = $'web/services/vms/repository.ts\nweb/services/vms/workflows.ts'
+          test "$(git diff --name-only | sort)" = $'web/services/vms/drivers/blaxel.ts\nweb/services/vms/providerErrors.ts\nweb/services/vms/repository.ts\nweb/services/vms/workflows.ts'
           git diff --check
 
-      - name: Prove billing/provider phase fence GREEN
+      - name: Prove billing/provider phase and ambiguity protocol GREEN
         working-directory: candidate/web
         env:
           CMUX_DB_TEST: "1"
@@ -194,8 +216,12 @@ jobs:
           set -euo pipefail
           git config user.name 'Fieldwork'
           git config user.email 'fieldwork@users.noreply.github.com'
-          git add web/services/vms/repository.ts web/services/vms/workflows.ts
-          git commit -m 'fix: fence Blaxel create replay behind durable billing success'
+          git add \
+            web/services/vms/drivers/blaxel.ts \
+            web/services/vms/providerErrors.ts \
+            web/services/vms/repository.ts \
+            web/services/vms/workflows.ts
+          git commit -m 'fix: fence and reconcile Blaxel create attempts'
           test "$(git rev-parse HEAD^1)" = "$TEST_SHA"
           git diff --check "$BASE_SHA" HEAD
           git push origin HEAD:"$CANDIDATE_BRANCH"
