@@ -6,7 +6,7 @@ on:
       - fieldwork/terminal-input-owner-ack-current-restack-run
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   verify:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          persist-credentials: true
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
           submodules: false
@@ -60,7 +60,6 @@ jobs:
           cmux-tui/spec/terminal-host.md
           EOF
           diff -u /tmp/expected-baseline-files.txt /tmp/current-baseline-files.txt
-          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-baseline-current --force
           echo "current baseline=$baseline"
 
       - name: Init Ghostty submodule
@@ -197,17 +196,16 @@ jobs:
           fi
           echo "candidate introduced no new full-core failing tests"
 
-      - name: Publish current-main clean candidate
+      - name: Record exact verified candidate
         run: |
-          product_paths=(
-            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
-            cmux-tui/crates/cmux-tui-core/src/surface.rs
-            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git add \
+            cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs \
+            cmux-tui/crates/cmux-tui-core/src/surface.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
             cmux-tui/spec/terminal-host.md
-          )
-          git add "${product_paths[@]}"
           git diff --cached --check
           git commit -m "fix(cmux-tui): pipeline receipted terminal input acknowledgements"
-          candidate=$(git rev-parse HEAD)
-          git push origin HEAD:refs/heads/fieldwork/terminal-input-owner-ack-split-phase --force
-          echo "candidate=$candidate"
+          echo "verified baseline=$(cat /tmp/current-baseline-sha)"
+          echo "verified candidate=$(git rev-parse HEAD)"
+          echo "verified candidate tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check 9e2dd50957936153ca0da61d2f079937674f9375 HEAD
