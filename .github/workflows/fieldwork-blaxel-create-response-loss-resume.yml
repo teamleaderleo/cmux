@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BASE_SHA: 060143a87548674fbbacd6558358c9a18a8798f3
-  TEST_SHA: b5e23cbbd331b5d337d50daca91ff688fc8f1357
+  TEST_SHA: 9b91345e34e22e102fe4ffff9bb7123d58d2f6ce
   LEGACY_RED_SHA: 6c268876c5695621ca2b4a227cd9b1fb6da5c0fb
   CANDIDATE_BRANCH: fieldwork/blaxel-create-response-loss-resume-20260901
 
