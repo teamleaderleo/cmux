@@ -81,6 +81,16 @@ function externalId(identity: string) {
   return `blaxel-${identity.slice(0, 12)}`;
 }
 
+async function markProviderCreateReady(id: string) {
+  if (!sql) throw new Error("test database not initialized");
+  await sql`
+    update cloud_vms
+    set provider_metadata = provider_metadata || '{"providerCreateReady":true}'::jsonb,
+        updated_at = now()
+    where id = ${id}
+  `;
+}
+
 async function ageIntent(id: string) {
   if (!sql) throw new Error("test database not initialized");
   await sql`update cloud_vms set updated_at = now() - interval '12 minutes' where id = ${id}`;
@@ -104,6 +114,7 @@ dbTest("restart resumes a stale durable Blaxel intent before any provider effect
   const intent = await insertDurableIntent(input);
   expect(intent.inserted).toBe(true);
   const identity = createIdentity(intent.vm);
+  await markProviderCreateReady(intent.vm.id);
   await ageIntent(intent.vm.id);
 
   const providerState = new Set<string>();
@@ -116,6 +127,7 @@ dbTest("restart resumes a stale durable Blaxel intent before any provider effect
         ? options.providerMetadata.createIdentity.trim()
         : "";
       expect(observed).toBe(identity);
+      expect(options.providerMetadata?.providerCreateReady).toBe(true);
       const providerVmId = externalId(observed);
       providerState.add(providerVmId);
       return {
@@ -155,6 +167,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
   expect(intent.inserted).toBe(true);
   const identity = createIdentity(intent.vm);
   const committedA = externalId(identity);
+  await markProviderCreateReady(intent.vm.id);
   await ageIntent(intent.vm.id);
 
   // Independent provider oracle: A already exists even though CMUX still has
@@ -170,6 +183,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
         ? options.providerMetadata.createIdentity.trim()
         : "";
       expect(observed.length).toBeGreaterThan(0);
+      expect(options.providerMetadata?.providerCreateReady).toBe(true);
       observedCreateIdentities.push(observed);
       const providerVmId = externalId(observed);
       // Model Blaxel createIfNotExist: replay returns the already-committed A.
