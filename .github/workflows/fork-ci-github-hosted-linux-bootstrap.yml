@@ -1,5 +1,6 @@
 name: Fork CI GitHub-hosted Linux bootstrap
 
+# Fork-only bootstrap: inherited paid-provider Linux labels are unavailable here.
 on:
   push:
     branches:
