@@ -2,7 +2,7 @@
 
 ## Fork default
 
-This personal fork defaults ordinary Linux CI to GitHub-hosted `ubuntu-24.04`. `LINUX_RUNNER` remains an override for deliberate runner experiments. Provider-specific macOS and manual test lanes are separate and must be opted into explicitly.
+This personal fork defaults ordinary Linux CI to GitHub-hosted `ubuntu-24.04`. `LINUX_RUNNER` remains an override for deliberate runner experiments. Provider-specific macOS and manual test lanes are separate and must be opted into explicitly. The upstream Nightly macOS and CMUX INTERNAL TestFlight workflows are manual-only in this fork.
 
 Every CI/CD job picks its runner from a repository variable instead of a
 hardcoded label. Linux uses Blacksmith. macOS uses ephemeral Tart VMs on the
