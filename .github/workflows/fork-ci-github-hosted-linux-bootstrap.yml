@@ -1,0 +1,72 @@
+name: Fork CI GitHub-hosted Linux bootstrap
+
+on:
+  push:
+    branches:
+      - fork-ci/github-hosted-linux-bootstrap-run2
+    paths:
+      - ".github/workflows/fork-ci-github-hosted-linux-bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Replace unavailable Linux provider runners
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('.github/workflows')
+          changed = []
+          patterns = (
+              re.compile(r'blacksmith-[0-9]+vcpu-ubuntu-[0-9]+'),
+              re.compile(r'warp-ubuntu-[A-Za-z0-9._-]+'),
+          )
+          for path in sorted(root.glob('*.y*ml')):
+              text = path.read_text()
+              new = text
+              for pattern in patterns:
+                  new = pattern.sub('ubuntu-24.04', new)
+              if new != text:
+                  path.write_text(new)
+                  changed.append(str(path))
+
+          retired = root / 'fieldwork-cloud-fork-identity-blacksmith.yml'
+          if retired.exists():
+              retired.unlink()
+              changed.append(str(retired) + ' (deleted)')
+
+          print('Changed workflow files:')
+          for item in changed:
+              print(' -', item)
+          if not changed:
+              raise SystemExit('expected at least one fork CI change')
+          PY
+
+      - name: Verify no unavailable Linux provider labels remain
+        run: |
+          if grep -R -n -E 'blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-' .github/workflows; then
+            echo 'Unavailable Linux provider runner labels remain' >&2
+            exit 1
+          fi
+          git diff --check
+
+      - name: Commit fork CI normalization
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows
+          git commit -m 'ci: use GitHub-hosted Linux runners in fork'
+          git push origin HEAD:main
