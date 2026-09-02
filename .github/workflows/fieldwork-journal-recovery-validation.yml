@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/fieldwork-journal-recovery-validation.yml
       - scripts/fieldwork/cmux-resource-collapse/journal_validation_instrument.py
+      - scripts/fieldwork/cmux-resource-collapse/journal_validation_generator_repair.py
       - scripts/fieldwork/cmux-resource-collapse/journal_backlog_base.rs
   workflow_dispatch:
 
@@ -73,6 +74,7 @@ jobs:
       - name: Generate recovery harness and measurement counters
         run: |
           set -euo pipefail
+          python3 scripts/fieldwork/cmux-resource-collapse/journal_validation_generator_repair.py
           python3 scripts/fieldwork/cmux-resource-collapse/journal_validation_instrument.py
           git diff --check
       - name: Run journal-forwarder unit tests
