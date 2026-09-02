@@ -631,6 +631,47 @@ pub(super) fn append_resource_effect_journal_record(
     outcome: Option<&Value>,
     state: ResourceEffectJournalState,
 ) -> anyhow::Result<()> {
+    append_resource_effect_journal_record_inner(
+        transaction,
+        idempotency_key,
+        operation,
+        intent,
+        outcome,
+        state,
+        None,
+    )
+}
+
+pub(super) fn append_resource_effect_journal_correction(
+    transaction: &Transaction<'_>,
+    idempotency_key: &str,
+    operation: &str,
+    intent: &Value,
+    outcome: Option<&Value>,
+    state: ResourceEffectJournalState,
+    correction: &str,
+) -> anyhow::Result<()> {
+    validate_identifier("journal effect correction", correction)?;
+    append_resource_effect_journal_record_inner(
+        transaction,
+        idempotency_key,
+        operation,
+        intent,
+        outcome,
+        state,
+        Some(correction),
+    )
+}
+
+fn append_resource_effect_journal_record_inner(
+    transaction: &Transaction<'_>,
+    idempotency_key: &str,
+    operation: &str,
+    intent: &Value,
+    outcome: Option<&Value>,
+    state: ResourceEffectJournalState,
+    correction: Option<&str>,
+) -> anyhow::Result<()> {
     validate_identifier("journal operation", operation)?;
     let session_id = transaction.query_row(
         "SELECT value FROM meta WHERE key = 'session_public_id'",
@@ -666,12 +707,21 @@ pub(super) fn append_resource_effect_journal_record(
     expand_topology_subjects(transaction, &mut subjects)?;
     let subjects = subjects.into_iter().collect::<Vec<_>>();
 
+    let (event_domain, event_prefix): (&[u8], &str) = if correction.is_some() {
+        (b"cmux.resource-effect-correction.v1\0", "event_effect_correction_")
+    } else {
+        (b"cmux.resource-effect.v1\0", "event_effect_")
+    };
     let mut event_digest = Sha256::new();
-    event_digest.update(b"cmux.resource-effect.v1\0");
+    event_digest.update(event_domain);
+    if let Some(correction) = correction {
+        event_digest.update(correction.as_bytes());
+        event_digest.update(b"\0");
+    }
     event_digest.update(session_id.as_bytes());
     event_digest.update(b"\0");
     event_digest.update(idempotency_key.as_bytes());
-    let event_id = format!("event_effect_{}", encode_bytes_hex(&event_digest.finalize()));
+    let event_id = format!("{event_prefix}{}", encode_bytes_hex(&event_digest.finalize()));
     let state_name = state.as_str();
     let kind = format!("{operation}.effect.{state_name}");
     let producer = JournalProducer { kind: "resource_operation".into(), id: "resource-api".into() };

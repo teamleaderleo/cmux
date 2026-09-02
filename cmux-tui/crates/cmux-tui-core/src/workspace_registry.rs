@@ -44,7 +44,8 @@ pub use effect_store::{
 };
 use effect_store::{
     create_resource_effect_schema, delete_legacy_sensitive_effect_receipts,
-    initialize_resource_input_receipt_retention, recover_resource_effects,
+    initialize_resource_input_receipt_retention, quarantine_pre_input_ack_terminal_successes,
+    recover_resource_effects,
 };
 use journal_extensions::create_journal_extensions_schema;
 pub use journal_extensions::{
@@ -85,9 +86,9 @@ pub use session_journal::{
     JournalSubject, SessionJournalPage, SessionJournalRecord,
 };
 use session_journal::{
-    ResourceEffectJournalState, append_resource_effect_journal_record,
-    append_resource_journal_record, create_session_journal_schema,
-    migrate_resource_events_to_session_journal,
+    ResourceEffectJournalState, append_resource_effect_journal_correction,
+    append_resource_effect_journal_record, append_resource_journal_record,
+    create_session_journal_schema, migrate_resource_events_to_session_journal,
 };
 pub(crate) use session_journal::{SessionJournalReader, unix_epoch_ms};
 
@@ -98,7 +99,9 @@ pub(crate) use session_journal::{SessionJournalReader, unix_epoch_ms};
 // one branch. Version 12 scopes receipts by origin. Version 13 adds immutable
 // binary content to journal rows. Version 14 gives resource API frontend
 // projections one owned envelope instead of storing anonymous projection JSON.
-const SCHEMA_VERSION: i64 = 14;
+// Version 15 quarantines terminal-input successes recorded before PTY-owner acknowledgements.
+const SCHEMA_VERSION: i64 = 15;
+const INPUT_ACK_RECEIPT_MIGRATION_META_KEY: &str = "terminal_input_ack_receipts_v1";
 pub(crate) const RESOURCE_API_FRONTEND_PROJECTION_SCHEMA_VERSION: u32 = 2;
 const RESOURCE_EFFECT_PEPPER_SCHEMA_VERSION: i64 = 7;
 const MAX_ID_LEN: usize = 128;
@@ -2413,7 +2416,7 @@ impl WorkspaceRegistry {
                 require_resource_effect_pepper_id(&tx, &resource_effect_pepper_id)?;
                 tx.commit()?;
             }
-            Some(9..=13) => {
+            Some(9..=14) => {
                 let tx = connection.unchecked_transaction()?;
                 create_workspace_schema(&tx)?;
                 create_terminal_schema(&tx)?;
@@ -2650,6 +2653,14 @@ impl WorkspaceRegistry {
             let tx = connection.unchecked_transaction()?;
             create_resource_effect_schema(&tx)?;
             create_journal_extensions_schema(&tx)?;
+            if meta_value(&tx, INPUT_ACK_RECEIPT_MIGRATION_META_KEY)?.is_none() {
+                quarantine_pre_input_ack_terminal_successes(&tx)?;
+                tx.execute(
+                    "INSERT INTO meta(key, value) VALUES(?1, '1')
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [INPUT_ACK_RECEIPT_MIGRATION_META_KEY],
+                )?;
+            }
             recover_resource_effects(&tx)?;
             initialize_resource_input_receipt_retention(&tx)?;
             initialize_resource_mutation_retention(&tx)?;

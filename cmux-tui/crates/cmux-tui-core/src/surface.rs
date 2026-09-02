@@ -525,6 +525,20 @@ impl HostedFrameStager {
     }
 }
 
+#[cfg(unix)]
+fn is_hosted_control_response(frame: &Frame) -> bool {
+    matches!(
+        frame.kind,
+        MessageKind::Capability
+            | MessageKind::CellPixelSizeAck
+            | MessageKind::KittyGraphicsLimitsAck
+            | MessageKind::ClearHistoryAck
+            | MessageKind::TerminateAck
+            | MessageKind::DetachAck
+            | MessageKind::InputAck
+    ) && frame.request_id != 0
+}
+
 const ATTACH_STREAM_CAPACITY: usize = 256;
 const ATTACH_STREAM_MAX_BYTES: usize = 16 * 1024 * 1024;
 // Preserve every valid upload prefix plus enough recent text while fitting
@@ -2960,16 +2974,7 @@ impl Surface {
                             Ok(Some(frame)) => frame,
                             Ok(None) | Err(_) => break,
                         };
-                        if matches!(
-                            frame.kind,
-                            MessageKind::Capability
-                                | MessageKind::CellPixelSizeAck
-                                | MessageKind::KittyGraphicsLimitsAck
-                                | MessageKind::ClearHistoryAck
-                                | MessageKind::TerminateAck
-                                | MessageKind::DetachAck
-                        ) && frame.request_id != 0
-                        {
+                        if is_hosted_control_response(&frame) {
                             if frame.version != protocol_version
                                 || frame.flags != 0
                                 || frame.sequence != 0
@@ -6902,6 +6907,19 @@ mod tests {
 
     use super::*;
     use crate::MuxEvent;
+
+    #[cfg(unix)]
+    #[test]
+    fn hosted_input_ack_is_a_targeted_control_response() {
+        let mut frame = Frame::new(MessageKind::InputAck, Vec::new());
+        frame.request_id = 7;
+        assert!(is_hosted_control_response(&frame));
+        frame.request_id = 0;
+        assert!(!is_hosted_control_response(&frame));
+        let mut output = Frame::new(MessageKind::Output, Vec::new());
+        output.request_id = 7;
+        assert!(!is_hosted_control_response(&output));
+    }
 
     #[test]
     fn agent_browser_provider_uses_a_terminal_local_daemon_session() {

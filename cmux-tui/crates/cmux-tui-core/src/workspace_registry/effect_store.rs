@@ -176,6 +176,61 @@ pub(super) fn delete_legacy_sensitive_effect_receipts(
     Ok(())
 }
 
+/// Success receipts created before owner input acknowledgements cannot prove
+/// that the PTY effect crossed the old mux/host crash boundary. Preserve
+/// committed failures and downgrade historical terminal-input successes.
+pub(super) fn quarantine_pre_input_ack_terminal_successes(
+    transaction: &Transaction<'_>,
+) -> anyhow::Result<usize> {
+    let candidates = {
+        let mut statement = transaction.prepare(
+            "SELECT idempotency_key, operation, intent_json, outcome_json
+             FROM resource_effect_receipts
+             WHERE state = 'committed' AND operation GLOB 'terminal.input.*'
+             ORDER BY idempotency_key",
+        )?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let mut quarantined = 0;
+    for (idempotency_key, operation, intent_json, outcome_json) in candidates {
+        let outcome: ResourceEffectOutcome = serde_json::from_str(&outcome_json)?;
+        if !matches!(outcome, ResourceEffectOutcome::Success(_)) {
+            continue;
+        }
+        let changed = transaction.execute(
+            "UPDATE resource_effect_receipts
+             SET state = 'indeterminate', outcome_json = NULL, committed_revision = NULL
+             WHERE idempotency_key = ?1 AND state = 'committed'",
+            [&idempotency_key],
+        )?;
+        anyhow::ensure!(changed == 1, "pre-input-ack effect receipt changed during quarantine");
+        transaction.execute(
+            "DELETE FROM resource_input_receipt_completions WHERE idempotency_key = ?1",
+            [&idempotency_key],
+        )?;
+        append_resource_effect_journal_correction(
+            transaction,
+            &idempotency_key,
+            &operation,
+            &serde_json::from_str(&intent_json)?,
+            None,
+            ResourceEffectJournalState::Indeterminate,
+            "pre_input_ack_success_quarantine",
+        )?;
+        quarantined += 1;
+    }
+    Ok(quarantined)
+}
+
 pub(super) fn recover_resource_effects(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     let interrupted = {
         let mut statement = transaction.prepare(
@@ -1544,6 +1599,88 @@ mod tests {
             )
             .unwrap();
         usize::try_from(count).unwrap()
+    }
+
+    #[test]
+    fn pre_input_ack_terminal_successes_are_quarantined_but_failures_remain_committed() {
+        let mut registry = WorkspaceRegistry::in_memory("pre-input-ack-quarantine").unwrap();
+        let intent = json!({
+            "terminal_id":"term_11111111111111111111111111111111",
+            "fields":{"$cmux_redacted":{"kind":"request_fields","version":1}},
+        });
+        let success_fp = json!({"request":"success"});
+        let failure_fp = json!({"request":"failure"});
+        for (key, fp, outcome) in [
+            ("pre-input-ack-success", &success_fp, ResourceEffectOutcome::Success(json!({}))),
+            (
+                "pre-input-ack-failure",
+                &failure_fp,
+                ResourceEffectOutcome::Failure(ResourceError::operation_failed(
+                    "terminal.input.write",
+                    "known pre-effect failure",
+                    json!({}),
+                )),
+            ),
+        ] {
+            registry
+                .prepare_resource_effect(key, "terminal.input.write", fp, &intent, None, None)
+                .unwrap();
+            registry.mark_resource_effect_executing(key, "terminal.input.write", fp).unwrap();
+            registry
+                .commit_resource_effect(key, "terminal.input.write", fp, &outcome, None)
+                .unwrap();
+        }
+        let failure = match registry
+            .lookup_resource_effect("pre-input-ack-failure", "terminal.input.write", &failure_fp)
+            .unwrap()
+            .unwrap()
+        {
+            ResourceEffectPreparation::Committed {
+                outcome: ResourceEffectOutcome::Failure(error),
+                ..
+            } => error,
+            other => panic!("unexpected failure receipt before quarantine: {other:?}"),
+        };
+        let tx = registry.connection.transaction().unwrap();
+        assert_eq!(quarantine_pre_input_ack_terminal_successes(&tx).unwrap(), 1);
+        tx.commit().unwrap();
+        assert_eq!(
+            registry
+                .lookup_resource_effect(
+                    "pre-input-ack-success",
+                    "terminal.input.write",
+                    &success_fp,
+                )
+                .unwrap(),
+            Some(ResourceEffectPreparation::Indeterminate)
+        );
+        assert_eq!(
+            registry
+                .lookup_resource_effect(
+                    "pre-input-ack-failure",
+                    "terminal.input.write",
+                    &failure_fp,
+                )
+                .unwrap(),
+            Some(ResourceEffectPreparation::Committed {
+                outcome: ResourceEffectOutcome::Failure(failure),
+                revision: 0,
+            })
+        );
+        let completion_count: i64 = registry.connection.query_row(
+            "SELECT COUNT(*) FROM resource_input_receipt_completions WHERE idempotency_key = ?1",
+            ["pre-input-ack-success"], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(completion_count, 0);
+        let states = registry
+            .session_journal_after(0, 64)
+            .unwrap()
+            .records
+            .into_iter()
+            .filter(|record| record.payload["idempotency_key"] == "pre-input-ack-success")
+            .map(|record| record.payload["state"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(states, vec!["succeeded", "indeterminate"]);
     }
 
     #[test]

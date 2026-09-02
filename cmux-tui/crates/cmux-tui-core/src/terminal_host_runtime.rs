@@ -2157,6 +2157,9 @@ mod unix {
         if owner.iter().all(|byte| *byte == 0) {
             anyhow::bail!("terminal-host owner token is zero");
         }
+        if record.record_version < HOST_RECORD_VERSION && record.supports_input_ack {
+            anyhow::bail!("legacy terminal-host record advertises input receipts");
+        }
         if record.record_version == 1 {
             if record.host_pid != 0
                 || !record.host_start_nonce.is_empty()
@@ -7672,6 +7675,17 @@ mod unix {
             write_record(&legacy_path, &legacy).unwrap();
 
             validate_terminal_host_record(&legacy_path, &legacy).unwrap();
+
+            let mut serialized_legacy = serde_json::to_value(&legacy).unwrap();
+            serialized_legacy.as_object_mut().unwrap().remove("supports_input_ack");
+            let decoded_legacy: TerminalHostRecord =
+                serde_json::from_value(serialized_legacy).unwrap();
+            assert!(!decoded_legacy.supports_input_ack);
+
+            let mut impossible_ack_legacy = legacy.clone();
+            impossible_ack_legacy.supports_input_ack = true;
+            assert!(validate_terminal_host_record(&legacy_path, &impossible_ack_legacy).is_err());
+
             assert_eq!(
                 terminal_host_record_liveness(&legacy_path, &legacy).unwrap(),
                 TerminalHostLiveness::Indeterminate
