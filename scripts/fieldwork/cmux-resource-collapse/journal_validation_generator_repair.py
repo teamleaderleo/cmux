@@ -36,3 +36,10 @@ text = text.replace(old, new, 1)
 text = text.replace(r"\r\n", r"\\r\\n")
 
 path.write_text(text)
+
+# The generated result object carries enough fields to exceed serde_json's
+# default macro recursion limit. This is measurement-only crate metadata.
+harness_path = Path("cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs")
+harness = harness_path.read_text()
+if not harness.startswith("#![recursion_limit"):
+    harness_path.write_text('#![recursion_limit = "256"]\n' + harness)
