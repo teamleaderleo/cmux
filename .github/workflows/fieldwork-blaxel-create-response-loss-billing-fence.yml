@@ -1,0 +1,201 @@
+name: Fieldwork Blaxel create billing fence
+
+on:
+  push:
+    branches:
+      - fieldwork/blaxel-create-response-loss-billing-fence-carrier-20260901
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-blaxel-create-response-loss-billing-fence-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_SHA: f11eda12dbf85edc1f961ebe5c9db9adba36e767
+  TEST_SHA: eaedff9451d3927d38788d1e89c5fad772e99a4d
+  LEGACY_RED_SHA: 6c268876c5695621ca2b4a227cd9b1fb6da5c0fb
+  CANDIDATE_BRANCH: fieldwork/blaxel-create-response-loss-billing-fence-20260901
+
+jobs:
+  build-green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout carrier tooling
+        uses: actions/checkout@v4
+        with:
+          ref: fieldwork/blaxel-create-response-loss-billing-fence-carrier-20260901
+          path: carrier
+          fetch-depth: 1
+
+      - name: Checkout candidate test head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_BRANCH }}
+          path: candidate
+          fetch-depth: 0
+
+      - name: Verify test-only candidate head
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TEST_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          test "$(git diff --name-only "$BASE_SHA" HEAD | sort)" = $'web/tests/vm-blaxel-create-billing-fence.test.ts\nweb/tests/vm-blaxel-create-response-loss-resume.test.ts'
+          git diff --check "$BASE_SHA" HEAD
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install web dependencies
+        working-directory: candidate/web
+        run: bun install --frozen-lockfile
+
+      - name: Start and migrate isolated test database
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: |
+          set -euo pipefail
+          ./scripts/db-local.sh up
+          bunx drizzle-kit migrate --config drizzle.config.ts
+
+      - name: Prove pre-fence stale billing row is RED before repair
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          bun test --max-concurrency=1 \
+            tests/vm-blaxel-create-billing-fence.test.ts \
+            -t 'stale Blaxel row before durable billing fence never reaches provider' \
+            2>&1 | tee /tmp/blaxel-billing-fence-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          echo "observed intended pre-fence RED exit: $status"
+
+      - name: Materialize durable provider-start fence
+        run: |
+          set -euo pipefail
+          cd candidate
+          python3 ../carrier/scripts/fieldwork_blaxel_response_loss_billing_fence.py
+          test "$(git diff --name-only | sort)" = $'web/services/vms/repository.ts\nweb/services/vms/workflows.ts'
+          git diff --check
+
+      - name: Prove billing/provider phase fence GREEN
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-billing-fence.test.ts
+
+      - name: Preserve restart and adoption convergence GREEN
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-response-loss-resume.test.ts
+
+      - name: Preserve ambiguous response-loss repair GREEN
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: bun test --max-concurrency=1 tests/vm-blaxel-create-response-loss-repair.test.ts
+
+      - name: Run Blaxel provider controls
+        working-directory: candidate/web
+        run: |
+          set -euo pipefail
+          bun test tests/vm-blaxel-fetch-retry.test.ts
+          bun test tests/vm-blaxel-provider.test.ts
+
+      - name: Run existing workflow retry control
+        working-directory: candidate/web
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        run: >-
+          bun test --max-concurrency=1 tests/vm-workflows.test.ts
+          -t 'transient provider create failure does not poison the idempotency key'
+
+      - name: Exercise canonical RED controls on repaired source
+        working-directory: candidate
+        env:
+          CMUX_DB_TEST: "1"
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+          DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+          DIRECT_DATABASE_URL: postgres://cmux:cmux@localhost:34777/cmux_test
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$LEGACY_RED_SHA":web/tests/vm-blaxel-response-loss.test.ts > web/tests/vm-blaxel-response-loss.test.ts
+          cd web
+          bun test --max-concurrency=1 tests/vm-blaxel-response-loss.test.ts \
+            -t 'same-key retry after a definite pre-effect provider failure creates only one remote machine'
+          set +e
+          bun test --max-concurrency=1 tests/vm-blaxel-response-loss.test.ts \
+            -t 'same-key retry must not create B while response-lost Blaxel create A still exists' \
+            2>&1 | tee /tmp/legacy-red-on-repair.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'same-key retry created B while response-lost provider effect A remained live and unowned' /tmp/legacy-red-on-repair.log
+          echo 'legacy gateway fake remains RED because it ignores the provider-attempt identity contract'
+          cd ..
+          rm web/tests/vm-blaxel-response-loss.test.ts
+
+      - name: Tear down test database
+        if: always()
+        working-directory: candidate/web
+        env:
+          CMUX_DB_KIND: test
+          CMUX_DB_PORT_OFFSET: "31000"
+          CMUX_DB_NAME: cmux_test
+        run: ./scripts/db-local.sh down || true
+
+      - name: Commit and push candidate C
+        if: success()
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          git config user.name 'Fieldwork'
+          git config user.email 'fieldwork@users.noreply.github.com'
+          git add web/services/vms/repository.ts web/services/vms/workflows.ts
+          git commit -m 'fix: fence Blaxel create replay behind durable billing success'
+          test "$(git rev-parse HEAD^1)" = "$TEST_SHA"
+          git diff --check "$BASE_SHA" HEAD
+          git push origin HEAD:"$CANDIDATE_BRANCH"
