@@ -1,5 +1,6 @@
 name: Fork CI cancel stale runs
 
+# One-shot cleanup for historical runs stranded on unavailable provider labels.
 on:
   push:
     branches:
