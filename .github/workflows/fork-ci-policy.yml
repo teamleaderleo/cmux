@@ -42,6 +42,8 @@ jobs:
           bad = re.compile(r'(?:blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)')
           offenders = []
           for path in sorted(Path('.github/workflows').glob('*.y*ml')):
+              if path.name == 'fork-ci-policy.yml':
+                  continue
               for number, line in enumerate(path.read_text().splitlines(), 1):
                   if bad.search(line):
                       offenders.append(f'{path}:{number}: {line.strip()}')
