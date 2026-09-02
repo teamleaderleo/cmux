@@ -24,6 +24,8 @@ jobs:
         run: |
           old_main=61bc1e4a6d1c882d552199f4b2785ea45c177ae2
           current_main=9e2dd50957936153ca0da61d2f079937674f9375
+          git remote add upstream https://github.com/manaflow-ai/cmux.git
+          git fetch --no-tags upstream "$current_main"
           test "$(git merge-base "$old_main" "$current_main")" = "$old_main"
           owner_paths=(
             cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
