@@ -777,7 +777,9 @@ fn terminal_write(surface: &Surface, fields: &Map<String, Value>) -> Result<(), 
             )));
         }
     };
-    surface.write_bytes(&bytes).map_err(|error| ActionFailure::Indeterminate(error.to_string()))
+    surface
+        .write_bytes_confirmed(&bytes)
+        .map_err(|error| ActionFailure::Indeterminate(error.to_string()))
 }
 
 fn terminal_scroll_viewport(
@@ -826,7 +828,9 @@ fn terminal_keys(surface: &Surface, fields: &Map<String, Value>) -> Result<(), A
         .map_err(|error| ActionFailure::Known(resource_operation_error(error)))?
         .map_err(ActionFailure::Known)?;
     surface.scroll_to_bottom().map_err(|error| ActionFailure::Indeterminate(error.to_string()))?;
-    surface.write_bytes(&encoded).map_err(|error| ActionFailure::Indeterminate(error.to_string()))
+    surface
+        .write_bytes_confirmed(&encoded)
+        .map_err(|error| ActionFailure::Indeterminate(error.to_string()))
 }
 
 fn terminal_mouse(surface: &Surface, fields: &Map<String, Value>) -> Result<(), ActionFailure> {
@@ -940,7 +944,9 @@ fn terminal_mouse(surface: &Surface, fields: &Map<String, Value>) -> Result<(), 
     if output.is_empty() {
         return Ok(());
     }
-    surface.write_bytes(&output).map_err(|error| ActionFailure::Indeterminate(error.to_string()))
+    surface
+        .write_bytes_confirmed(&output)
+        .map_err(|error| ActionFailure::Indeterminate(error.to_string()))
 }
 
 fn terminal_focus(surface: &Surface, fields: &Map<String, Value>) -> Result<(), ActionFailure> {
@@ -954,7 +960,9 @@ fn terminal_focus(surface: &Surface, fields: &Map<String, Value>) -> Result<(), 
         return Ok(());
     }
     let bytes: &[u8] = if focused { b"\x1b[I" } else { b"\x1b[O" };
-    surface.write_bytes(bytes).map_err(|error| ActionFailure::Indeterminate(error.to_string()))
+    surface
+        .write_bytes_confirmed(bytes)
+        .map_err(|error| ActionFailure::Indeterminate(error.to_string()))
 }
 
 fn browser_key(surface: &Surface, fields: &Map<String, Value>) -> Result<(), ActionFailure> {
