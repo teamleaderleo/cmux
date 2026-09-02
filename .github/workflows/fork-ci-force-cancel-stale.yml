@@ -1,5 +1,6 @@
 name: Fork CI force-cancel stale runs
 
+# One-shot cleanup for residual runs that did not leave queued state after normal cancellation.
 on:
   push:
     branches:
