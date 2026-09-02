@@ -208,6 +208,7 @@ dbTest("restart adopts the exact committed Blaxel attempt and same-key replay st
     destroyVm({
       userId: input.userId,
       billingTeamId: input.billingTeamId,
+      teamIds: [input.billingTeamId],
       providerVmId: committedA,
     }).pipe(Effect.provide(layer)),
   );
