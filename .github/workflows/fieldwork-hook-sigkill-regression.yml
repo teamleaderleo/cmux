@@ -1,0 +1,56 @@
+name: Fieldwork hook SIGKILL ownership discriminator
+
+on:
+  push:
+    branches:
+      - fieldwork/hook-sigkill-regression-9e2dd509
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact upstream parent plus probe-only delta
+        run: |
+          test "$(git rev-parse HEAD^)" = 95ba055267d1cd73806795763d350f021462484e
+          test "$(git rev-parse HEAD^^)" = 9e2dd50957936153ca0da61d2f079937674f9375
+          git diff --name-only 9e2dd50957936153ca0da61d2f079937674f9375 HEAD | sort > /tmp/changed.txt
+          cat > /tmp/expected.txt <<'EOF'
+          .github/workflows/fieldwork-hook-sigkill-regression.yml
+          cmux-tui/crates/cmux-tui/tests/journal_hook_sigkill_recovery.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Check probe formatting
+        working-directory: cmux-tui
+        run: cargo fmt --all -- --check
+
+      - name: Reproduce daemon-SIGKILL hook ownership loss
+        working-directory: cmux-tui
+        run: >-
+          cargo test -p cmux-tui --test journal_hook_sigkill_recovery
+          mux_sigkill_loses_hook_timeout_and_parallel_owner
+          --locked -- --exact --nocapture
