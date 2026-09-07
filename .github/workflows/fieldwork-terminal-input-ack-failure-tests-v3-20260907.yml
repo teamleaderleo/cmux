@@ -1,0 +1,85 @@
+name: Fieldwork terminal input ACK failure paths v3
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-failure-tests-v3-20260907
+
+permissions:
+  contents: write
+
+env:
+  PRODUCT_COMMIT: 37470cb1dae36704d2278364d9963e7df77e1a25
+  PRODUCT_BRANCH: fix/terminal-input-owner-ack-current-main
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require exact carrier and product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^^)" = "$PRODUCT_COMMIT"
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse "origin/$PRODUCT_BRANCH")" = "$PRODUCT_COMMIT"
+          cp .fieldwork/terminal-input-ack-failure-tests.patch /tmp/failure-tests.patch
+          git checkout --detach "$PRODUCT_COMMIT"
+          git submodule update --init --depth 1 ghostty
+          git apply --check --recount /tmp/failure-tests.patch
+          git apply --recount /tmp/failure-tests.patch
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Format and validate test-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check "$PRODUCT_COMMIT"
+          git diff --name-only "$PRODUCT_COMMIT" | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Run new failure-path regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib host_receipted_input_partial_write_closes_connection_without_ack --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_receipted_input_flush_failure_closes_connection_without_ack --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_ack_total_budget_rejection_is_post_delivery_connection_loss --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_disconnect_after_submit_is_indeterminate --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+
+      - name: Commit and publish exact test-only product update
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git commit -m "test(cmux-tui): cover terminal input ACK failure paths"
+          NEW_HEAD="$(git rev-parse HEAD)"
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse "origin/$PRODUCT_BRANCH")" = "$PRODUCT_COMMIT"
+          git push --force-with-lease="refs/heads/$PRODUCT_BRANCH:$PRODUCT_COMMIT" origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "published_product_head=$NEW_HEAD"
+          echo "published_product_tree=$(git rev-parse 'HEAD^{tree}')"
