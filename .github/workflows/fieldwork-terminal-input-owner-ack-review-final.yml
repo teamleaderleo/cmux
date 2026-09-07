@@ -1,0 +1,90 @@
+name: Fieldwork terminal input ACK review final
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-review-final-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout carrier
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Stage repair script
+        run: cp fieldwork/finalize_terminal_input_ack_review.py /tmp/finalize_terminal_input_ack_review.py
+
+      - name: Checkout exact product branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/terminal-input-owner-ack-current-main
+          fetch-depth: 0
+
+      - name: Guard and apply repair
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "9d9e1f06c31e4a28c02c5fff300148b8a7c6f7c3"
+          python3 /tmp/finalize_terminal_input_ack_review.py
+          git diff --check
+          git diff --stat
+
+      - name: Initialize Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+        env:
+          CMUX_ZIG: /usr/local/bin/zig
+
+      - name: Format candidate
+        working-directory: cmux-tui
+        run: cargo fmt --all
+
+      - name: Run review regressions
+        working-directory: cmux-tui
+        env:
+          CMUX_ZIG: /usr/local/bin/zig
+        run: |
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_ack_round_trips_through_surface_reader --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_timeout_can_abort_while_writer_mutex_is_held --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_pty_write_and_flush --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Verify generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Commit verified repair
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name "Leo"
+          git config user.email "cheerleaderleo@outlook.com"
+          git add cmux-tui/crates/cmux-tui-core/src/mux.rs
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs
+          git add cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git add cmux-tui/spec/terminal-host.md
+          git commit -m "test(cmux-tui): close terminal input ACK review gaps"
+          git push origin HEAD:refs/heads/fix/terminal-input-owner-ack-current-main
