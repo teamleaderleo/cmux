@@ -17,7 +17,8 @@ use crate::surface::{
     CLEAR_HISTORY_FALLBACK_UNREPRESENTABLE_ERROR, CLEAR_HISTORY_FALLBACK_WRITE_TIMEOUT_ERROR,
     CLEAR_HISTORY_PRESERVATION_ERROR, CLEAR_HISTORY_STREAM_TIMEOUT_ERROR,
     CLEAR_HISTORY_STREAM_WAIT_TIMEOUT, ClearHistoryDelivery, ClearHistoryFailure,
-    ClearHistoryTransition, DefaultColors, SurfaceOptions, TerminalStreamProgress,
+    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,
+    TerminalStreamProgress,
     apply_clear_history_transition, replace_ghostty_cursor_defaults, write_clear_history_fallback,
 };
 use crate::terminal_host::{
@@ -409,12 +410,6 @@ impl std::fmt::Display for CellPixelRequestDeadlineElapsed {
 }
 
 impl std::error::Error for CellPixelRequestDeadlineElapsed {}
-
-#[derive(Debug)]
-pub(crate) enum InputAckBeginFailure {
-    Known(std::io::Error),
-    Ambiguous(std::io::Error),
-}
 
 #[cfg(unix)]
 mod unix {
@@ -998,41 +993,35 @@ mod unix {
 
     pub(crate) struct InputAckReceipt {
         request_id: u64,
-        receiver: Option<Receiver<Frame>>,
+        receiver: Receiver<Frame>,
         control_responses: Arc<ControlResponses>,
-        writer: Arc<Mutex<UnixStream>>,
+        shutdown: UnixStream,
         bytes: usize,
-        active: bool,
     }
 
     impl InputAckReceipt {
-        fn complete(&mut self) {
-            if self.active {
-                self.control_responses.release_input_ack(self.bytes);
-                self.active = false;
-            }
+        fn abort_connection(&self) {
+            let _ = self.shutdown.shutdown(std::net::Shutdown::Both);
         }
 
-        pub(crate) fn wait(mut self) -> std::io::Result<()> {
-            let receiver = self.receiver.take().expect("input ACK receiver is present");
-            let response = receiver.recv_timeout(CONTROL_RESPONSE_TIMEOUT);
-            match response {
+        pub(crate) fn wait(self) -> std::io::Result<()> {
+            match self.receiver.recv_timeout(CONTROL_RESPONSE_TIMEOUT) {
                 Ok(frame) => {
                     if !frame.payload.is_empty() {
-                        let _ = self.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
-                        self.complete();
+                        self.abort_connection();
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
                             "terminal host returned a malformed input acknowledgement",
                         ));
                     }
-                    self.complete();
                     Ok(())
                 }
                 Err(error) => {
                     self.control_responses.waiters.lock().unwrap().remove(&self.request_id);
-                    let _ = self.writer.lock().unwrap().shutdown(std::net::Shutdown::Both);
-                    self.complete();
+                    // Shutdown uses a separately cloned socket handle. A timed-out
+                    // receipt therefore does not wait behind another frame writer
+                    // before it can abort the broken attachment.
+                    self.abort_connection();
                     let kind = match error {
                         RecvTimeoutError::Timeout => std::io::ErrorKind::TimedOut,
                         RecvTimeoutError::Disconnected => std::io::ErrorKind::ConnectionAborted,
@@ -1048,9 +1037,14 @@ mod unix {
 
     impl Drop for InputAckReceipt {
         fn drop(&mut self) {
-            if self.active {
-                self.control_responses.waiters.lock().unwrap().remove(&self.request_id);
-                self.complete();
+            let abandoned =
+                self.control_responses.waiters.lock().unwrap().remove(&self.request_id).is_some();
+            self.control_responses.release_input_ack(self.bytes);
+            if abandoned {
+                // A submitted request whose confirmation is abandoned can still
+                // produce a late targeted ACK. Close this attachment now rather
+                // than letting that late frame fail the production reader later.
+                self.abort_connection();
             }
         }
     }
@@ -1167,24 +1161,33 @@ mod unix {
         pub(crate) fn begin_input_confirmed(
             &self,
             payload: &[u8],
-        ) -> Result<InputAckReceipt, InputAckBeginFailure> {
+        ) -> Result<InputAckReceipt, ConfirmedInputFailure> {
             if !self.record.supports_input_ack {
-                return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                return Err(ConfirmedInputFailure::Known(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "terminal host cannot acknowledge receipted input",
                 )));
             }
             if !self.control_responses.try_reserve_input_ack(payload.len()) {
-                return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                return Err(ConfirmedInputFailure::Known(std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
                     "terminal host receipted-input window is full",
                 )));
             }
 
+            let shutdown = {
+                let writer = self.writer.lock().unwrap();
+                writer.try_clone()
+            }
+            .map_err(|error| {
+                self.control_responses.release_input_ack(payload.len());
+                ConfirmedInputFailure::Known(error)
+            })?;
+
             let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
             if request_id == 0 {
                 self.control_responses.release_input_ack(payload.len());
-                return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                return Err(ConfirmedInputFailure::Known(std::io::Error::new(
                     std::io::ErrorKind::WouldBlock,
                     "terminal host input request id exhausted",
                 )));
@@ -1194,7 +1197,7 @@ mod unix {
                 let mut waiters = self.control_responses.waiters.lock().unwrap();
                 if waiters.contains_key(&request_id) {
                     self.control_responses.release_input_ack(payload.len());
-                    return Err(InputAckBeginFailure::Known(std::io::Error::new(
+                    return Err(ConfirmedInputFailure::Known(std::io::Error::new(
                         std::io::ErrorKind::WouldBlock,
                         "terminal host input request id collision",
                     )));
@@ -1219,16 +1222,15 @@ mod unix {
             if let Err(error) = write_result {
                 self.control_responses.waiters.lock().unwrap().remove(&request_id);
                 self.control_responses.release_input_ack(payload.len());
-                return Err(InputAckBeginFailure::Ambiguous(error));
+                return Err(ConfirmedInputFailure::Indeterminate(error));
             }
 
             Ok(InputAckReceipt {
                 request_id,
-                receiver: Some(receiver),
+                receiver,
                 control_responses: self.control_responses.clone(),
-                writer: self.writer.clone(),
+                shutdown,
                 bytes: payload.len(),
-                active: true,
             })
         }
 
@@ -7346,9 +7348,9 @@ mod unix {
 
             let error = match attachment.begin_input_confirmed(b"must-not-send") {
                 Ok(_) => panic!("legacy host accepted a receipted input request"),
-                Err(InputAckBeginFailure::Known(error)) => error,
-                Err(InputAckBeginFailure::Ambiguous(error)) => {
-                    panic!("legacy-host rejection became ambiguous: {error}")
+                Err(ConfirmedInputFailure::Known(error)) => error,
+                Err(ConfirmedInputFailure::Indeterminate(error)) => {
+                    panic!("legacy-host rejection became indeterminate: {error}")
                 }
             };
             assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);

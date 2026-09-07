@@ -391,6 +391,20 @@ struct HostedFrameStager {
 }
 
 #[cfg(unix)]
+fn is_targeted_host_response(kind: MessageKind) -> bool {
+    matches!(
+        kind,
+        MessageKind::Capability
+            | MessageKind::CellPixelSizeAck
+            | MessageKind::KittyGraphicsLimitsAck
+            | MessageKind::ClearHistoryAck
+            | MessageKind::TerminateAck
+            | MessageKind::DetachAck
+            | MessageKind::InputAck
+    )
+}
+
+#[cfg(unix)]
 impl HostedFrameStager {
     #[cfg(test)]
     fn new(sequence_boundary: u64, smart_renderer: bool) -> Self {
@@ -3075,15 +3089,9 @@ impl Surface {
                             Ok(Some(frame)) => frame,
                             Ok(None) | Err(_) => break,
                         };
-                        if matches!(
-                            frame.kind,
-                            MessageKind::Capability
-                                | MessageKind::CellPixelSizeAck
-                                | MessageKind::KittyGraphicsLimitsAck
-                                | MessageKind::ClearHistoryAck
-                                | MessageKind::TerminateAck
-                                | MessageKind::DetachAck
-                        ) && frame.request_id != 0
+                        // Targeted responses must be consumed before live staging:
+                        // HostedFrameStager intentionally rejects every nonzero request id.
+                        if is_targeted_host_response(frame.kind) && frame.request_id != 0
                         {
                             if frame.version != protocol_version
                                 || frame.flags != 0
@@ -4476,15 +4484,7 @@ impl Surface {
                 .map_err(ConfirmedInputFailure::Indeterminate),
             #[cfg(unix)]
             PtyRuntime::Hosted(host) => {
-                let receipt =
-                    host.begin_input_confirmed(bytes).map_err(|failure| match failure {
-                        crate::terminal_host_runtime::InputAckBeginFailure::Known(error) => {
-                            ConfirmedInputFailure::Known(error)
-                        }
-                        crate::terminal_host_runtime::InputAckBeginFailure::Ambiguous(error) => {
-                            ConfirmedInputFailure::Indeterminate(error)
-                        }
-                    })?;
+                let receipt = host.begin_input_confirmed(bytes)?;
                 drop(runtime);
                 receipt.wait().map_err(ConfirmedInputFailure::Indeterminate)
             }
@@ -8274,6 +8274,29 @@ mod tests {
             Err(RecvTimeoutError::Disconnected)
         ));
         assert!(attachment.lifecycle.is_canceled());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_ack_wire_frame_is_classified_before_live_staging() {
+        let (mut sender, mut receiver) = std::os::unix::net::UnixStream::pair().unwrap();
+        let mut ack = Frame::new(MessageKind::InputAck, Vec::new());
+        ack.request_id = 42;
+        crate::terminal_host_protocol::write_frame(&mut sender, &ack).unwrap();
+
+        let decoded = crate::terminal_host_protocol::read_frame(
+            &mut receiver,
+            crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(decoded.kind, MessageKind::InputAck);
+        assert_eq!(decoded.request_id, 42);
+        assert!(is_targeted_host_response(decoded.kind));
+        assert!(
+            HostedFrameStager::new(0, true).push(decoded).is_err(),
+            "a targeted InputAck would corrupt the live stream if dispatch missed it"
+        );
     }
 
     #[cfg(unix)]
