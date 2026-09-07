@@ -21,6 +21,7 @@ jobs:
         run: |
           cp fieldwork/repair_terminal_input_ack.py /tmp/repair_terminal_input_ack.py
           cp fieldwork/repair_terminal_input_ack_test_lifetime.py /tmp/repair_terminal_input_ack_test_lifetime.py
+          cp fieldwork/repair_terminal_input_ack_surface_fixture.py /tmp/repair_terminal_input_ack_surface_fixture.py
 
       - name: Checkout exact product branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -33,6 +34,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "406f5e88335ae359df53c16c5637155dc54a5045"
           python3 /tmp/repair_terminal_input_ack.py
           python3 /tmp/repair_terminal_input_ack_test_lifetime.py
+          python3 /tmp/repair_terminal_input_ack_surface_fixture.py
           git diff --check
           git diff --stat
 
@@ -83,6 +85,7 @@ jobs:
           git diff --check
           git config user.name "Leo"
           git config user.email "cheerleaderleo@outlook.com"
+          git add cmux-tui/crates/cmux-tui-core/src/mux.rs
           git add cmux-tui/crates/cmux-tui-core/src/surface.rs
           git add cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
           git add cmux-tui/spec/terminal-host.md
