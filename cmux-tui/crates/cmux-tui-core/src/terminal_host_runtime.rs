@@ -1198,13 +1198,12 @@ mod unix {
                 )));
             }
 
-            let shutdown = self
-                .control_responses
-                .input_ack_shutdown_handle(&self.writer)
-                .map_err(|error| {
+            let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(
+                |error| {
                     self.control_responses.release_input_ack(payload.len());
                     ConfirmedInputFailure::Known(error)
-                })?;
+                },
+            )?;
 
             let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
             if request_id == 0 {
