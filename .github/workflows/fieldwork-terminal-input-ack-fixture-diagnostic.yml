@@ -1,0 +1,29 @@
+name: Fieldwork terminal input ACK fixture diagnostic
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-fixture-diagnostic-20260907
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 1
+      - name: Find pending host registration and hosted test helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== register_pending_terminal_host ==='
+          grep -R -n -C 18 'register_pending_terminal_host' cmux-tui/crates/cmux-tui-core/src || true
+          echo '=== pending terminal host is not registered ==='
+          grep -R -n -C 18 'pending terminal host is not registered' cmux-tui/crates/cmux-tui-core/src || true
+          echo '=== pending_host_binding ==='
+          grep -R -n -C 18 'pending_host_binding' cmux-tui/crates/cmux-tui-core/src || true
+          echo '=== hosted creation/adoption in tests ==='
+          grep -R -n -E -C 12 'spawn_hosted|adopt_hosted|launch_hosted|reserve.*terminal|pending.*host' cmux-tui/crates/cmux-tui-core/src/*test* cmux-tui/crates/cmux-tui-core/src/*/test* cmux-tui/crates/cmux-tui-core/src/surface.rs 2>/dev/null | head -n 1200 || true
