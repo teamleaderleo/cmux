@@ -1,0 +1,102 @@
+name: Fieldwork terminal input ACK failure hardening macOS
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-failure-final-macos-20260907
+
+permissions:
+  contents: read
+
+env:
+  BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+  PRODUCT_COMMIT: 1d8558e4af2893c1fc1d93b7ad812c1844148f8b
+  EXPECTED_PARENT: 37470cb1dae36704d2278364d9963e7df77e1a25
+  PIPELINE_REGRESSION: surface::tests::hosted_receipted_input_requests_pipeline_through_surface_reader
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Check out exact product independently of wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git merge-base "$BASE_COMMIT" HEAD)" = "$BASE_COMMIT"
+          git diff --check "$BASE_COMMIT" HEAD
+          git diff --name-only "$EXPECTED_PARENT" HEAD | sort > /tmp/hardening-files.txt
+          cat > /tmp/expected-hardening-files.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          EOF
+          diff -u /tmp/expected-hardening-files.txt /tmp/hardening-files.txt
+          git submodule update --init --depth 1 ghostty
+
+      - name: Supply gofmt for generated-binding check
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          command -v gofmt
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run hosted input ACK regressions including failure paths
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib --locked host_receipted_input_partial_write_closes_connection_without_ack -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_receipted_input_flush_failure_closes_connection_without_ack -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_ack_total_budget_rejection_is_post_delivery_connection_loss -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked hosted_receipted_input_disconnect_after_submit_is_indeterminate -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked receipted_input_ -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_receipt_follows_pty_write_and_flush -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked interactive_input_keeps_fire_and_forget_semantics -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked resource_router::content::tests -- --nocapture
+
+      - name: Repeat Surface pipelining regression twenty times
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            cargo test -p cmux-tui-core --lib --locked "$PIPELINE_REGRESSION" -- --exact > /tmp/pipeline-repeat.log 2>&1 || { cat /tmp/pipeline-repeat.log; exit 1; }
+            grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-repeat.log
+          done
+
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" HEAD
