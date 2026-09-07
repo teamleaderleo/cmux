@@ -1,0 +1,74 @@
+name: Fieldwork terminal input ACK repair focused
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-9d9e-focused
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PRODUCT_COMMIT: 9d9e1f06c31e4a28c02c5fff300148b8a7c6f7c3
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact wrapper and product ancestry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git diff --check "$BASE_COMMIT" "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run reviewed receipted input regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_the_pty_write --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib input_ack_wire_frame_is_classified_before_live_staging --locked -- --nocapture
+
+      - name: Run resource-router regressions
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Record focused verified boundary
+        run: |
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
