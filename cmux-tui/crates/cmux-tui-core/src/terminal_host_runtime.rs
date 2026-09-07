@@ -18,8 +18,8 @@ use crate::surface::{
     CLEAR_HISTORY_PRESERVATION_ERROR, CLEAR_HISTORY_STREAM_TIMEOUT_ERROR,
     CLEAR_HISTORY_STREAM_WAIT_TIMEOUT, ClearHistoryDelivery, ClearHistoryFailure,
     ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,
-    TerminalStreamProgress,
-    apply_clear_history_transition, replace_ghostty_cursor_defaults, write_clear_history_fallback,
+    TerminalStreamProgress, apply_clear_history_transition, replace_ghostty_cursor_defaults,
+    write_clear_history_fallback,
 };
 use crate::terminal_host::{
     CapabilityRights, CapabilityStore, CapabilityToken, ClientHello, ClientRole, HostBootstrap,
@@ -851,6 +851,7 @@ mod unix {
         deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,
         latest_cell_pixel_ack: AtomicU64,
         pending_input_acks: Mutex<PendingInputAckWindow>,
+        input_ack_shutdown: Mutex<Option<Arc<UnixStream>>>,
     }
 
     impl ControlResponses {
@@ -860,6 +861,7 @@ mod unix {
                 deferred_cell_pixel_handler: Mutex::new(None),
                 latest_cell_pixel_ack: AtomicU64::new(0),
                 pending_input_acks: Mutex::new(PendingInputAckWindow::default()),
+                input_ack_shutdown: Mutex::new(None),
             }
         }
 
@@ -919,6 +921,19 @@ mod unix {
             }
         }
 
+        fn input_ack_shutdown_handle(
+            &self,
+            writer: &Mutex<UnixStream>,
+        ) -> std::io::Result<Arc<UnixStream>> {
+            let mut cached = self.input_ack_shutdown.lock().unwrap();
+            if let Some(shutdown) = cached.as_ref() {
+                return Ok(shutdown.clone());
+            }
+            let shutdown = Arc::new(writer.lock().unwrap().try_clone()?);
+            *cached = Some(shutdown.clone());
+            Ok(shutdown)
+        }
+
         fn try_reserve_input_ack(&self, bytes: usize) -> bool {
             if bytes > MAX_PENDING_INPUT_ACK_BYTES {
                 return false;
@@ -946,6 +961,14 @@ mod unix {
         fn pending_input_acks_for_test(&self) -> (usize, usize) {
             let pending = self.pending_input_acks.lock().unwrap();
             (pending.writes, pending.bytes)
+        }
+
+        #[cfg(test)]
+        fn input_ack_shutdown_is_cached_for_test(&self, writer: &Mutex<UnixStream>) {
+            let first = self.input_ack_shutdown_handle(writer).unwrap();
+            let _writer_guard = writer.lock().unwrap();
+            let second = self.input_ack_shutdown_handle(writer).unwrap();
+            assert!(Arc::ptr_eq(&first, &second));
         }
 
         fn defer_cell_pixel(&self, request_id: u64, expected: (u16, u16)) -> bool {
@@ -995,7 +1018,7 @@ mod unix {
         request_id: u64,
         receiver: Receiver<Frame>,
         control_responses: Arc<ControlResponses>,
-        shutdown: UnixStream,
+        shutdown: Arc<UnixStream>,
         bytes: usize,
     }
 
@@ -1175,14 +1198,13 @@ mod unix {
                 )));
             }
 
-            let shutdown = {
-                let writer = self.writer.lock().unwrap();
-                writer.try_clone()
-            }
-            .map_err(|error| {
-                self.control_responses.release_input_ack(payload.len());
-                ConfirmedInputFailure::Known(error)
-            })?;
+            let shutdown = self
+                .control_responses
+                .input_ack_shutdown_handle(&self.writer)
+                .map_err(|error| {
+                    self.control_responses.release_input_ack(payload.len());
+                    ConfirmedInputFailure::Known(error)
+                })?;
 
             let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);
             if request_id == 0 {
@@ -7427,6 +7449,14 @@ mod unix {
             drop(attachment);
             drop(lease);
             let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn receipted_input_shutdown_handle_is_connection_scoped() {
+            let responses = ControlResponses::new();
+            let (writer, _peer) = UnixStream::pair().unwrap();
+            let writer = Mutex::new(writer);
+            responses.input_ack_shutdown_is_cached_for_test(&writer);
         }
 
         #[test]
