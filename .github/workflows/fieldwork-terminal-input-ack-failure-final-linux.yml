@@ -1,0 +1,152 @@
+name: Fieldwork terminal input ACK failure hardening Linux
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-failure-final-linux-20260907
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+      PRODUCT_COMMIT: 1d8558e4af2893c1fc1d93b7ad812c1844148f8b
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact wrapper, ancestry, and product file set
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git diff --check "$BASE_COMMIT" "$PRODUCT_COMMIT"
+          git diff --name-only "$BASE_COMMIT" "$PRODUCT_COMMIT" | sort > /tmp/product-files.txt
+          cat > /tmp/expected-files.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/mux.rs
+          cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+          cmux-tui/crates/cmux-tui/tests/cli.rs
+          cmux-tui/spec/inventory.json
+          cmux-tui/spec/terminal-host.md
+          EOF
+          diff -u /tmp/expected-files.txt /tmp/product-files.txt
+
+      - name: Check out pinned upstream baseline
+        run: |
+          git checkout --detach "$BASE_COMMIT"
+          git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize pinned-upstream full core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/baseline-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - "$status" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path('/tmp/baseline-core.log').read_text(errors='replace')
+          summaries = re.findall(r'^test result: (?:ok|FAILED)\. .*$', text, re.M)
+          assert len(summaries) == 1, 'baseline must finish its test run'
+          failures = sorted(set(re.findall(r'^    ([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+)\s*$', text, re.M)))
+          assert int(sys.argv[1]) == 0 or (int(sys.argv[1]) == 101 and failures), 'baseline build or harness failure'
+          Path('/tmp/baseline-failures.txt').write_text('\n'.join(failures))
+          print(summaries[0])
+          print('baseline failing tests:', failures)
+          PY
+
+      - name: Check out exact hardened candidate
+        run: |
+          git checkout --detach "$PRODUCT_COMMIT"
+          git submodule update --init --depth 1 ghostty
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run terminal input ACK regressions including failure paths
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib --locked receipted_input_ -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_receipt_follows_pty_write_and_flush -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_ack_total_budget_rejection_is_post_delivery_connection_loss -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked interactive_input_keeps_fire_and_forget_semantics -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked resource_router::content::tests -- --nocapture
+
+      - name: Require zero candidate-only full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/candidate-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - "$status" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path('/tmp/candidate-core.log').read_text(errors='replace')
+          summaries = re.findall(r'^test result: (?:ok|FAILED)\. .*$', text, re.M)
+          assert len(summaries) == 1, 'candidate must finish its test run'
+          failures = set(re.findall(r'^    ([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+)\s*$', text, re.M))
+          assert int(sys.argv[1]) == 0 or (int(sys.argv[1]) == 101 and failures), 'candidate build or harness failure'
+          baseline = set(Path('/tmp/baseline-failures.txt').read_text().splitlines())
+          candidate_only = failures - baseline
+          assert not candidate_only, f'candidate-only failures: {sorted(candidate_only)}'
+          print(summaries[0])
+          print('candidate failing tests:', sorted(failures))
+          print('candidate introduced no new full-core failing tests')
+          PY
+
+      - name: Run real headless terminal-write integration
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui --test cli --locked noun_first_cli_covers_resources_output_errors_and_private_raw_escape -- --exact --nocapture 2>&1 | tee /tmp/cli.log
+          grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/cli.log
+
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" "$PRODUCT_COMMIT"
+          git diff --stat "$BASE_COMMIT" "$PRODUCT_COMMIT"
