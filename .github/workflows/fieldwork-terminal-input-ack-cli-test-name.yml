@@ -1,0 +1,32 @@
+name: Fieldwork identify terminal write integration test
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-cli-test-name-20260907
+
+permissions:
+  contents: read
+
+jobs:
+  locate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Show enclosing test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('cmux-tui/crates/cmux-tui/tests/cli.rs').read_text().splitlines()
+          marker = next(i for i, line in enumerate(lines) if 'cmux_cli_marker_' in line)
+          start = marker
+          while start >= 0 and not lines[start].lstrip().startswith('fn '):
+              start -= 1
+          for i in range(max(0, start - 3), min(len(lines), marker + 35)):
+              print(f'{i+1}: {lines[i]}')
+          PY
