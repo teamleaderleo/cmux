@@ -104,12 +104,14 @@ jobs:
           if "InputAckBeginFailure" in runtime:
               raise SystemExit("stale InputAckBeginFailure reference remains")
 
-          runtime = replace_once(
-              runtime,
-              """            let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);\n""",
-              """            let shutdown = {\n                let writer = self.writer.lock().unwrap();\n                writer.try_clone()\n            }\n            .map_err(|error| {\n                self.control_responses.release_input_ack(payload.len());\n                ConfirmedInputFailure::Known(error)\n            })?;\n\n            let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);\n""",
-              "independent receipt shutdown handle",
-          )
+          request_line = "            let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);\n"
+          begin_start = runtime.index("        pub(crate) fn begin_input_confirmed(")
+          request_at = runtime.index(request_line, begin_start)
+          begin_end = runtime.index("\n        /// Update the authoritative parser defaults", begin_start)
+          if not begin_start < request_at < begin_end:
+              raise SystemExit("request-id insertion escaped begin_input_confirmed")
+          shutdown = """            let shutdown = {\n                let writer = self.writer.lock().unwrap();\n                writer.try_clone()\n            }\n            .map_err(|error| {\n                self.control_responses.release_input_ack(payload.len());\n                ConfirmedInputFailure::Known(error)\n            })?;\n\n"""
+          runtime = runtime[:request_at] + shutdown + runtime[request_at:]
 
           runtime = replace_once(
               runtime,
