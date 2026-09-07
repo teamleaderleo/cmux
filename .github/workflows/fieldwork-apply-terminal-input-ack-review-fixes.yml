@@ -17,127 +17,78 @@ jobs:
           ref: fix/terminal-input-owner-ack-current-main
           fetch-depth: 0
 
-      - name: Apply reviewed fixes
+      - name: Apply shutdown-handle refinement
         shell: bash
         run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a5369b2ab90f77c60af2927d665428720b1c4848"
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          def replace_once(text: str, old: str, new: str, label: str) -> str:
+          path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
+          text = path.read_text()
+
+          def replace_once(old: str, new: str, label: str):
+              global text
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
-              return text.replace(old, new, 1)
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              text = text.replace(old, new, 1)
 
-          def regex_once(text: str, pattern: str, replacement: str, label: str) -> str:
-              next_text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected exactly one regex match, found {count}")
-              return next_text
-
-          surface_path = Path("cmux-tui/crates/cmux-tui-core/src/surface.rs")
-          surface = surface_path.read_text()
-
-          surface = replace_once(
-              surface,
-              """#[cfg(unix)]\nimpl HostedFrameStager {\n""",
-              """#[cfg(unix)]\nfn is_targeted_host_response(kind: MessageKind) -> bool {\n    matches!(\n        kind,\n        MessageKind::Capability\n            | MessageKind::CellPixelSizeAck\n            | MessageKind::KittyGraphicsLimitsAck\n            | MessageKind::ClearHistoryAck\n            | MessageKind::TerminateAck\n            | MessageKind::DetachAck\n            | MessageKind::InputAck\n    )\n}\n\n#[cfg(unix)]\nimpl HostedFrameStager {\n""",
-              "surface targeted-response classifier",
+          replace_once(
+              """    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,\n    TerminalStreamProgress,\n    apply_clear_history_transition, replace_ghostty_cursor_defaults, write_clear_history_fallback,\n""",
+              """    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,\n    TerminalStreamProgress, apply_clear_history_transition, replace_ghostty_cursor_defaults,\n    write_clear_history_fallback,\n""",
+              "rustfmt import layout",
           )
 
-          surface = replace_once(
-              surface,
-              """                        if matches!(\n                            frame.kind,\n                            MessageKind::Capability\n                                | MessageKind::CellPixelSizeAck\n                                | MessageKind::KittyGraphicsLimitsAck\n                                | MessageKind::ClearHistoryAck\n                                | MessageKind::TerminateAck\n                                | MessageKind::DetachAck\n                        ) && frame.request_id != 0\n""",
-              """                        // Targeted responses must be consumed before live staging:\n                        // HostedFrameStager intentionally rejects every nonzero request id.\n                        if is_targeted_host_response(frame.kind) && frame.request_id != 0\n""",
-              "surface production targeted-response dispatch",
+          replace_once(
+              """    pub(crate) struct ControlResponses {\n        waiters: Mutex<HashMap<u64, ControlResponseWaiter>>,\n        deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,\n        latest_cell_pixel_ack: AtomicU64,\n        pending_input_acks: Mutex<PendingInputAckWindow>,\n    }\n""",
+              """    pub(crate) struct ControlResponses {\n        waiters: Mutex<HashMap<u64, ControlResponseWaiter>>,\n        deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,\n        latest_cell_pixel_ack: AtomicU64,\n        pending_input_acks: Mutex<PendingInputAckWindow>,\n        input_ack_shutdown: Mutex<Option<Arc<UnixStream>>>,\n    }\n""",
+              "control response shutdown cache field",
           )
 
-          surface = replace_once(
-              surface,
-              """            #[cfg(unix)]\n            PtyRuntime::Hosted(host) => {\n                let receipt =\n                    host.begin_input_confirmed(bytes).map_err(|failure| match failure {\n                        crate::terminal_host_runtime::InputAckBeginFailure::Known(error) => {\n                            ConfirmedInputFailure::Known(error)\n                        }\n                        crate::terminal_host_runtime::InputAckBeginFailure::Ambiguous(error) => {\n                            ConfirmedInputFailure::Indeterminate(error)\n                        }\n                    })?;\n                drop(runtime);\n                receipt.wait().map_err(ConfirmedInputFailure::Indeterminate)\n            }\n""",
-              """            #[cfg(unix)]\n            PtyRuntime::Hosted(host) => {\n                let receipt = host.begin_input_confirmed(bytes)?;\n                drop(runtime);\n                receipt.wait().map_err(ConfirmedInputFailure::Indeterminate)\n            }\n""",
-              "surface shared delivery failure",
+          replace_once(
+              """                latest_cell_pixel_ack: AtomicU64::new(0),\n                pending_input_acks: Mutex::new(PendingInputAckWindow::default()),\n            }\n""",
+              """                latest_cell_pixel_ack: AtomicU64::new(0),\n                pending_input_acks: Mutex::new(PendingInputAckWindow::default()),\n                input_ack_shutdown: Mutex::new(None),\n            }\n""",
+              "control response shutdown cache init",
           )
 
-          marker = """    #[cfg(unix)]\n    #[test]\n    fn hosted_stager_exposes_coupled_state_only_after_colors() {\n"""
-          test = """    #[cfg(unix)]\n    #[test]\n    fn input_ack_wire_frame_is_classified_before_live_staging() {\n        let (mut sender, mut receiver) = std::os::unix::net::UnixStream::pair().unwrap();\n        let mut ack = Frame::new(MessageKind::InputAck, Vec::new());\n        ack.request_id = 42;\n        crate::terminal_host_protocol::write_frame(&mut sender, &ack).unwrap();\n\n        let decoded = crate::terminal_host_protocol::read_frame(\n            &mut receiver,\n            crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,\n        )\n        .unwrap()\n        .unwrap();\n        assert_eq!(decoded.kind, MessageKind::InputAck);\n        assert_eq!(decoded.request_id, 42);\n        assert!(is_targeted_host_response(decoded.kind));\n        assert!(\n            HostedFrameStager::new(0, true).push(decoded).is_err(),\n            "a targeted InputAck would corrupt the live stream if dispatch missed it"\n        );\n    }\n\n"""
-          surface = replace_once(surface, marker, test + marker, "surface InputAck wire regression")
-          surface_path.write_text(surface)
-
-          runtime_path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
-          runtime = runtime_path.read_text()
-
-          runtime = replace_once(
-              runtime,
-              """    CLEAR_HISTORY_STREAM_WAIT_TIMEOUT, ClearHistoryDelivery, ClearHistoryFailure,\n    ClearHistoryTransition, DefaultColors, SurfaceOptions, TerminalStreamProgress,\n""",
-              """    CLEAR_HISTORY_STREAM_WAIT_TIMEOUT, ClearHistoryDelivery, ClearHistoryFailure,\n    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,\n    TerminalStreamProgress,\n""",
-              "runtime shared delivery failure import",
+          replace_once(
+              """        fn try_reserve_input_ack(&self, bytes: usize) -> bool {\n""",
+              """        fn input_ack_shutdown_handle(\n            &self,\n            writer: &Mutex<UnixStream>,\n        ) -> std::io::Result<Arc<UnixStream>> {\n            let mut cached = self.input_ack_shutdown.lock().unwrap();\n            if let Some(shutdown) = cached.as_ref() {\n                return Ok(shutdown.clone());\n            }\n            let shutdown = Arc::new(writer.lock().unwrap().try_clone()?);\n            *cached = Some(shutdown.clone());\n            Ok(shutdown)\n        }\n\n        fn try_reserve_input_ack(&self, bytes: usize) -> bool {\n""",
+              "connection-scoped shutdown accessor",
           )
 
-          runtime = replace_once(
-              runtime,
-              """#[derive(Debug)]\npub(crate) enum InputAckBeginFailure {\n    Known(std::io::Error),\n    Ambiguous(std::io::Error),\n}\n\n""",
-              "",
-              "remove duplicate InputAck failure enum",
+          replace_once(
+              """        shutdown: UnixStream,\n""",
+              """        shutdown: Arc<UnixStream>,\n""",
+              "receipt shared shutdown handle",
           )
 
-          runtime = regex_once(
-              runtime,
-              r"    pub\(crate\) struct InputAckReceipt \{.*?\n    pub struct HostAttachment \{",
-              """    pub(crate) struct InputAckReceipt {\n        request_id: u64,\n        receiver: Receiver<Frame>,\n        control_responses: Arc<ControlResponses>,\n        shutdown: UnixStream,\n        bytes: usize,\n    }\n\n    impl InputAckReceipt {\n        fn abort_connection(&self) {\n            let _ = self.shutdown.shutdown(std::net::Shutdown::Both);\n        }\n\n        pub(crate) fn wait(self) -> std::io::Result<()> {\n            match self.receiver.recv_timeout(CONTROL_RESPONSE_TIMEOUT) {\n                Ok(frame) => {\n                    if !frame.payload.is_empty() {\n                        self.abort_connection();\n                        return Err(std::io::Error::new(\n                            std::io::ErrorKind::InvalidData,\n                            \"terminal host returned a malformed input acknowledgement\",\n                        ));\n                    }\n                    Ok(())\n                }\n                Err(error) => {\n                    self.control_responses.waiters.lock().unwrap().remove(&self.request_id);\n                    // Shutdown uses a separately cloned socket handle. A timed-out\n                    // receipt therefore does not wait behind another frame writer\n                    // before it can abort the broken attachment.\n                    self.abort_connection();\n                    let kind = match error {\n                        RecvTimeoutError::Timeout => std::io::ErrorKind::TimedOut,\n                        RecvTimeoutError::Disconnected => std::io::ErrorKind::ConnectionAborted,\n                    };\n                    Err(std::io::Error::new(\n                        kind,\n                        format!(\"terminal host did not acknowledge receipted input: {error}\"),\n                    ))\n                }\n            }\n        }\n    }\n\n    impl Drop for InputAckReceipt {\n        fn drop(&mut self) {\n            let abandoned =\n                self.control_responses.waiters.lock().unwrap().remove(&self.request_id).is_some();\n            self.control_responses.release_input_ack(self.bytes);\n            if abandoned {\n                // A submitted request whose confirmation is abandoned can still\n                // produce a late targeted ACK. Close this attachment now rather\n                // than letting that late frame fail the production reader later.\n                self.abort_connection();\n            }\n        }\n    }\n\n    pub struct HostAttachment {""",
-              "simplify InputAckReceipt and independent shutdown",
+          replace_once(
+              """            let shutdown = {\n                let writer = self.writer.lock().unwrap();\n                writer.try_clone()\n            }\n            .map_err(|error| {\n                self.control_responses.release_input_ack(payload.len());\n                ConfirmedInputFailure::Known(error)\n            })?;\n""",
+              """            let shutdown = self\n                .control_responses\n                .input_ack_shutdown_handle(&self.writer)\n                .map_err(|error| {\n                    self.control_responses.release_input_ack(payload.len());\n                    ConfirmedInputFailure::Known(error)\n                })?;\n""",
+              "use connection-scoped shutdown handle",
           )
 
-          runtime = runtime.replace(
-              "Result<InputAckReceipt, InputAckBeginFailure>",
-              "Result<InputAckReceipt, ConfirmedInputFailure>",
-          )
-          runtime = runtime.replace(
-              "InputAckBeginFailure::Known",
-              "ConfirmedInputFailure::Known",
-          )
-          runtime = runtime.replace(
-              "InputAckBeginFailure::Ambiguous",
-              "ConfirmedInputFailure::Indeterminate",
-          )
-          if "InputAckBeginFailure" in runtime:
-              raise SystemExit("stale InputAckBeginFailure reference remains")
+          marker = """        #[cfg(test)]\n        fn pending_input_acks_for_test(&self) -> (usize, usize) {\n            let pending = self.pending_input_acks.lock().unwrap();\n            (pending.writes, pending.bytes)\n        }\n"""
+          addition = marker + """\n        #[cfg(test)]\n        fn input_ack_shutdown_is_cached_for_test(&self, writer: &Mutex<UnixStream>) {\n            let first = self.input_ack_shutdown_handle(writer).unwrap();\n            let _writer_guard = writer.lock().unwrap();\n            let second = self.input_ack_shutdown_handle(writer).unwrap();\n            assert!(Arc::ptr_eq(&first, &second));\n        }\n"""
+          replace_once(marker, addition, "shutdown cache regression helper")
 
-          request_line = "            let request_id = self.next_request.fetch_add(1, Ordering::Relaxed);\n"
-          begin_start = runtime.index("        pub(crate) fn begin_input_confirmed(")
-          request_at = runtime.index(request_line, begin_start)
-          begin_end = runtime.index("\n        /// Update the authoritative parser defaults", begin_start)
-          if not begin_start < request_at < begin_end:
-              raise SystemExit("request-id insertion escaped begin_input_confirmed")
-          shutdown = """            let shutdown = {\n                let writer = self.writer.lock().unwrap();\n                writer.try_clone()\n            }\n            .map_err(|error| {\n                self.control_responses.release_input_ack(payload.len());\n                ConfirmedInputFailure::Known(error)\n            })?;\n\n"""
-          runtime = runtime[:request_at] + shutdown + runtime[request_at:]
+          test_marker = """        #[test]\n        fn receipted_input_window_is_bounded() {\n"""
+          test = """        #[test]\n        fn receipted_input_shutdown_handle_is_connection_scoped() {\n            let responses = ControlResponses::new();\n            let (writer, _peer) = UnixStream::pair().unwrap();\n            let writer = Mutex::new(writer);\n            responses.input_ack_shutdown_is_cached_for_test(&writer);\n        }\n\n"""
+          replace_once(test_marker, test + test_marker, "shutdown cache regression")
 
-          runtime = replace_once(
-              runtime,
-              """            Ok(InputAckReceipt {\n                request_id,\n                receiver: Some(receiver),\n                control_responses: self.control_responses.clone(),\n                writer: self.writer.clone(),\n                bytes: payload.len(),\n                active: true,\n            })\n""",
-              """            Ok(InputAckReceipt {\n                request_id,\n                receiver,\n                control_responses: self.control_responses.clone(),\n                shutdown,\n                bytes: payload.len(),\n            })\n""",
-              "InputAck receipt construction",
-          )
-
-          runtime = runtime.replace(
-              "panic!(\"legacy-host rejection became ambiguous: {error}\")",
-              "panic!(\"legacy-host rejection became indeterminate: {error}\")",
-          )
-          runtime_path.write_text(runtime)
+          path.write_text(text)
           PY
-
           git diff --check
-          git diff -- cmux-tui/crates/cmux-tui-core/src/surface.rs \
-                     cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git diff -- cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
 
-      - name: Commit product fix
+      - name: Commit product refinement
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add \
-            cmux-tui/crates/cmux-tui-core/src/surface.rs \
-            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
-          git commit -m 'fix(cmux-tui): route input acknowledgements through hosted reader'
+          git add cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git commit -m 'refactor(cmux-tui): share input receipt shutdown handle'
           git push origin HEAD:fix/terminal-input-owner-ack-current-main
