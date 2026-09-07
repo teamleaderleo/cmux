@@ -1,0 +1,124 @@
+name: Fieldwork terminal input ACK polish
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-polish-1d855
+
+permissions:
+  contents: write
+
+jobs:
+  polish-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      PRODUCT_BRANCH: fix/terminal-input-owner-ack-current-main
+      EXPECTED_HEAD: 1d8558e4af2893c1fc1d93b7ad812c1844148f8b
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+      TARGET: cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: fix/terminal-input-owner-ack-current-main
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact fork head and review base
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git merge-base "$BASE_COMMIT" "$EXPECTED_HEAD")" = "$BASE_COMMIT"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Apply ACK publication and receipt-ownership polish
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
+          text = path.read_text()
+
+          old = """        pub(crate) fn resolve_after(&self, frame: &Frame, before_resolve: impl FnOnce()) -> bool {\n            let waiter = self.waiters.lock().unwrap().remove(&frame.request_id);\n"""
+          new = """        pub(crate) fn resolve_after(&self, frame: &Frame, before_resolve: impl FnOnce()) -> bool {\n            if frame.kind == MessageKind::InputAck && !frame.payload.is_empty() {\n                return false;\n            }\n            let waiter = self.waiters.lock().unwrap().remove(&frame.request_id);\n"""
+          if text.count(old) != 1:
+              raise SystemExit("resolve_after anchor changed")
+          text = text.replace(old, new, 1)
+
+          old = """    pub(crate) struct InputAckReceipt {\n"""
+          new = """    #[must_use = \"receipted terminal input must wait for its acknowledgement\"]\n    pub(crate) struct InputAckReceipt {\n"""
+          if text.count(old) != 1:
+              raise SystemExit("InputAckReceipt anchor changed")
+          text = text.replace(old, new, 1)
+
+          anchor = """        #[test]\n        fn receipted_input_never_reaches_a_legacy_host_without_ack_support() {\n"""
+          test = """        #[test]\n        fn receipted_input_malformed_ack_is_rejected_before_waiter_publication() {\n            let responses = ControlResponses::new();\n            let (sender, receiver) = sync_channel(1);\n            responses.waiters.lock().unwrap().insert(\n                42,\n                ControlResponseWaiter::Blocking {\n                    kind: MessageKind::InputAck,\n                    sender,\n                },\n            );\n            let mut response = Frame::new(MessageKind::InputAck, b\"unexpected\".to_vec());\n            response.request_id = 42;\n\n            assert!(!responses.resolve(&response));\n            assert!(responses.waiters.lock().unwrap().contains_key(&42));\n            assert!(matches!(\n                receiver.recv_timeout(Duration::from_millis(20)),\n                Err(RecvTimeoutError::Timeout)\n            ));\n        }\n\n"""
+          if text.count(anchor) != 1:
+              raise SystemExit("receipted-input test anchor changed")
+          text = text.replace(anchor, test + anchor, 1)
+
+          path.write_text(text)
+          PY
+          cd cmux-tui
+          cargo fmt --all
+          cd ..
+          git diff --check
+          test "$(git diff --name-only)" = "$TARGET"
+
+      - name: Commit exact candidate locally
+        id: candidate
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET"
+          git commit -m "fix(cmux-tui): validate terminal input ACK receipts"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run focused receipted-input regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_ack_total_budget_rejection_is_post_delivery_connection_loss --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_pty_write_and_flush --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_ack_round_trips_through_surface_reader --locked -- --nocapture
+
+      - name: Run resource-router regressions
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Publish exact verified candidate to fork branch
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "candidate=${{ steps.candidate.outputs.sha }}"
+          echo "candidate_tree=${{ steps.candidate.outputs.tree }}"
+          echo "base=$BASE_COMMIT"
