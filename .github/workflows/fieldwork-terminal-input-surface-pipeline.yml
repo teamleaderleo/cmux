@@ -1,0 +1,322 @@
+name: Fieldwork Surface input pipelining
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-surface-pipeline-20260907-verify
+
+permissions:
+  contents: read
+
+env:
+  BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+  EXPECTED_HEAD: 3c3b412840d7a7b04161daf6e692138d42e3584d
+  PRODUCT_BRANCH: fieldwork/terminal-input-surface-pipeline-20260907-product
+  REGRESSION: surface::tests::hosted_receipted_input_requests_pipeline_through_surface_reader
+
+jobs:
+  prepare:
+    if: github.repository == 'teamleaderleo/cmux'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      product_commit: ${{ steps.commit.outputs.product_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - name: Require exact starting revision and isolate product changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          test "$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git switch -c pipeline-product "$EXPECTED_HEAD"
+      - name: Add production Surface concurrency regression
+        env:
+          NEW_TEST: |
+                #[cfg(unix)]
+                #[test]
+                fn hosted_receipted_input_requests_pipeline_through_surface_reader() {
+                    let mux = Mux::new_for_test("hosted-input-ack-pipeline", SurfaceOptions::default());
+                    let workspace = mux.create_empty_workspace(None, None, None).unwrap();
+                    let (mut attachment, mut host) = crate::terminal_host_runtime::input_ack_surface_fixture();
+                    let terminal_id = attachment.record.terminal_id.clone();
+                    attachment.record.workspace_key = workspace.key.clone();
+                    mux.seed_launching_terminal_for_test(&terminal_id, &workspace.key).unwrap();
+
+                    let surface = Surface::spawn_hosted(
+                        1,
+                        SurfaceOptions::default(),
+                        Arc::downgrade(&mux),
+                        HostedSurfaceLaunch {
+                            attachment,
+                            kitty_reservation: None,
+                            terminate_on_error: false,
+                            defer_launch_activation: false,
+                            lifetime: PtyLifetime::SessionOwned,
+                            terminal_public_id: None,
+                            resource_identity: None,
+                        },
+                    )
+                    .unwrap();
+
+                    // Socket observation orders the calls. These bounds make a
+                    // stop-and-wait regression fail instead of hanging the test.
+                    host.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+                    host.set_write_timeout(Some(Duration::from_secs(1))).unwrap();
+                    let read_input = |host: &mut std::os::unix::net::UnixStream| {
+                        let frame = crate::terminal_host_protocol::read_frame(
+                            host,
+                            crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+                        )
+                        .expect("observe submitted input while the earlier ACK is withheld")
+                        .expect("hosted connection remains open while awaiting input ACKs");
+                        assert_eq!(frame.kind, MessageKind::Input);
+                        frame
+                    };
+
+                    std::thread::scope(|scope| {
+                        let first = scope.spawn(|| surface.write_bytes_confirmed(b"pipeline-a"));
+                        let first_request = read_input(&mut host);
+                        assert_eq!(first_request.payload, b"pipeline-a");
+                        assert_ne!(first_request.request_id, 0);
+
+                        // Go through Surface so the runtime mutex participates.
+                        // B must reach the peer while A still awaits its ACK.
+                        let second = scope.spawn(|| surface.write_bytes_confirmed(b"pipeline-b"));
+                        let second_request = read_input(&mut host);
+                        assert_eq!(second_request.payload, b"pipeline-b");
+                        assert_ne!(second_request.request_id, 0);
+                        assert_ne!(first_request.request_id, second_request.request_id);
+
+                        // Human typing must also submit and finish while both
+                        // receipted writes are pending, using request id zero.
+                        let interactive = scope.spawn(|| surface.write_bytes(b"pipeline-interactive"));
+                        let interactive_request = read_input(&mut host);
+                        assert_eq!(interactive_request.payload, b"pipeline-interactive");
+                        assert_eq!(interactive_request.request_id, 0);
+                        interactive.join().unwrap().unwrap();
+                        assert!(!first.is_finished());
+                        assert!(!second.is_finished());
+
+                        // Reverse completion order checks connection-local waiter
+                        // identity independently of submission order. ACKs travel
+                        // over the socket and through the production Surface reader.
+                        let mut second_ack = Frame::new(MessageKind::InputAck, Vec::new());
+                        second_ack.request_id = second_request.request_id;
+                        crate::terminal_host_protocol::write_frame(&mut host, &second_ack).unwrap();
+                        second.join().unwrap().unwrap();
+                        assert!(!first.is_finished(), "B's ACK must leave A pending");
+
+                        let mut first_ack = Frame::new(MessageKind::InputAck, Vec::new());
+                        first_ack.request_id = first_request.request_id;
+                        crate::terminal_host_protocol::write_frame(&mut host, &first_ack).unwrap();
+                        first.join().unwrap().unwrap();
+                    });
+                }
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path('cmux-tui/crates/cmux-tui-core/src/surface.rs')
+          source = path.read_text()
+          anchor = '    #[cfg(unix)]\n    #[test]\n    fn hosted_stager_exposes_coupled_state_only_after_colors() {'
+          assert source.count(anchor) == 1
+          assert 'fn hosted_receipted_input_requests_pipeline_through_surface_reader()' not in source
+          # YAML removes its block indentation; restore the containing Rust module's indent.
+          test = '\n'.join('    ' + line if line else '' for line in os.environ['NEW_TEST'].strip('\n').splitlines())
+          path.write_text(source.replace(anchor, test + '\n\n' + anchor))
+          PY
+      - name: Set up pinned Rust formatter on hosted Linux
+        uses: ./.github/actions/setup-cmux-tui-rust
+      - name: Format the changed Rust file
+        working-directory: cmux-tui
+        run: cargo fmt --all
+      - name: Commit only the regression on the isolated fork branch
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = 'cmux-tui/crates/cmux-tui-core/src/surface.rs'
+          git diff --check
+          git diff --stat
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs
+          git commit -m 'test(cmux-tui): verify Surface-level input ACK pipelining'
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          test "$(git ls-remote --heads origin "refs/heads/$PRODUCT_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "product_commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "product_commit=$(git rev-parse HEAD)"
+          echo "product_tree=$(git rev-parse 'HEAD^{tree}')"
+          git show --stat --oneline HEAD >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
+    env:
+      PRODUCT_COMMIT: ${{ needs.prepare.outputs.product_commit }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ needs.prepare.outputs.product_commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check exact product ancestry and delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          test "$(git merge-base "$BASE_COMMIT" HEAD)" = "$BASE_COMMIT"
+          test "$(git diff --name-only "$EXPECTED_HEAD" HEAD)" = 'cmux-tui/crates/cmux-tui-core/src/surface.rs'
+          git diff --check "$BASE_COMMIT" HEAD
+          git submodule update --init --depth 1 ghostty
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+      - name: Characterize pinned upstream full core on Linux
+        if: runner.os == 'Linux'
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$BASE_COMMIT"
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/pipeline-baseline-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - "$status" <<'PY'
+          import re, sys
+          from pathlib import Path
+          text = Path('/tmp/pipeline-baseline-core.log').read_text(errors='replace')
+          summaries = re.findall(r'^test result: (?:ok|FAILED)\. .*$', text, re.M)
+          assert len(summaries) == 1, 'baseline must finish its test run'
+          failures = sorted(set(re.findall(r'^    ([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+)\s*$', text, re.M)))
+          assert int(sys.argv[1]) == 0 or (int(sys.argv[1]) == 101 and failures), 'baseline build or harness failure'
+          Path('/tmp/pipeline-baseline-failures.txt').write_text('\n'.join(failures))
+          print(summaries[0])
+          print('baseline failing tests:', failures)
+          PY
+          git checkout --detach "$PRODUCT_COMMIT"
+      - name: Run hosted input and resource-router regressions
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          cargo test -p cmux-tui-core --lib --locked "$REGRESSION" -- --exact --nocapture 2>&1 | tee /tmp/pipeline-positive.log
+          grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-positive.log
+          cargo test -p cmux-tui-core --lib --locked receipted_input_ -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_receipt_follows_pty_write_and_flush -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked interactive_input_keeps_fire_and_forget_semantics -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked resource_router::content::tests -- --nocapture
+      - name: Repeat the Surface concurrency regression
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            cargo test -p cmux-tui-core --lib --locked "$REGRESSION" -- --exact > /tmp/pipeline-repeat.log 2>&1 || { cat /tmp/pipeline-repeat.log; exit 1; }
+            grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-repeat.log
+          done
+      - name: Prove the regression detects waiting under the runtime lock
+        if: runner.os == 'Linux'
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=crates/cmux-tui-core/src/surface.rs
+          trap 'git restore -- crates/cmux-tui-core/src/surface.rs' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/cmux-tui-core/src/surface.rs')
+          text = path.read_text()
+          old = '                drop(runtime);\n                receipt.wait().map_err(ConfirmedInputFailure::Indeterminate)'
+          new = '                let result = receipt.wait().map_err(ConfirmedInputFailure::Indeterminate);\n                drop(runtime);\n                result'
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new))
+          PY
+          set +e
+          cargo test -p cmux-tui-core --lib --locked "$REGRESSION" -- --exact --nocapture 2>&1 | tee /tmp/pipeline-negative.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -eq 101
+          grep -F 'test result: FAILED. 0 passed; 1 failed;' /tmp/pipeline-negative.log
+          grep -F 'observe submitted input while the earlier ACK is withheld' /tmp/pipeline-negative.log
+          git restore -- "$path"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo 'Negative control caught stop-and-wait; exact product source restored.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Require zero candidate-only full-core failures on Linux
+        if: runner.os == 'Linux'
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/pipeline-candidate-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - "$status" <<'PY'
+          import os, re, sys
+          from pathlib import Path
+          text = Path('/tmp/pipeline-candidate-core.log').read_text(errors='replace')
+          summaries = re.findall(r'^test result: (?:ok|FAILED)\. .*$', text, re.M)
+          assert len(summaries) == 1, 'candidate must finish its test run'
+          failures = set(re.findall(r'^    ([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+)\s*$', text, re.M))
+          assert int(sys.argv[1]) == 0 or (int(sys.argv[1]) == 101 and failures), 'candidate build or harness failure'
+          baseline = set(Path('/tmp/pipeline-baseline-failures.txt').read_text().splitlines())
+          assert not (failures - baseline), f'candidate-only failures: {sorted(failures - baseline)}'
+          print(summaries[0])
+          print('candidate failing tests:', sorted(failures))
+          print('candidate introduced no new full-core failing tests')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              print(summaries[0], file=summary)
+              print('Candidate-only full-core failures: zero.', file=summary)
+          PY
+      - name: Run real headless terminal-write integration on Linux
+        if: runner.os == 'Linux'
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui --test cli --locked noun_first_cli_covers_resources_output_errors_and_private_raw_escape -- --exact --nocapture 2>&1 | tee /tmp/pipeline-cli.log
+          grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-cli.log
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" HEAD
+          git diff --stat "$BASE_COMMIT" HEAD
+          printf 'Verified %s on %s.\n' "$PRODUCT_COMMIT" '${{ runner.os }}' >> "$GITHUB_STEP_SUMMARY"
