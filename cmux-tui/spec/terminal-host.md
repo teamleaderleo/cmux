@@ -385,8 +385,14 @@ Discovery records use JSON `record_version:4`. Terminal and incarnation are
 32-character lowercase UUIDv4 hex, owner token and process nonce are
 64-character lowercase hex, the Unix-socket path is canonical, and the host
 PID is nonzero. `supports_input_ack` is an additive boolean capability; a
-missing or false value means receipted API input must fail before sending while
-legacy fire-and-forget input remains available. Record directories are mode
+missing or false value means receipted API input that would emit PTY bytes must
+fail before sending while legacy fire-and-forget input remains available. A
+resource operation whose defined encoding emits no PTY bytes may still succeed
+as a no-op. An input-ACK timeout is an observation deadline, not cancellation:
+the host may already be completing the PTY write. The frontend poisons that
+attachment after the deadline so unresolved receipts become indeterminate and
+the mirror reconnects rather than accepting an unresolved late ACK.
+Record directories are mode
 `0700`; records and sockets are
 mode `0600`.
 

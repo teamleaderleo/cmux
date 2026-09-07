@@ -8278,25 +8278,68 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn input_ack_wire_frame_is_classified_before_live_staging() {
-        let (mut sender, mut receiver) = std::os::unix::net::UnixStream::pair().unwrap();
-        let mut ack = Frame::new(MessageKind::InputAck, Vec::new());
-        ack.request_id = 42;
-        crate::terminal_host_protocol::write_frame(&mut sender, &ack).unwrap();
+    fn hosted_receipted_input_ack_round_trips_through_surface_reader() {
+        let mux = Mux::new_for_test("hosted-input-ack-reader", SurfaceOptions::default());
+        let workspace = mux.create_empty_workspace(None, None, None).unwrap();
+        let (mut attachment, mut host) = crate::terminal_host_runtime::input_ack_surface_fixture();
+        let terminal_id = attachment.record.terminal_id.clone();
+        attachment.record.workspace_key = workspace.key.clone();
+        mux.seed_launching_terminal_for_test(&terminal_id, &workspace.key).unwrap();
 
-        let decoded = crate::terminal_host_protocol::read_frame(
-            &mut receiver,
-            crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+        let surface = Surface::spawn_hosted(
+            1,
+            SurfaceOptions::default(),
+            Arc::downgrade(&mux),
+            HostedSurfaceLaunch {
+                attachment,
+                kitty_reservation: None,
+                terminate_on_error: false,
+                defer_launch_activation: false,
+                lifetime: PtyLifetime::SessionOwned,
+                terminal_public_id: None,
+                resource_identity: None,
+            },
         )
-        .unwrap()
         .unwrap();
-        assert_eq!(decoded.kind, MessageKind::InputAck);
-        assert_eq!(decoded.request_id, 42);
-        assert!(is_targeted_host_response(decoded.kind));
-        assert!(
-            HostedFrameStager::new(0, true).push(decoded).is_err(),
-            "a targeted InputAck would corrupt the live stream if dispatch missed it"
-        );
+
+        let (observed_tx, observed_rx) = sync_channel(0);
+        let (release_tx, release_rx) = sync_channel(0);
+        let host_thread = std::thread::spawn(move || {
+            let request = crate::terminal_host_protocol::read_frame(
+                &mut host,
+                crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(request.kind, MessageKind::Input);
+            assert_eq!(request.payload, b"owner-reader-ack");
+            assert_ne!(request.request_id, 0);
+
+            let mut ack = Frame::new(MessageKind::InputAck, Vec::new());
+            ack.version = PROTOCOL_VERSION;
+            ack.request_id = request.request_id;
+            crate::terminal_host_protocol::write_frame(&mut host, &ack).unwrap();
+
+            let interactive = crate::terminal_host_protocol::read_frame(
+                &mut host,
+                crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(interactive.kind, MessageKind::Input);
+            assert_eq!(interactive.payload, b"still-connected");
+            assert_eq!(interactive.request_id, 0);
+            observed_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(1));
+        });
+
+        surface.write_bytes_confirmed(b"owner-reader-ack").unwrap();
+        surface.write_bytes(b"still-connected").unwrap();
+        observed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Surface reader did not preserve the hosted connection after InputAck");
+        release_tx.send(()).unwrap();
+        host_thread.join().unwrap();
     }
 
     #[cfg(unix)]
