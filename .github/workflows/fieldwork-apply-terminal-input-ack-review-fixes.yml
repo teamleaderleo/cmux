@@ -24,26 +24,15 @@ jobs:
           test "$(git rev-parse HEAD)" = "9d9e1f06c31e4a28c02c5fff300148b8a7c6f7c3"
           python3 - <<'PY'
           from pathlib import Path
+          import re
           path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
           text = path.read_text()
-          old = """            let shutdown = self
-              .control_responses
-              .input_ack_shutdown_handle(&self.writer)
-              .map_err(|error| {
-                  self.control_responses.release_input_ack(payload.len());
-                  ConfirmedInputFailure::Known(error)
-              })?;
-          """
-          new = """            let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(
-              |error| {
-                  self.control_responses.release_input_ack(payload.len());
-                  ConfirmedInputFailure::Known(error)
-              },
-          )?;
-          """
-          if text.count(old) != 1:
-              raise SystemExit(f"expected one rustfmt target, found {text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
+          pattern = r"            let shutdown = self\n                \.control_responses\n                \.input_ack_shutdown_handle\(&self\.writer\)\n                \.map_err\(\|error\| \{\n                    self\.control_responses\.release_input_ack\(payload\.len\(\)\);\n                    ConfirmedInputFailure::Known\(error\)\n                \}\)\?;"
+          replacement = "            let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(\n                |error| {\n                    self.control_responses.release_input_ack(payload.len());\n                    ConfirmedInputFailure::Known(error)\n                },\n            )?;"
+          text, count = re.subn(pattern, replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one rustfmt target, found {count}")
+          path.write_text(text)
           PY
           git diff --check
           git diff -- cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
