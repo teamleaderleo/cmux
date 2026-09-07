@@ -1,0 +1,88 @@
+name: Fieldwork Surface input pipelining macOS
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-surface-pipeline-20260907-macos
+
+permissions:
+  contents: read
+
+env:
+  PRODUCT_COMMIT: 37470cb1dae36704d2278364d9963e7df77e1a25
+  EXPECTED_PARENT: 3c3b412840d7a7b04161daf6e692138d42e3584d
+  BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+  REGRESSION: surface::tests::hosted_receipted_input_requests_pipeline_through_surface_reader
+
+jobs:
+  verify:
+    if: github.repository == 'teamleaderleo/cmux'
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check out the exact product independently of its CI wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test "$(git merge-base "$BASE_COMMIT" HEAD)" = "$BASE_COMMIT"
+          test "$(git diff --name-only "$EXPECTED_PARENT" HEAD)" = 'cmux-tui/crates/cmux-tui-core/src/surface.rs'
+          git diff --check "$BASE_COMMIT" HEAD
+          git submodule update --init --depth 1 ghostty
+      - name: Supply gofmt for the existing generated-binding check
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: stable
+          cache: false
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          command -v gofmt
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+      - name: Run hosted input and resource-router regressions
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib --locked "$REGRESSION" -- --exact --nocapture 2>&1 | tee /tmp/pipeline-macos-positive.log
+          grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-macos-positive.log
+          cargo test -p cmux-tui-core --lib --locked receipted_input_ -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_receipt_follows_pty_write_and_flush -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked interactive_input_keeps_fire_and_forget_semantics -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked resource_router::content::tests -- --nocapture
+      - name: Repeat the Surface concurrency regression twenty times
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            cargo test -p cmux-tui-core --lib --locked "$REGRESSION" -- --exact > /tmp/pipeline-macos-repeat.log 2>&1 || { cat /tmp/pipeline-macos-repeat.log; exit 1; }
+            grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-macos-repeat.log
+          done
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" HEAD
+          printf 'macOS focused regressions and 20 repeated Surface-pipelining runs passed at %s.\n' "$PRODUCT_COMMIT" >> "$GITHUB_STEP_SUMMARY"
