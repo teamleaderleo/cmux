@@ -27,20 +27,20 @@ jobs:
           path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
           text = path.read_text()
           old = """            let shutdown = self
-                .control_responses
-                .input_ack_shutdown_handle(&self.writer)
-                .map_err(|error| {
-                    self.control_responses.release_input_ack(payload.len());
-                    ConfirmedInputFailure::Known(error)
-                })?;
-"""
+              .control_responses
+              .input_ack_shutdown_handle(&self.writer)
+              .map_err(|error| {
+                  self.control_responses.release_input_ack(payload.len());
+                  ConfirmedInputFailure::Known(error)
+              })?;
+          """
           new = """            let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(
-                |error| {
-                    self.control_responses.release_input_ack(payload.len());
-                    ConfirmedInputFailure::Known(error)
-                },
-            )?;
-"""
+              |error| {
+                  self.control_responses.release_input_ack(payload.len());
+                  ConfirmedInputFailure::Known(error)
+              },
+          )?;
+          """
           if text.count(old) != 1:
               raise SystemExit(f"expected one rustfmt target, found {text.count(old)}")
           path.write_text(text.replace(old, new, 1))
