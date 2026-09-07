@@ -29,7 +29,7 @@ jobs:
       - name: Guard and apply repair
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "9d9e1f06c31e4a28c02c5fff300148b8a7c6f7c3"
+          test "$(git rev-parse HEAD)" = "a695392068b187b377f21b69e03c924032acda9b"
           python3 /tmp/finalize_terminal_input_ack_review.py
           git diff --check
           git diff --stat
