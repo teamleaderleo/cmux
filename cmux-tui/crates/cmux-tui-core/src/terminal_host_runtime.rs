@@ -888,6 +888,9 @@ mod unix {
         }
 
         pub(crate) fn resolve_after(&self, frame: &Frame, before_resolve: impl FnOnce()) -> bool {
+            if frame.kind == MessageKind::InputAck && !frame.payload.is_empty() {
+                return false;
+            }
             let waiter = self.waiters.lock().unwrap().remove(&frame.request_id);
             match waiter {
                 Some(ControlResponseWaiter::Blocking { kind, sender }) => {
@@ -1014,6 +1017,7 @@ mod unix {
         }
     }
 
+    #[must_use = "receipted terminal input must wait for its acknowledgement"]
     pub(crate) struct InputAckReceipt {
         request_id: u64,
         receiver: Receiver<Frame>,
@@ -7390,6 +7394,25 @@ mod unix {
             drop(attachment);
             drop(lease);
             let _ = fs::remove_dir_all(root);
+        }
+
+        #[test]
+        fn receipted_input_malformed_ack_is_rejected_before_waiter_publication() {
+            let responses = ControlResponses::new();
+            let (sender, receiver) = sync_channel(1);
+            responses.waiters.lock().unwrap().insert(
+                42,
+                ControlResponseWaiter::Blocking { kind: MessageKind::InputAck, sender },
+            );
+            let mut response = Frame::new(MessageKind::InputAck, b"unexpected".to_vec());
+            response.request_id = 42;
+
+            assert!(!responses.resolve(&response));
+            assert!(responses.waiters.lock().unwrap().contains_key(&42));
+            assert!(matches!(
+                receiver.recv_timeout(Duration::from_millis(20)),
+                Err(RecvTimeoutError::Timeout)
+            ));
         }
 
         #[test]
