@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$PRODUCT_COMMIT" HEAD)" = "$PRODUCT_COMMIT"
           git fetch origin "$PRODUCT_BRANCH"
           test "$(git rev-parse "origin/$PRODUCT_BRANCH")" = "$PRODUCT_COMMIT"
           cp .fieldwork/terminal-input-ack-failure-tests.patch /tmp/failure-tests.patch
@@ -49,8 +49,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all
-          cargo fmt --all -- --check
+          cargo fmt --manifest-path cmux-tui/Cargo.toml --all
+          cargo fmt --manifest-path cmux-tui/Cargo.toml --all -- --check
           git diff --check "$PRODUCT_COMMIT"
           git diff --name-only "$PRODUCT_COMMIT" | sort > /tmp/actual.txt
           cat > /tmp/expected.txt <<'EOF'
@@ -63,6 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd cmux-tui
           cargo test -p cmux-tui-core --lib host_receipted_input_partial_write_closes_connection_without_ack --locked -- --nocapture
           cargo test -p cmux-tui-core --lib host_receipted_input_flush_failure_closes_connection_without_ack --locked -- --nocapture
           cargo test -p cmux-tui-core --lib host_input_ack_total_budget_rejection_is_post_delivery_connection_loss --locked -- --nocapture
