@@ -104,14 +104,14 @@ diff --git a/cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs b/cmux-t
 +
 +            match read_frame(&mut client_stream, MAX_FRAME_PAYLOAD) {
 +                Ok(None) => {}
-+                Err(error)
++                Err(crate::terminal_host_protocol::ProtocolError::Io(error))
 +                    if matches!(
 +                        error.kind(),
 +                        std::io::ErrorKind::ConnectionReset
 +                            | std::io::ErrorKind::BrokenPipe
 +                            | std::io::ErrorKind::UnexpectedEof
 +                    ) => {}
-+                Err(error) => panic!("host failed with an unexpected socket error: {error}"),
++                Err(error) => panic!("host failed with an unexpected protocol error: {error}"),
 +                Ok(Some(frame)) => panic!(
 +                    "failed PTY delivery emitted an unexpected host frame: {:?}",
 +                    frame.kind
