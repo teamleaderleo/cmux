@@ -17,78 +17,42 @@ jobs:
           ref: fix/terminal-input-owner-ack-current-main
           fetch-depth: 0
 
-      - name: Apply shutdown-handle refinement
+      - name: Apply exact rustfmt layout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "a5369b2ab90f77c60af2927d665428720b1c4848"
+          test "$(git rev-parse HEAD)" = "9d9e1f06c31e4a28c02c5fff300148b8a7c6f7c3"
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
           text = path.read_text()
-
-          def replace_once(old: str, new: str, label: str):
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected one match, found {count}")
-              text = text.replace(old, new, 1)
-
-          replace_once(
-              """    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,\n    TerminalStreamProgress,\n    apply_clear_history_transition, replace_ghostty_cursor_defaults, write_clear_history_fallback,\n""",
-              """    ClearHistoryTransition, ConfirmedInputFailure, DefaultColors, SurfaceOptions,\n    TerminalStreamProgress, apply_clear_history_transition, replace_ghostty_cursor_defaults,\n    write_clear_history_fallback,\n""",
-              "rustfmt import layout",
-          )
-
-          replace_once(
-              """    pub(crate) struct ControlResponses {\n        waiters: Mutex<HashMap<u64, ControlResponseWaiter>>,\n        deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,\n        latest_cell_pixel_ack: AtomicU64,\n        pending_input_acks: Mutex<PendingInputAckWindow>,\n    }\n""",
-              """    pub(crate) struct ControlResponses {\n        waiters: Mutex<HashMap<u64, ControlResponseWaiter>>,\n        deferred_cell_pixel_handler: Mutex<Option<DeferredCellPixelHandler>>,\n        latest_cell_pixel_ack: AtomicU64,\n        pending_input_acks: Mutex<PendingInputAckWindow>,\n        input_ack_shutdown: Mutex<Option<Arc<UnixStream>>>,\n    }\n""",
-              "control response shutdown cache field",
-          )
-
-          replace_once(
-              """                latest_cell_pixel_ack: AtomicU64::new(0),\n                pending_input_acks: Mutex::new(PendingInputAckWindow::default()),\n            }\n""",
-              """                latest_cell_pixel_ack: AtomicU64::new(0),\n                pending_input_acks: Mutex::new(PendingInputAckWindow::default()),\n                input_ack_shutdown: Mutex::new(None),\n            }\n""",
-              "control response shutdown cache init",
-          )
-
-          replace_once(
-              """        fn try_reserve_input_ack(&self, bytes: usize) -> bool {\n""",
-              """        fn input_ack_shutdown_handle(\n            &self,\n            writer: &Mutex<UnixStream>,\n        ) -> std::io::Result<Arc<UnixStream>> {\n            let mut cached = self.input_ack_shutdown.lock().unwrap();\n            if let Some(shutdown) = cached.as_ref() {\n                return Ok(shutdown.clone());\n            }\n            let shutdown = Arc::new(writer.lock().unwrap().try_clone()?);\n            *cached = Some(shutdown.clone());\n            Ok(shutdown)\n        }\n\n        fn try_reserve_input_ack(&self, bytes: usize) -> bool {\n""",
-              "connection-scoped shutdown accessor",
-          )
-
-          replace_once(
-              """        shutdown: UnixStream,\n""",
-              """        shutdown: Arc<UnixStream>,\n""",
-              "receipt shared shutdown handle",
-          )
-
-          replace_once(
-              """            let shutdown = {\n                let writer = self.writer.lock().unwrap();\n                writer.try_clone()\n            }\n            .map_err(|error| {\n                self.control_responses.release_input_ack(payload.len());\n                ConfirmedInputFailure::Known(error)\n            })?;\n""",
-              """            let shutdown = self\n                .control_responses\n                .input_ack_shutdown_handle(&self.writer)\n                .map_err(|error| {\n                    self.control_responses.release_input_ack(payload.len());\n                    ConfirmedInputFailure::Known(error)\n                })?;\n""",
-              "use connection-scoped shutdown handle",
-          )
-
-          marker = """        #[cfg(test)]\n        fn pending_input_acks_for_test(&self) -> (usize, usize) {\n            let pending = self.pending_input_acks.lock().unwrap();\n            (pending.writes, pending.bytes)\n        }\n"""
-          addition = marker + """\n        #[cfg(test)]\n        fn input_ack_shutdown_is_cached_for_test(&self, writer: &Mutex<UnixStream>) {\n            let first = self.input_ack_shutdown_handle(writer).unwrap();\n            let _writer_guard = writer.lock().unwrap();\n            let second = self.input_ack_shutdown_handle(writer).unwrap();\n            assert!(Arc::ptr_eq(&first, &second));\n        }\n"""
-          replace_once(marker, addition, "shutdown cache regression helper")
-
-          test_marker = """        #[test]\n        fn receipted_input_window_is_bounded() {\n"""
-          test = """        #[test]\n        fn receipted_input_shutdown_handle_is_connection_scoped() {\n            let responses = ControlResponses::new();\n            let (writer, _peer) = UnixStream::pair().unwrap();\n            let writer = Mutex::new(writer);\n            responses.input_ack_shutdown_is_cached_for_test(&writer);\n        }\n\n"""
-          replace_once(test_marker, test + test_marker, "shutdown cache regression")
-
-          path.write_text(text)
+          old = """            let shutdown = self
+                .control_responses
+                .input_ack_shutdown_handle(&self.writer)
+                .map_err(|error| {
+                    self.control_responses.release_input_ack(payload.len());
+                    ConfirmedInputFailure::Known(error)
+                })?;
+"""
+          new = """            let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(
+                |error| {
+                    self.control_responses.release_input_ack(payload.len());
+                    ConfirmedInputFailure::Known(error)
+                },
+            )?;
+"""
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one rustfmt target, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
           PY
           git diff --check
           git diff -- cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
 
-      - name: Commit product refinement
+      - name: Commit product formatting
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
-          git commit -m 'refactor(cmux-tui): share input receipt shutdown handle'
+          git commit -m 'chore(cmux-tui): format input receipt shutdown path'
           git push origin HEAD:fix/terminal-input-owner-ack-current-main
