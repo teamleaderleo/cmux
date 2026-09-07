@@ -15,15 +15,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 1
-      - name: Find pending host registration and hosted test helpers
+      - name: Find terminal reservation helpers
         shell: bash
         run: |
           set -euo pipefail
-          echo '=== register_pending_terminal_host ==='
-          grep -R -n -C 18 'register_pending_terminal_host' cmux-tui/crates/cmux-tui-core/src || true
-          echo '=== pending terminal host is not registered ==='
-          grep -R -n -C 18 'pending terminal host is not registered' cmux-tui/crates/cmux-tui-core/src || true
-          echo '=== pending_host_binding ==='
-          grep -R -n -C 18 'pending_host_binding' cmux-tui/crates/cmux-tui-core/src || true
-          echo '=== hosted creation/adoption in tests ==='
-          grep -R -n -E -C 12 'spawn_hosted|adopt_hosted|launch_hosted|reserve.*terminal|pending.*host' cmux-tui/crates/cmux-tui-core/src/*test* cmux-tui/crates/cmux-tui-core/src/*/test* cmux-tui/crates/cmux-tui-core/src/surface.rs 2>/dev/null | head -n 1200 || true
+          echo '=== reserve APIs ==='
+          grep -R -n -E -C 8 'pub(\(crate\))? fn .*reserve.*terminal|fn .*reserve.*terminal|reserve_terminal|RegistryTerminal \{' cmux-tui/crates/cmux-tui-core/src/mux.rs | head -n 1200 || true
+          echo '=== test helpers near pending topology ==='
+          sed -n '27980,28130p' cmux-tui/crates/cmux-tui-core/src/mux.rs
+          echo '=== Mux test constructor/helper signatures ==='
+          grep -n -E -C 5 'fn test_mux\(|pub.*for_test|workspace_registry.*for_test|terminal.*for_test' cmux-tui/crates/cmux-tui-core/src/mux.rs | head -n 1000 || true
