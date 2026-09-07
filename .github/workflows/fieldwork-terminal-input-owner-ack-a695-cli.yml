@@ -1,0 +1,49 @@
+name: Fieldwork terminal input ACK production path
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-owner-ack-a695-cli
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      PRODUCT_COMMIT: a695392068b187b377f21b69e03c924032acda9b
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+      - name: Require exact wrapper and product ancestry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+      - name: Run real headless terminal-write integration
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui --test cli noun_first_cli_covers_resources_output_errors_and_private_raw_escape --locked -- --nocapture
+      - name: Record production-path boundary
+        run: |
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
