@@ -7637,6 +7637,169 @@ mod unix {
             worker.join().unwrap();
         }
 
+        struct PrefixThenErrorInputWriter {
+            accepted: Arc<Mutex<Vec<u8>>>,
+            first_write: bool,
+        }
+
+        impl Write for PrefixThenErrorInputWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.first_write {
+                    self.first_write = false;
+                    let count = bytes.len().min(2);
+                    self.accepted.lock().unwrap().extend_from_slice(&bytes[..count]);
+                    return Ok(count);
+                }
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected PTY write failure after prefix",
+                ))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                panic!("flush must not run after write_all fails")
+            }
+        }
+
+        struct FlushFailingInputWriter {
+            accepted: Arc<Mutex<Vec<u8>>>,
+            flushes: Arc<AtomicUsize>,
+        }
+
+        impl Write for FlushFailingInputWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.accepted.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes.fetch_add(1, Ordering::AcqRel);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected PTY flush failure",
+                ))
+            }
+        }
+
+        struct RecordingInputWriter {
+            accepted: Arc<Mutex<Vec<u8>>>,
+            flushes: Arc<AtomicUsize>,
+        }
+
+        impl Write for RecordingInputWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.accepted.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushes.fetch_add(1, Ordering::AcqRel);
+                Ok(())
+            }
+        }
+
+        fn assert_failed_receipted_input_closes_host_connection(host: Arc<HostShared>) {
+            let (server_stream, mut client_stream) = UnixStream::pair().unwrap();
+            client_stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            let server_host = host.clone();
+            let server = thread::spawn(move || serve_client(server_host, server_stream));
+
+            write_frame(&mut client_stream, &snapshot_boundary_client_hello(&host, false).unwrap())
+                .unwrap();
+            assert_eq!(
+                read_required_frame(&mut client_stream, "host hello").unwrap().kind,
+                MessageKind::HostHello
+            );
+            assert_eq!(
+                read_required_frame(&mut client_stream, "snapshot").unwrap().kind,
+                MessageKind::Snapshot
+            );
+            assert_eq!(
+                read_required_frame(&mut client_stream, "colors").unwrap().kind,
+                MessageKind::Colors
+            );
+
+            write_frame(&mut client_stream, &Frame::new(MessageKind::Activate, Vec::new()))
+                .unwrap();
+            let mut request = Frame::new(MessageKind::Input, b"failure-path".to_vec());
+            request.request_id = 42;
+            write_frame(&mut client_stream, &request).unwrap();
+
+            match read_frame(&mut client_stream, MAX_FRAME_PAYLOAD) {
+                Ok(None) => {}
+                Err(crate::terminal_host_protocol::ProtocolError::Io(error))
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::UnexpectedEof
+                    ) => {}
+                Err(error) => panic!("host failed with an unexpected protocol error: {error}"),
+                Ok(Some(frame)) => {
+                    panic!("failed PTY delivery emitted an unexpected host frame: {:?}", frame.kind)
+                }
+            }
+            server.join().unwrap().unwrap();
+        }
+
+        #[test]
+        fn host_receipted_input_partial_write_closes_connection_without_ack() {
+            let host = test_host_shared();
+            let accepted = Arc::new(Mutex::new(Vec::new()));
+            *host.writer.lock().unwrap() = Box::new(PrefixThenErrorInputWriter {
+                accepted: accepted.clone(),
+                first_write: true,
+            });
+
+            assert_failed_receipted_input_closes_host_connection(host);
+            assert_eq!(&*accepted.lock().unwrap(), b"fa");
+        }
+
+        #[test]
+        fn host_receipted_input_flush_failure_closes_connection_without_ack() {
+            let host = test_host_shared();
+            let accepted = Arc::new(Mutex::new(Vec::new()));
+            let flushes = Arc::new(AtomicUsize::new(0));
+            *host.writer.lock().unwrap() = Box::new(FlushFailingInputWriter {
+                accepted: accepted.clone(),
+                flushes: flushes.clone(),
+            });
+
+            assert_failed_receipted_input_closes_host_connection(host);
+            assert_eq!(&*accepted.lock().unwrap(), b"failure-path");
+            assert_eq!(flushes.load(Ordering::Acquire), 1);
+        }
+
+        #[test]
+        fn host_input_ack_total_budget_rejection_is_post_delivery_connection_loss() {
+            let host = test_host_shared();
+            let accepted = Arc::new(Mutex::new(Vec::new()));
+            let flushes = Arc::new(AtomicUsize::new(0));
+            *host.writer.lock().unwrap() = Box::new(RecordingInputWriter {
+                accepted: accepted.clone(),
+                flushes: flushes.clone(),
+            });
+            let (target_socket, mut target_peer) = UnixStream::pair().unwrap();
+            target_peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            let (target_tx, target_rx) = mpsc_channel();
+            let target = HostTap::new(
+                target_tx,
+                Arc::new(target_socket),
+                crate::terminal_host_protocol::HEADER_LEN - 1,
+            );
+
+            assert!(!host.write_input(b"delivered-before-ack-rejection", 43, &target));
+            assert_eq!(&*accepted.lock().unwrap(), b"delivered-before-ack-rejection");
+            assert_eq!(flushes.load(Ordering::Acquire), 1);
+            assert!(target_rx.try_recv().is_err(), "rejected ACK entered the FIFO");
+            let mut byte = [0u8; 1];
+            assert_eq!(
+                target_peer.read(&mut byte).unwrap(),
+                0,
+                "HostTap total-budget rejection must close the attachment"
+            );
+        }
+
         #[test]
         fn terminate_waits_for_the_authoritative_host_receipt() {
             let (record_path, record, lease) = record_fixture("terminate-ack");

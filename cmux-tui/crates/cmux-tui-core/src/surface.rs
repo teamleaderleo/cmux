@@ -8344,6 +8344,50 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn hosted_receipted_input_disconnect_after_submit_is_indeterminate() {
+        let mux = Mux::new_for_test("hosted-input-ack-disconnect", SurfaceOptions::default());
+        let workspace = mux.create_empty_workspace(None, None, None).unwrap();
+        let (mut attachment, mut host) = crate::terminal_host_runtime::input_ack_surface_fixture();
+        let terminal_id = attachment.record.terminal_id.clone();
+        attachment.record.workspace_key = workspace.key.clone();
+        mux.seed_launching_terminal_for_test(&terminal_id, &workspace.key).unwrap();
+
+        let surface = Surface::spawn_hosted(
+            1,
+            SurfaceOptions::default(),
+            Arc::downgrade(&mux),
+            HostedSurfaceLaunch {
+                attachment,
+                kitty_reservation: None,
+                terminate_on_error: false,
+                defer_launch_activation: false,
+                lifetime: PtyLifetime::SessionOwned,
+                terminal_public_id: None,
+                resource_identity: None,
+            },
+        )
+        .unwrap();
+
+        let host_thread = std::thread::spawn(move || {
+            let request = crate::terminal_host_protocol::read_frame(
+                &mut host,
+                crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(request.kind, MessageKind::Input);
+            assert_eq!(request.payload, b"disconnect-after-submit");
+            assert_ne!(request.request_id, 0);
+            host.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+
+        let failure = surface.write_bytes_confirmed(b"disconnect-after-submit").unwrap_err();
+        assert!(matches!(failure, ConfirmedInputFailure::Indeterminate(_)));
+        host_thread.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn hosted_receipted_input_requests_pipeline_through_surface_reader() {
         let mux = Mux::new_for_test("hosted-input-ack-pipeline", SurfaceOptions::default());
         let workspace = mux.create_empty_workspace(None, None, None).unwrap();
