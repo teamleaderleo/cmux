@@ -1,0 +1,339 @@
+name: Fieldwork terminal input ACK failure paths v2
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-failure-tests-v2-20260907
+
+permissions:
+  contents: write
+
+env:
+  PRODUCT_COMMIT: 37470cb1dae36704d2278364d9963e7df77e1a25
+  PRODUCT_BRANCH: fix/terminal-input-owner-ack-current-main
+
+jobs:
+  prepare-and-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require exact carrier and product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse "origin/$PRODUCT_BRANCH")" = "$PRODUCT_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          git submodule update --init --depth 1 ghostty
+
+      - name: Add failure-path regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          runtime_path = Path("cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs")
+          runtime = runtime_path.read_text()
+          runtime_marker = '''        #[test]
+          fn terminate_waits_for_the_authoritative_host_receipt() {
+          '''
+          assert runtime.count(runtime_marker) == 1, runtime.count(runtime_marker)
+          runtime_insert = r'''        struct PrefixThenErrorInputWriter {
+              accepted: Arc<Mutex<Vec<u8>>>,
+              first_write: bool,
+          }
+
+          impl Write for PrefixThenErrorInputWriter {
+              fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                  if self.first_write {
+                      self.first_write = false;
+                      let count = bytes.len().min(2);
+                      self.accepted.lock().unwrap().extend_from_slice(&bytes[..count]);
+                      return Ok(count);
+                  }
+                  Err(std::io::Error::new(
+                      std::io::ErrorKind::BrokenPipe,
+                      "injected PTY write failure after prefix",
+                  ))
+              }
+
+              fn flush(&mut self) -> std::io::Result<()> {
+                  panic!("flush must not run after write_all fails")
+              }
+          }
+
+          struct FlushFailingInputWriter {
+              accepted: Arc<Mutex<Vec<u8>>>,
+              flushes: Arc<AtomicUsize>,
+          }
+
+          impl Write for FlushFailingInputWriter {
+              fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                  self.accepted.lock().unwrap().extend_from_slice(bytes);
+                  Ok(bytes.len())
+              }
+
+              fn flush(&mut self) -> std::io::Result<()> {
+                  self.flushes.fetch_add(1, Ordering::AcqRel);
+                  Err(std::io::Error::new(
+                      std::io::ErrorKind::BrokenPipe,
+                      "injected PTY flush failure",
+                  ))
+              }
+          }
+
+          struct RecordingInputWriter {
+              accepted: Arc<Mutex<Vec<u8>>>,
+              flushes: Arc<AtomicUsize>,
+          }
+
+          impl Write for RecordingInputWriter {
+              fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                  self.accepted.lock().unwrap().extend_from_slice(bytes);
+                  Ok(bytes.len())
+              }
+
+              fn flush(&mut self) -> std::io::Result<()> {
+                  self.flushes.fetch_add(1, Ordering::AcqRel);
+                  Ok(())
+              }
+          }
+
+          fn assert_failed_receipted_input_closes_host_connection(host: Arc<HostShared>) {
+              let (server_stream, mut client_stream) = UnixStream::pair().unwrap();
+              client_stream
+                  .set_read_timeout(Some(Duration::from_secs(1)))
+                  .unwrap();
+              let server_host = host.clone();
+              let server = thread::spawn(move || serve_client(server_host, server_stream));
+
+              write_frame(
+                  &mut client_stream,
+                  &snapshot_boundary_client_hello(&host, false).unwrap(),
+              )
+              .unwrap();
+              assert_eq!(
+                  read_required_frame(&mut client_stream, "host hello").unwrap().kind,
+                  MessageKind::HostHello
+              );
+              assert_eq!(
+                  read_required_frame(&mut client_stream, "snapshot").unwrap().kind,
+                  MessageKind::Snapshot
+              );
+              assert_eq!(
+                  read_required_frame(&mut client_stream, "colors").unwrap().kind,
+                  MessageKind::Colors
+              );
+
+              write_frame(
+                  &mut client_stream,
+                  &Frame::new(MessageKind::Activate, Vec::new()),
+              )
+              .unwrap();
+              let mut request = Frame::new(MessageKind::Input, b"failure-path".to_vec());
+              request.request_id = 42;
+              write_frame(&mut client_stream, &request).unwrap();
+
+              match read_frame(&mut client_stream, MAX_FRAME_PAYLOAD) {
+                  Ok(None) => {}
+                  Err(error)
+                      if matches!(
+                          error.kind(),
+                          std::io::ErrorKind::ConnectionReset
+                              | std::io::ErrorKind::BrokenPipe
+                              | std::io::ErrorKind::UnexpectedEof
+                      ) => {}
+                  Err(error) => panic!("host failed with an unexpected socket error: {error}"),
+                  Ok(Some(frame)) => panic!(
+                      "failed PTY delivery emitted an unexpected host frame: {:?}",
+                      frame.kind
+                  ),
+              }
+              server.join().unwrap().unwrap();
+          }
+
+          #[test]
+          fn host_receipted_input_partial_write_closes_connection_without_ack() {
+              let host = test_host_shared();
+              let accepted = Arc::new(Mutex::new(Vec::new()));
+              *host.writer.lock().unwrap() = Box::new(PrefixThenErrorInputWriter {
+                  accepted: accepted.clone(),
+                  first_write: true,
+              });
+
+              assert_failed_receipted_input_closes_host_connection(host);
+              assert_eq!(&*accepted.lock().unwrap(), b"fa");
+          }
+
+          #[test]
+          fn host_receipted_input_flush_failure_closes_connection_without_ack() {
+              let host = test_host_shared();
+              let accepted = Arc::new(Mutex::new(Vec::new()));
+              let flushes = Arc::new(AtomicUsize::new(0));
+              *host.writer.lock().unwrap() = Box::new(FlushFailingInputWriter {
+                  accepted: accepted.clone(),
+                  flushes: flushes.clone(),
+              });
+
+              assert_failed_receipted_input_closes_host_connection(host);
+              assert_eq!(&*accepted.lock().unwrap(), b"failure-path");
+              assert_eq!(flushes.load(Ordering::Acquire), 1);
+          }
+
+          #[test]
+          fn host_input_ack_total_budget_rejection_is_post_delivery_connection_loss() {
+              let host = test_host_shared();
+              let accepted = Arc::new(Mutex::new(Vec::new()));
+              let flushes = Arc::new(AtomicUsize::new(0));
+              *host.writer.lock().unwrap() = Box::new(RecordingInputWriter {
+                  accepted: accepted.clone(),
+                  flushes: flushes.clone(),
+              });
+              let (target_socket, mut target_peer) = UnixStream::pair().unwrap();
+              target_peer
+                  .set_read_timeout(Some(Duration::from_secs(1)))
+                  .unwrap();
+              let (target_tx, target_rx) = mpsc_channel();
+              let target = HostTap::new(
+                  target_tx,
+                  Arc::new(target_socket),
+                  crate::terminal_host_protocol::HEADER_LEN - 1,
+              );
+
+              assert!(!host.write_input(b"delivered-before-ack-rejection", 43, &target));
+              assert_eq!(
+                  &*accepted.lock().unwrap(),
+                  b"delivered-before-ack-rejection"
+              );
+              assert_eq!(flushes.load(Ordering::Acquire), 1);
+              assert!(target_rx.try_recv().is_err(), "rejected ACK entered the FIFO");
+              let mut byte = [0u8; 1];
+              assert_eq!(
+                  target_peer.read(&mut byte).unwrap(),
+                  0,
+                  "HostTap total-budget rejection must close the attachment"
+              );
+          }
+
+          '''
+          runtime = runtime.replace(runtime_marker, runtime_insert + runtime_marker, 1)
+          runtime_path.write_text(runtime)
+
+          surface_path = Path("cmux-tui/crates/cmux-tui-core/src/surface.rs")
+          surface = surface_path.read_text()
+          surface_marker = '''    #[cfg(unix)]
+          #[test]
+          fn hosted_receipted_input_requests_pipeline_through_surface_reader() {
+          '''
+          assert surface.count(surface_marker) == 1, surface.count(surface_marker)
+          surface_insert = r'''    #[cfg(unix)]
+          #[test]
+          fn hosted_receipted_input_disconnect_after_submit_is_indeterminate() {
+              let mux = Mux::new_for_test(
+                  "hosted-input-ack-disconnect",
+                  SurfaceOptions::default(),
+              );
+              let workspace = mux.create_empty_workspace(None, None, None).unwrap();
+              let (mut attachment, mut host) =
+                  crate::terminal_host_runtime::input_ack_surface_fixture();
+              let terminal_id = attachment.record.terminal_id.clone();
+              attachment.record.workspace_key = workspace.key.clone();
+              mux.seed_launching_terminal_for_test(&terminal_id, &workspace.key)
+                  .unwrap();
+
+              let surface = Surface::spawn_hosted(
+                  1,
+                  SurfaceOptions::default(),
+                  Arc::downgrade(&mux),
+                  HostedSurfaceLaunch {
+                      attachment,
+                      kitty_reservation: None,
+                      terminate_on_error: false,
+                      defer_launch_activation: false,
+                      lifetime: PtyLifetime::SessionOwned,
+                      terminal_public_id: None,
+                      resource_identity: None,
+                  },
+              )
+              .unwrap();
+
+              let host_thread = std::thread::spawn(move || {
+                  let request = crate::terminal_host_protocol::read_frame(
+                      &mut host,
+                      crate::terminal_host_protocol::MAX_FRAME_PAYLOAD,
+                  )
+                  .unwrap()
+                  .unwrap();
+                  assert_eq!(request.kind, MessageKind::Input);
+                  assert_eq!(request.payload, b"disconnect-after-submit");
+                  assert_ne!(request.request_id, 0);
+                  host.shutdown(std::net::Shutdown::Both).unwrap();
+              });
+
+              let failure = surface
+                  .write_bytes_confirmed(b"disconnect-after-submit")
+                  .unwrap_err();
+              assert!(matches!(failure, ConfirmedInputFailure::Indeterminate(_)));
+              host_thread.join().unwrap();
+          }
+
+          '''
+          surface = surface.replace(surface_marker, surface_insert + surface_marker, 1)
+          surface_path.write_text(surface)
+          PY
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Format and validate test-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check "$PRODUCT_COMMIT"
+          git diff --name-only "$PRODUCT_COMMIT" | sort > /tmp/actual.txt
+          cat > /tmp/expected.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          EOF
+          diff -u /tmp/expected.txt /tmp/actual.txt
+
+      - name: Run new failure-path regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib host_receipted_input_partial_write_closes_connection_without_ack --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_receipted_input_flush_failure_closes_connection_without_ack --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_ack_total_budget_rejection_is_post_delivery_connection_loss --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_disconnect_after_submit_is_indeterminate --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+
+      - name: Commit and publish exact test-only product update
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmux-tui/crates/cmux-tui-core/src/surface.rs cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git commit -m "test(cmux-tui): cover terminal input ACK failure paths"
+          NEW_HEAD="$(git rev-parse HEAD)"
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse "origin/$PRODUCT_BRANCH")" = "$PRODUCT_COMMIT"
+          git push --force-with-lease="refs/heads/$PRODUCT_BRANCH:$PRODUCT_COMMIT" origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "published_product_head=$NEW_HEAD"
+          echo "published_product_tree=$(git rev-parse 'HEAD^{tree}')"
