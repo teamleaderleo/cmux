@@ -1,0 +1,64 @@
+name: Fieldwork terminal input ACK a55 final CLI
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-a55-final-cli-20260908
+
+permissions:
+  contents: read
+
+env:
+  BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+  PRODUCT_COMMIT: a55ddc3c9b3fc39988c8524f0eb85a5311e61d3b
+
+jobs:
+  cli:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact wrapper and product ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          git diff --check "$BASE_COMMIT" HEAD
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Run real headless terminal-write integration
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui --test cli noun_first_cli_covers_resources_output_errors_and_private_raw_escape --locked -- --nocapture
+
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" HEAD
