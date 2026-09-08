@@ -2939,6 +2939,7 @@ fn server_stats(mux: &Mux) -> crate::diagnostics::ServerStatsSnapshot {
         registry_lock: mux.registry_lock_stats(),
         journal_writer: mux.journal_writer_stats(),
         connections: mux.connection_stats().snapshot(MAX_SERVER_CONNECTIONS as u64),
+        terminal_input_receipts: crate::diagnostics::terminal_input_receipt_stats().snapshot(),
     }
 }
 
