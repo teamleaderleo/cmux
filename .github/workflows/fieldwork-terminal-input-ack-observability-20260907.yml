@@ -50,6 +50,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/apply-terminal-input-ack-observability.py')
+          text = path.read_text()
+          old = '''def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if text.count(old) != 1:
+                  raise SystemExit(f"{label} anchor changed (count={text.count(old)})")
+              return text.replace(old, new, 1)
+          '''
+          new = '''def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              expected = 2 if label == "confirmed input submission finish" else 1
+              if count != expected:
+                  raise SystemExit(f"{label} anchor changed (count={count}, expected={expected})")
+              return text.replace(old, new, 1)
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('transform helper anchor changed')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 /tmp/apply-terminal-input-ack-observability.py
           cd cmux-tui
           cargo fmt --all
