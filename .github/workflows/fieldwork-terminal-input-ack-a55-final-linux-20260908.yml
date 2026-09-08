@@ -1,0 +1,187 @@
+name: Fieldwork terminal input ACK a55 final Linux
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-a55-final-linux-20260908
+
+permissions:
+  contents: read
+
+env:
+  BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+  PRODUCT_COMMIT: a55ddc3c9b3fc39988c8524f0eb85a5311e61d3b
+  PIPELINE_REGRESSION: surface::tests::hosted_receipted_input_requests_pipeline_through_surface_reader
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require exact wrapper and product ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git diff --check "$BASE_COMMIT" "$PRODUCT_COMMIT"
+          git diff --name-only "$BASE_COMMIT" "$PRODUCT_COMMIT" | sort > /tmp/product-files.txt
+          cat > /tmp/expected-files.txt <<'EOF'
+          cmux-tui/crates/cmux-tui-core/src/diagnostics.rs
+          cmux-tui/crates/cmux-tui-core/src/mux.rs
+          cmux-tui/crates/cmux-tui-core/src/resource_router/content.rs
+          cmux-tui/crates/cmux-tui-core/src/server.rs
+          cmux-tui/crates/cmux-tui-core/src/surface.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_protocol.rs
+          cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          cmux-tui/crates/cmux-tui-core/src/workspace_registry/tests.rs
+          cmux-tui/crates/cmux-tui/tests/cli.rs
+          cmux-tui/spec/inventory.json
+          cmux-tui/spec/terminal-host.md
+          EOF
+          diff -u /tmp/expected-files.txt /tmp/product-files.txt
+
+      - name: Check out pinned upstream baseline
+        run: git checkout --detach "$BASE_COMMIT"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install repository-pinned Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Characterize pinned-upstream full core
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/baseline-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          lines = Path('/tmp/baseline-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/baseline-failures.txt').write_text(''.join(f'{name}\n' for name in sorted(failures)))
+          PY
+          echo "baseline full-core exit status: $status"
+          cat /tmp/baseline-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/baseline-core.log
+            test -s /tmp/baseline-failures.txt
+          fi
+
+      - name: Check out exact final product
+        run: |
+          set -euo pipefail
+          git checkout --detach "$PRODUCT_COMMIT"
+          git submodule update --init --depth 1 ghostty
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" HEAD)" = "$BASE_COMMIT"
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run final receipted-input and diagnostics regressions
+        working-directory: cmux-tui
+        run: |
+          cargo test -p cmux-tui-core --lib terminal_input_receipt_stats_distinguish_submission_ack_wait_and_timeout_pressure --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_receipt_follows_pty_write_and_flush --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib host_input_ack_total_budget_rejection_is_post_delivery_connection_loss --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib interactive_input_keeps_fire_and_forget_semantics --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_ack_round_trips_through_surface_reader --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_disconnect_after_submit_is_indeterminate --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib hosted_receipted_input_requests_pipeline_through_surface_reader --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib server_stats_report_lock_writer_and_connection_metrics --locked -- --nocapture
+          cargo test -p cmux-tui-core --lib resource_router::content::tests --locked -- --nocapture
+
+      - name: Repeat Surface pipelining regression twenty times
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 20); do
+            cargo test -p cmux-tui-core --lib --locked "$PIPELINE_REGRESSION" -- --exact > /tmp/pipeline-repeat.log 2>&1 || { cat /tmp/pipeline-repeat.log; exit 1; }
+            grep -F 'test result: ok. 1 passed; 0 failed;' /tmp/pipeline-repeat.log
+          done
+
+      - name: Require no candidate-only full-core failures
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set +e
+          cargo test -p cmux-tui-core --lib --locked -- --nocapture 2>&1 | tee /tmp/candidate-core.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          lines = Path('/tmp/candidate-core.log').read_text(errors='replace').splitlines()
+          in_failures = False
+          failures = set()
+          for line in lines:
+              if line.strip() == 'failures:':
+                  in_failures = True
+                  continue
+              if in_failures and line.startswith('test result:'):
+                  break
+              if in_failures and re.match(r'^    [A-Za-z0-9_].*::', line):
+                  failures.add(line.strip())
+          Path('/tmp/candidate-failures.txt').write_text(''.join(f'{name}\n' for name in sorted(failures)))
+          PY
+          echo "candidate full-core exit status: $status"
+          cat /tmp/candidate-failures.txt
+          if [ "$status" -ne 0 ]; then
+            grep -q '^test result: FAILED\.' /tmp/candidate-core.log
+            test -s /tmp/candidate-failures.txt
+          fi
+          comm -13 /tmp/baseline-failures.txt /tmp/candidate-failures.txt > /tmp/candidate-only-failures.txt
+          if [ -s /tmp/candidate-only-failures.txt ]; then
+            echo "candidate introduced failures absent from pinned upstream:" >&2
+            cat /tmp/candidate-only-failures.txt >&2
+            exit 1
+          fi
+          echo "candidate introduced no new full-core failing tests"
+
+      - name: Record exact verified product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "base=$BASE_COMMIT"
+          echo "candidate=$PRODUCT_COMMIT"
+          echo "candidate_tree=$(git rev-parse 'HEAD^{tree}')"
+          git diff --check "$BASE_COMMIT" HEAD
