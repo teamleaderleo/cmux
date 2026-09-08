@@ -35,14 +35,15 @@ permissions:
 
 jobs:
   validate-inputs:
+    if: github.repository == 'teamleaderleo/cmux' && github.actor == 'teamleaderleo'
     name: validate exact commit request
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Validate dispatch inputs
         env:
           EXACT_COMMIT: ${{ inputs.commit }}
-          WORKFLOW_COMMIT: ${{ github.sha }}
+          CANDIDATE_COMMIT: 81ffffc153ecaff473a8e9be059191d72024d18a
           MODE: ${{ inputs.mode }}
           TEST_FILTER: ${{ inputs.test_filter }}
           REQUEST_ID: ${{ inputs.request_id }}
@@ -52,8 +53,8 @@ jobs:
             echo "::error::commit must be a lowercase 40-character SHA" >&2
             exit 1
           fi
-          if [[ "$WORKFLOW_COMMIT" != "$EXACT_COMMIT" ]]; then
-            echo "::error::workflow revision $WORKFLOW_COMMIT does not match requested commit $EXACT_COMMIT" >&2
+          if [[ "$CANDIDATE_COMMIT" != "$EXACT_COMMIT" ]]; then
+            echo "::error::pinned candidate $CANDIDATE_COMMIT does not match requested commit $EXACT_COMMIT" >&2
             exit 1
           fi
           if [[ ! "$REQUEST_ID" =~ ^[A-Za-z0-9._-]{1,100}$ ]]; then
@@ -82,7 +83,7 @@ jobs:
   msrv-check:
     name: Rust MSRV (1.91)
     needs: validate-inputs
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -116,7 +117,7 @@ jobs:
   web-frontend:
     needs: validate-inputs
     if: inputs.mode == 'full'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -161,9 +162,9 @@ jobs:
       matrix:
         include:
           - os: macos
-            runner: blacksmith-6vcpu-macos-15
+            runner: macos-15
           - os: linux
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -220,7 +221,7 @@ jobs:
     name: valgrind-leak-check (startup)
     needs: validate-inputs
     if: inputs.mode == 'full'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Full behavior stays in the normal macOS and Linux suites. Valgrind owns
     # the bounded startup parsers and terminal replay state only.
     timeout-minutes: 40
@@ -406,7 +407,7 @@ jobs:
     name: valgrind-leak-check
     if: always() && inputs.mode == 'full'
     needs: valgrind-leak-check-shard
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
       - name: Require every Valgrind shard
@@ -424,9 +425,9 @@ jobs:
       matrix:
         include:
           - os: macos
-            runner: blacksmith-6vcpu-macos-15
+            runner: macos-15
           - os: linux
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -636,9 +637,9 @@ jobs:
       matrix:
         include:
           - os: macos
-            runner: blacksmith-6vcpu-macos-15
+            runner: macos-15
           - os: linux
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -706,7 +707,7 @@ jobs:
   bindings-e2e:
     needs: validate-inputs
     if: inputs.mode == 'full'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -807,8 +808,8 @@ jobs:
       target_set: ${{ inputs.mode == 'full' && 'all' || 'macos-arm64' }}
       build_cloudflare_relay: false
       verify_linux_arm64: ${{ inputs.mode == 'full' }}
-      macos_runner: blacksmith-6vcpu-macos-15
-      linux_runner: blacksmith-4vcpu-ubuntu-2404
+      macos_runner: macos-15
+      linux_runner: ubuntu-24.04
       windows_runner: windows-latest
       checkout_ref: ${{ inputs.commit }}
 
@@ -826,7 +827,7 @@ jobs:
       - cdp-browser-smoke
       - bindings-e2e
       - build-artifacts
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       MODE: ${{ inputs.mode }}
