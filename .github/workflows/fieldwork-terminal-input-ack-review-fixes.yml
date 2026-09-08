@@ -1,0 +1,118 @@
+name: Fieldwork terminal input ACK review fixes
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-review-fixes-20260908
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    if: github.repository == 'teamleaderleo/cmux'
+    runs-on: ubuntu-24.04
+    env:
+      PRODUCT_BRANCH: fix/terminal-input-owner-ack-slim
+      PRODUCT_COMMIT: db8e99fddd7806f5d02b5ae425b5f07949ef6ee2
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require exact wrapper and product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^^)" = "$PRODUCT_COMMIT"
+          mapfile -t wrapper_files < <(git diff --name-only "$PRODUCT_COMMIT" HEAD | sort)
+          printf '%s\n' "${wrapper_files[@]}"
+          test "${#wrapper_files[@]}" -eq 2
+          test "${wrapper_files[0]}" = ".github/fieldwork/terminal_input_ack_review_fixes.py"
+          test "${wrapper_files[1]}" = ".github/workflows/fieldwork-terminal-input-ack-review-fixes.yml"
+          cp .github/fieldwork/terminal_input_ack_review_fixes.py /tmp/terminal_input_ack_review_fixes.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/terminal_input_ack_review_fixes.py')
+          text = path.read_text()
+          text = text.replace('\n#[cfg(unix)]\npub use unix::{\n', '\n#[cfg(unix)]\npub(crate) use unix::{\n')
+          path.write_text(text)
+          PY
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_COMMIT"
+          test "$(git merge-base "$BASE_COMMIT" "$PRODUCT_COMMIT")" = "$BASE_COMMIT"
+          git checkout --detach "$PRODUCT_COMMIT"
+
+      - name: Apply focused review fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/terminal_input_ack_review_fixes.py
+          git diff --check
+          git diff --stat
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 ghostty
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+          ./scripts/install-zig-ci.sh
+
+      - name: Set up repository-pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+        env:
+          CMUX_ZIG: /usr/local/bin/zig
+
+      - name: Format and run focused review tests
+        shell: bash
+        working-directory: cmux-tui
+        env:
+          CMUX_ZIG: /usr/local/bin/zig
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cd ..
+          mapfile -t product_files < <(git diff --name-only "$PRODUCT_COMMIT" | sort)
+          printf '%s\n' "${product_files[@]}"
+          for path in "${product_files[@]}"; do
+            case "$path" in
+              cmux-tui/crates/cmux-tui-core/src/mux.rs|cmux-tui/crates/cmux-tui-core/src/surface.rs|cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs) ;;
+              *) echo "unexpected formatted product file: $path" >&2; exit 1 ;;
+            esac
+          done
+          git diff --check
+          cd cmux-tui
+          cargo fmt --all -- --check
+          cargo test -p cmux-tui-core host_input_receipt_follows_pty_write_and_flush --locked -- --nocapture
+          cargo test -p cmux-tui-core host_input_receipt_requires_successful_flush --locked -- --nocapture
+          cargo test -p cmux-tui-core receipted_input_timeout_can_abort_while_writer_mutex_is_held --locked -- --nocapture
+          cargo test -p cmux-tui-core hosted_receipted_input_requests_pipeline_through_surface_reader --locked -- --nocapture
+          cargo test -p cmux-tui-core receipted_input_ --locked -- --nocapture
+          cargo test -p cmux-tui-core resource_router::content::tests --locked -- --nocapture
+
+      - name: Commit and publish exact product change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$PRODUCT_COMMIT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            cmux-tui/crates/cmux-tui-core/src/mux.rs \
+            cmux-tui/crates/cmux-tui-core/src/surface.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          test -n "$(git diff --cached --name-only)"
+          test "$(git diff --cached --name-only | sort | tr '\n' ' ')" = "cmux-tui/crates/cmux-tui-core/src/mux.rs cmux-tui/crates/cmux-tui-core/src/surface.rs cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs "
+          test -z "$(git diff --name-only)"
+          git commit -m "fix(cmux-tui): preserve input ACK ordering"
+          candidate="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$PRODUCT_COMMIT"
+          git fetch origin "$PRODUCT_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$PRODUCT_COMMIT"
+          git push origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "candidate=$candidate"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')"
