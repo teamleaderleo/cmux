@@ -17,17 +17,19 @@ jobs:
       EXPECTED_HEAD: d340358e4f2aa6e1e80b4d00d3d910133021e0f3
       BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
       PATCH_SCRIPT: .github/fieldwork/apply-terminal-input-ack-host-diagnostics-fix-20260907.py
+      FIXTURE_SCRIPT: .github/fieldwork/apply-terminal-input-ack-host-diagnostic-fixture-fix-20260907.py
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
           submodules: false
 
-      - name: Preserve transform and check out exact product head
+      - name: Preserve transforms and check out exact product head
         shell: bash
         run: |
           set -euo pipefail
           cp "$PATCH_SCRIPT" /tmp/apply-host-diagnostics-fix.py
+          cp "$FIXTURE_SCRIPT" /tmp/apply-host-diagnostic-fixture-fix.py
           git checkout --detach "$EXPECTED_HEAD"
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git merge-base "$BASE_COMMIT" "$EXPECTED_HEAD")" = "$BASE_COMMIT"
@@ -51,6 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 /tmp/apply-host-diagnostics-fix.py
+          python3 /tmp/apply-host-diagnostic-fixture-fix.py
           cd cmux-tui
           cargo fmt --all
           cd ..
