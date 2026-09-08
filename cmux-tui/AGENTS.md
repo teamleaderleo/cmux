@@ -18,6 +18,21 @@ Direct `cargo`, `rustc`, and Zig commands are also allowed locally when using th
 
 Local verification does not require a clean tree, a commit, or a push. Use it during implementation and review-fix iteration.
 
+## Fork self-hosted Mac runner
+
+When an agent is operating through GitHub rather than a shell attached to the Mac, use the fork-only self-hosted workflow in `.github/workflows/cmux-tui-local-mac.yml`. The physical Mac runner must be registered only to `teamleaderleo/cmux` and carry the custom label `cmux-local-mac`.
+
+The workflow is intentionally owner-only: it schedules the self-hosted job only when `github.actor == 'teamleaderleo'`, and it accepts only exact commit SHAs contained in a branch of this fork. Do not weaken that actor gate and do not add `pull_request` or `pull_request_target` triggers to the self-hosted workflow.
+
+From the GitHub connector, trigger a focused or full local-Mac run by posting one of these top-level comments on a PR or issue:
+
+```text
+/cmux-tui-local <40-character-fork-commit> focused <rust-test-name>
+/cmux-tui-local <40-character-fork-commit> full
+```
+
+A manual `workflow_dispatch` form is also available in the fork Actions UI with the same commit/mode/filter fields. The comment form exists so a connected agent can request the run without needing shell access to the Mac.
+
 Hosted verification remains the final cross-platform gate, not the development loop:
 
 ```bash
