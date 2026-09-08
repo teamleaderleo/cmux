@@ -462,18 +462,13 @@ pub struct JournalWriterSnapshot {
     pub phase_for_us: u64,
 }
 
-/// Receipted terminal-input observations. These counters deliberately carry no
-/// payload text or request-id labels: the goal is to separate submission,
-/// owner-ACK wait, and bounded failure phases without retaining terminal data.
+/// Mux-side observations for receipted terminal input. Authoritative PTY
+/// write/flush failures happen in the independent terminal-host process and use
+/// that process's private bounded diagnostic sidecar instead of these counters.
 pub struct TerminalInputReceiptStats {
     submission_us: LogLinearHistogram,
     ack_wait_us: LogLinearHistogram,
-    host_write_failures: AtomicU64,
-    host_flush_failures: AtomicU64,
-    host_ack_enqueue_rejections: AtomicU64,
     ack_timeouts: AtomicU64,
-    last_host_write_error_kind: Mutex<Option<std::io::ErrorKind>>,
-    last_host_flush_error_kind: Mutex<Option<std::io::ErrorKind>>,
     last_ack_timeout_outstanding_requests: AtomicU64,
     last_ack_timeout_outstanding_bytes: AtomicU64,
 }
@@ -483,12 +478,7 @@ impl Default for TerminalInputReceiptStats {
         Self {
             submission_us: LogLinearHistogram::new(),
             ack_wait_us: LogLinearHistogram::new(),
-            host_write_failures: AtomicU64::new(0),
-            host_flush_failures: AtomicU64::new(0),
-            host_ack_enqueue_rejections: AtomicU64::new(0),
             ack_timeouts: AtomicU64::new(0),
-            last_host_write_error_kind: Mutex::new(None),
-            last_host_flush_error_kind: Mutex::new(None),
             last_ack_timeout_outstanding_requests: AtomicU64::new(0),
             last_ack_timeout_outstanding_bytes: AtomicU64::new(0),
         }
@@ -504,22 +494,6 @@ impl TerminalInputReceiptStats {
         self.ack_wait_us.record_duration(duration);
     }
 
-    pub(crate) fn host_write_failed(&self, kind: std::io::ErrorKind) {
-        self.host_write_failures.fetch_add(1, Ordering::Relaxed);
-        *self.last_host_write_error_kind.lock().unwrap_or_else(|error| error.into_inner()) =
-            Some(kind);
-    }
-
-    pub(crate) fn host_flush_failed(&self, kind: std::io::ErrorKind) {
-        self.host_flush_failures.fetch_add(1, Ordering::Relaxed);
-        *self.last_host_flush_error_kind.lock().unwrap_or_else(|error| error.into_inner()) =
-            Some(kind);
-    }
-
-    pub(crate) fn host_ack_enqueue_rejected(&self) {
-        self.host_ack_enqueue_rejections.fetch_add(1, Ordering::Relaxed);
-    }
-
     pub(crate) fn ack_timed_out(&self, outstanding_requests: usize, outstanding_bytes: usize) {
         self.ack_timeouts.fetch_add(1, Ordering::Relaxed);
         self.last_ack_timeout_outstanding_requests
@@ -532,22 +506,7 @@ impl TerminalInputReceiptStats {
         TerminalInputReceiptSnapshot {
             submission_us: self.submission_us.snapshot(),
             ack_wait_us: self.ack_wait_us.snapshot(),
-            host_write_failures: self.host_write_failures.load(Ordering::Relaxed),
-            host_flush_failures: self.host_flush_failures.load(Ordering::Relaxed),
-            host_ack_enqueue_rejections: self.host_ack_enqueue_rejections.load(Ordering::Relaxed),
             ack_timeouts: self.ack_timeouts.load(Ordering::Relaxed),
-            last_host_write_error_kind: self
-                .last_host_write_error_kind
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .map(|kind| format!("{kind:?}")),
-            last_host_flush_error_kind: self
-                .last_host_flush_error_kind
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .map(|kind| format!("{kind:?}")),
             last_ack_timeout_outstanding_requests: self
                 .last_ack_timeout_outstanding_requests
                 .load(Ordering::Relaxed),
@@ -565,13 +524,7 @@ pub struct TerminalInputReceiptSnapshot {
     pub submission_us: HistogramSnapshot,
     /// Time spent waiting after submission for the targeted owner acknowledgement.
     pub ack_wait_us: HistogramSnapshot,
-    pub host_write_failures: u64,
-    pub host_flush_failures: u64,
-    /// PTY delivery completed, but HostTap could not queue the targeted ACK.
-    pub host_ack_enqueue_rejections: u64,
     pub ack_timeouts: u64,
-    pub last_host_write_error_kind: Option<String>,
-    pub last_host_flush_error_kind: Option<String>,
     /// Snapshot taken before the timed-out receipt releases its reservation.
     pub last_ack_timeout_outstanding_requests: u64,
     pub last_ack_timeout_outstanding_bytes: u64,
@@ -767,13 +720,10 @@ mod tests {
     }
 
     #[test]
-    fn terminal_input_receipt_stats_distinguish_timings_and_failure_phases() {
+    fn terminal_input_receipt_stats_distinguish_submission_ack_wait_and_timeout_pressure() {
         let stats = TerminalInputReceiptStats::default();
         stats.submission_finished(Duration::from_micros(11));
         stats.ack_wait_finished(Duration::from_micros(29));
-        stats.host_write_failed(std::io::ErrorKind::BrokenPipe);
-        stats.host_flush_failed(std::io::ErrorKind::TimedOut);
-        stats.host_ack_enqueue_rejected();
         stats.ack_timed_out(3, 99);
 
         let snapshot = stats.snapshot();
@@ -781,12 +731,7 @@ mod tests {
         assert_eq!(snapshot.submission_us.max, 11);
         assert_eq!(snapshot.ack_wait_us.count, 1);
         assert_eq!(snapshot.ack_wait_us.max, 29);
-        assert_eq!(snapshot.host_write_failures, 1);
-        assert_eq!(snapshot.host_flush_failures, 1);
-        assert_eq!(snapshot.host_ack_enqueue_rejections, 1);
         assert_eq!(snapshot.ack_timeouts, 1);
-        assert_eq!(snapshot.last_host_write_error_kind.as_deref(), Some("BrokenPipe"));
-        assert_eq!(snapshot.last_host_flush_error_kind.as_deref(), Some("TimedOut"));
         assert_eq!(snapshot.last_ack_timeout_outstanding_requests, 3);
         assert_eq!(snapshot.last_ack_timeout_outstanding_bytes, 99);
 

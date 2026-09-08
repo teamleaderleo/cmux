@@ -2463,6 +2463,7 @@ mod unix {
         let proof = liveness_path(record_path, &current);
         let endpoint = PathBuf::from(&current.endpoint);
         fs::remove_file(record_path)?;
+        clear_input_receipt_diagnostic(record_path);
         let _ = fs::remove_file(proof);
         if fs::symlink_metadata(&endpoint).is_ok_and(|metadata| metadata.file_type().is_socket()) {
             let _ = fs::remove_file(endpoint);
@@ -2937,6 +2938,56 @@ mod unix {
             "terminal-host exit sidecar already contains a different outcome"
         );
         Ok(())
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum InputReceiptDiagnosticFailure {
+        PtyWrite(std_io::ErrorKind),
+        PtyFlush(std_io::ErrorKind),
+        AckEnqueue,
+    }
+
+    fn input_receipt_diagnostic_path(exit_record_path: &Path) -> PathBuf {
+        exit_record_path.with_extension("input-error")
+    }
+
+    fn write_input_receipt_diagnostic(
+        exit_record_path: &Path,
+        failure: InputReceiptDiagnosticFailure,
+    ) -> std_io::Result<()> {
+        let path = input_receipt_diagnostic_path(exit_record_path);
+        if let Some(parent) = path.parent() {
+            prepare_private_dir(parent).map_err(std_io::Error::other)?;
+        }
+        let message = match failure {
+            InputReceiptDiagnosticFailure::PtyWrite(kind) => format!(
+                "terminal-host receipted-input failure; phase=pty_write_all; error_kind={kind:?}\n"
+            ),
+            InputReceiptDiagnosticFailure::PtyFlush(kind) => format!(
+                "terminal-host receipted-input failure; phase=pty_flush; error_kind={kind:?}\n"
+            ),
+            InputReceiptDiagnosticFailure::AckEnqueue => String::from(
+                "terminal-host receipted-input failure; phase=input_ack_enqueue; pty_write_flush_completed=true\n",
+            ),
+        };
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(path)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        (&file).write_all(message.as_bytes())?;
+        file.sync_all()
+    }
+
+    fn clear_input_receipt_diagnostic(exit_record_path: &Path) {
+        match fs::remove_file(input_receipt_diagnostic_path(exit_record_path)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std_io::ErrorKind::NotFound => {}
+            Err(_) => {}
+        }
     }
 
     fn exit_persistence_diagnostic_path(exit_record_path: &Path) -> PathBuf {
@@ -3992,8 +4043,10 @@ mod unix {
             let delivered = {
                 let mut writer = self.writer.lock().unwrap();
                 match writer.write_all(payload) {
-                    Ok(()) => writer.flush().map_err(|error| (true, error.kind())),
-                    Err(error) => Err((false, error.kind())),
+                    Ok(()) => writer
+                        .flush()
+                        .map_err(|error| InputReceiptDiagnosticFailure::PtyFlush(error.kind())),
+                    Err(error) => Err(InputReceiptDiagnosticFailure::PtyWrite(error.kind())),
                 }
             };
             // Interactive input has always been best-effort. Only a nonzero
@@ -4001,20 +4054,21 @@ mod unix {
             if request_id == 0 {
                 return true;
             }
-            if let Err((flush_failed, kind)) = delivered {
-                let stats = crate::diagnostics::terminal_input_receipt_stats();
-                if flush_failed {
-                    stats.host_flush_failed(kind);
-                } else {
-                    stats.host_write_failed(kind);
-                }
+            if let Err(failure) = delivered {
+                // The host is a separate process with stderr intentionally
+                // detached from the daemon. Persist only this bounded phase/error
+                // summary after releasing the authoritative PTY-writer lock.
+                let _ = write_input_receipt_diagnostic(&self.exit_record_path, failure);
                 return false;
             }
             let mut response = Frame::new(MessageKind::InputAck, Vec::new());
             response.request_id = request_id;
             let queued = target.try_send(response);
             if !queued {
-                crate::diagnostics::terminal_input_receipt_stats().host_ack_enqueue_rejected();
+                let _ = write_input_receipt_diagnostic(
+                    &self.exit_record_path,
+                    InputReceiptDiagnosticFailure::AckEnqueue,
+                );
             }
             queued
         }
@@ -5073,8 +5127,11 @@ mod unix {
             let removed_record =
                 !self.published || (owns_record && fs::remove_file(&self.record_path).is_ok());
             let _ = fs::remove_file(&self.endpoint);
-            if removed_record && let Some(path) = released_lease_path {
-                let _ = fs::remove_file(path);
+            if removed_record {
+                clear_input_receipt_diagnostic(&self.shared.exit_record_path);
+                if let Some(path) = released_lease_path {
+                    let _ = fs::remove_file(path);
+                }
             }
         }
     }
@@ -6780,15 +6837,16 @@ mod unix {
             exited_host_fixture_with_parser_at(root)
         }
 
-        fn test_host_shared() -> Arc<HostShared> {
+        fn test_host_shared_at(exit_record_parent: Option<&Path>) -> Arc<HostShared> {
             let mut term = Terminal::new(80, 24, 0, Callbacks::default()).unwrap();
             term.resize(80, 24, u32::from(DEFAULT_CELL_PIXELS.0), u32::from(DEFAULT_CELL_PIXELS.1))
                 .unwrap();
             let (pty_drain_waker, _pty_drain_waiter) = UnixStream::pair().unwrap();
             let (exit_publish_requests, exit_publish_receiver) = mpsc_channel();
             let (parser_commands, _parser_receiver) = sync_channel(1);
+            let terminal_id = TerminalId::random().unwrap();
             let host = Arc::new(HostShared {
-                terminal_id: TerminalId::random().unwrap(),
+                terminal_id,
                 incarnation: HostIncarnation::random().unwrap(),
                 owner_token: CapabilityToken::random().unwrap(),
                 capabilities: CapabilityStore::new(64),
@@ -6824,11 +6882,14 @@ mod unix {
                 child_waitable: AtomicBool::new(false),
                 pty_drained: AtomicBool::new(false),
                 exit_published: AtomicBool::new(false),
-                exit_record_path: std::env::temp_dir().join(format!(
-                    "cmux-host-test-exit-{}-{}",
-                    std::process::id(),
-                    RECORD_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-                )),
+                exit_record_path: match exit_record_parent {
+                    Some(parent) => parent.join(format!("{}.exit", terminal_id.to_hex())),
+                    None => std::env::temp_dir().join(format!(
+                        "cmux-host-test-exit-{}-{}",
+                        std::process::id(),
+                        RECORD_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                    )),
+                },
                 exit_publish_requests,
                 force_pty_drain: AtomicBool::new(false),
                 pty_drain_waker: Mutex::new(pty_drain_waker),
@@ -6840,6 +6901,21 @@ mod unix {
             });
             HostShared::start_exit_publisher(&host, exit_publish_receiver).unwrap();
             host
+        }
+
+        fn test_host_shared() -> Arc<HostShared> {
+            test_host_shared_at(None)
+        }
+
+        fn test_host_shared_with_private_exit_record() -> (Arc<HostShared>, PathBuf) {
+            let root = std::env::temp_dir().join(format!(
+                "cmux-host-input-diagnostic-{}-{}",
+                std::process::id(),
+                RECORD_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            prepare_private_dir(&root).unwrap();
+            let host = test_host_shared_at(Some(&root));
+            (host, root)
         }
 
         fn record_fixture(name: &str) -> (PathBuf, TerminalHostRecord, HostLivenessLease) {
@@ -7809,8 +7885,8 @@ mod unix {
 
         #[test]
         fn host_receipted_input_partial_write_closes_connection_without_ack() {
-            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            let host = test_host_shared();
+            let (host, diagnostic_root) = test_host_shared_with_private_exit_record();
+            let diagnostic = input_receipt_diagnostic_path(&host.exit_record_path);
             let accepted = Arc::new(Mutex::new(Vec::new()));
             *host.writer.lock().unwrap() = Box::new(PrefixThenErrorInputWriter {
                 accepted: accepted.clone(),
@@ -7819,14 +7895,19 @@ mod unix {
 
             assert_failed_receipted_input_closes_host_connection(host);
             assert_eq!(&*accepted.lock().unwrap(), b"fa");
-            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            assert!(after.host_write_failures >= before.host_write_failures + 1);
+            let message = fs::read_to_string(&diagnostic).unwrap();
+            assert!(message.contains("phase=pty_write_all"), "{message}");
+            assert!(message.contains("error_kind=BrokenPipe"), "{message}");
+            assert!(!message.contains("failure-path"), "{message}");
+            assert_eq!(fs::metadata(&diagnostic).unwrap().permissions().mode() & 0o777, 0o600);
+            let _ = fs::remove_file(diagnostic);
+            let _ = fs::remove_dir(diagnostic_root);
         }
 
         #[test]
         fn host_receipted_input_flush_failure_closes_connection_without_ack() {
-            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            let host = test_host_shared();
+            let (host, diagnostic_root) = test_host_shared_with_private_exit_record();
+            let diagnostic = input_receipt_diagnostic_path(&host.exit_record_path);
             let accepted = Arc::new(Mutex::new(Vec::new()));
             let flushes = Arc::new(AtomicUsize::new(0));
             *host.writer.lock().unwrap() = Box::new(FlushFailingInputWriter {
@@ -7837,14 +7918,18 @@ mod unix {
             assert_failed_receipted_input_closes_host_connection(host);
             assert_eq!(&*accepted.lock().unwrap(), b"failure-path");
             assert_eq!(flushes.load(Ordering::Acquire), 1);
-            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            assert!(after.host_flush_failures >= before.host_flush_failures + 1);
+            let message = fs::read_to_string(&diagnostic).unwrap();
+            assert!(message.contains("phase=pty_flush"), "{message}");
+            assert!(message.contains("error_kind=BrokenPipe"), "{message}");
+            assert!(!message.contains("failure-path"), "{message}");
+            let _ = fs::remove_file(diagnostic);
+            let _ = fs::remove_dir(diagnostic_root);
         }
 
         #[test]
         fn host_input_ack_total_budget_rejection_is_post_delivery_connection_loss() {
-            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            let host = test_host_shared();
+            let (host, diagnostic_root) = test_host_shared_with_private_exit_record();
+            let diagnostic = input_receipt_diagnostic_path(&host.exit_record_path);
             let accepted = Arc::new(Mutex::new(Vec::new()));
             let flushes = Arc::new(AtomicUsize::new(0));
             *host.writer.lock().unwrap() = Box::new(RecordingInputWriter {
@@ -7870,8 +7955,12 @@ mod unix {
                 0,
                 "HostTap total-budget rejection must close the attachment"
             );
-            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
-            assert!(after.host_ack_enqueue_rejections >= before.host_ack_enqueue_rejections + 1);
+            let message = fs::read_to_string(&diagnostic).unwrap();
+            assert!(message.contains("phase=input_ack_enqueue"), "{message}");
+            assert!(message.contains("pty_write_flush_completed=true"), "{message}");
+            assert!(!message.contains("delivered-before-ack-rejection"), "{message}");
+            let _ = fs::remove_file(diagnostic);
+            let _ = fs::remove_dir(diagnostic_root);
         }
 
         #[test]
