@@ -960,10 +960,14 @@ mod unix {
             pending.bytes = pending.bytes.saturating_sub(bytes);
         }
 
-        #[cfg(test)]
-        fn pending_input_acks_for_test(&self) -> (usize, usize) {
+        fn pending_input_acks(&self) -> (usize, usize) {
             let pending = self.pending_input_acks.lock().unwrap();
             (pending.writes, pending.bytes)
+        }
+
+        #[cfg(test)]
+        fn pending_input_acks_for_test(&self) -> (usize, usize) {
+            self.pending_input_acks()
         }
 
         #[cfg(test)]
@@ -1036,7 +1040,11 @@ mod unix {
         }
 
         fn wait_for(self, timeout: Duration) -> std::io::Result<()> {
-            match self.receiver.recv_timeout(timeout) {
+            let wait_started = Instant::now();
+            let response = self.receiver.recv_timeout(timeout);
+            crate::diagnostics::terminal_input_receipt_stats()
+                .ack_wait_finished(wait_started.elapsed());
+            match response {
                 Ok(frame) => {
                     if !frame.payload.is_empty() {
                         self.abort_connection();
@@ -1048,14 +1056,22 @@ mod unix {
                     Ok(())
                 }
                 Err(error) => {
+                    let timed_out = matches!(&error, &RecvTimeoutError::Timeout);
+                    if timed_out {
+                        let (outstanding_requests, outstanding_bytes) =
+                            self.control_responses.pending_input_acks();
+                        crate::diagnostics::terminal_input_receipt_stats()
+                            .ack_timed_out(outstanding_requests, outstanding_bytes);
+                    }
                     self.control_responses.waiters.lock().unwrap().remove(&self.request_id);
                     // Shutdown uses a separately cloned socket handle. A timed-out
                     // receipt therefore does not wait behind another frame writer
                     // before it can abort the broken attachment.
                     self.abort_connection();
-                    let kind = match error {
-                        RecvTimeoutError::Timeout => std::io::ErrorKind::TimedOut,
-                        RecvTimeoutError::Disconnected => std::io::ErrorKind::ConnectionAborted,
+                    let kind = if timed_out {
+                        std::io::ErrorKind::TimedOut
+                    } else {
+                        std::io::ErrorKind::ConnectionAborted
                     };
                     Err(std::io::Error::new(
                         kind,
@@ -1205,6 +1221,7 @@ mod unix {
                     "terminal host receipted-input window is full",
                 )));
             }
+            let submission_started = Instant::now();
 
             let shutdown = self.control_responses.input_ack_shutdown_handle(&self.writer).map_err(
                 |error| {
@@ -1248,6 +1265,8 @@ mod unix {
                 }
                 result
             };
+            crate::diagnostics::terminal_input_receipt_stats()
+                .submission_finished(submission_started.elapsed());
             if let Err(error) = write_result {
                 self.control_responses.waiters.lock().unwrap().remove(&request_id);
                 self.control_responses.release_input_ack(payload.len());
@@ -3972,19 +3991,32 @@ mod unix {
         fn write_input(&self, payload: &[u8], request_id: u64, target: &HostTap) -> bool {
             let delivered = {
                 let mut writer = self.writer.lock().unwrap();
-                writer.write_all(payload).and_then(|()| writer.flush()).is_ok()
+                match writer.write_all(payload) {
+                    Ok(()) => writer.flush().map_err(|error| (true, error.kind())),
+                    Err(error) => Err((false, error.kind())),
+                }
             };
             // Interactive input has always been best-effort. Only a nonzero
             // request id asks the authoritative host to certify delivery.
             if request_id == 0 {
                 return true;
             }
-            if !delivered {
+            if let Err((flush_failed, kind)) = delivered {
+                let stats = crate::diagnostics::terminal_input_receipt_stats();
+                if flush_failed {
+                    stats.host_flush_failed(kind);
+                } else {
+                    stats.host_write_failed(kind);
+                }
                 return false;
             }
             let mut response = Frame::new(MessageKind::InputAck, Vec::new());
             response.request_id = request_id;
-            target.try_send(response)
+            let queued = target.try_send(response);
+            if !queued {
+                crate::diagnostics::terminal_input_receipt_stats().host_ack_enqueue_rejected();
+            }
+            queued
         }
 
         fn fence_client_detach(&self, client: u64, request_id: u64, target: &HostTap) -> bool {
@@ -7388,7 +7420,11 @@ mod unix {
                 assert!(control_responses.resolve(&response));
             });
 
+            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
             attachment.begin_input_confirmed(b"owner-ack").unwrap().wait().unwrap();
+            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
+            assert!(after.submission_us.count >= before.submission_us.count + 1);
+            assert!(after.ack_wait_us.count >= before.ack_wait_us.count + 1);
             responder.join().unwrap();
 
             drop(attachment);
@@ -7542,6 +7578,7 @@ mod unix {
 
         #[test]
         fn receipted_input_timeout_can_abort_while_writer_mutex_is_held() {
+            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
             let (attachment, mut host) = input_ack_surface_fixture();
             let receipt = attachment.begin_input_confirmed(b"timeout").unwrap();
             let request = read_frame(&mut host, MAX_FRAME_PAYLOAD).unwrap().unwrap();
@@ -7558,6 +7595,11 @@ mod unix {
                 .expect("input ACK timeout blocked behind the socket writer mutex")
                 .unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
+            assert!(after.submission_us.count >= before.submission_us.count + 1);
+            assert!(after.ack_wait_us.count >= before.ack_wait_us.count + 1);
+            assert!(after.ack_timeouts >= before.ack_timeouts + 1);
+            assert!(after.last_ack_timeout_outstanding_requests >= 1);
             drop(writer_guard);
             waiter.join().unwrap();
         }
@@ -7767,6 +7809,7 @@ mod unix {
 
         #[test]
         fn host_receipted_input_partial_write_closes_connection_without_ack() {
+            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
             let host = test_host_shared();
             let accepted = Arc::new(Mutex::new(Vec::new()));
             *host.writer.lock().unwrap() = Box::new(PrefixThenErrorInputWriter {
@@ -7776,10 +7819,13 @@ mod unix {
 
             assert_failed_receipted_input_closes_host_connection(host);
             assert_eq!(&*accepted.lock().unwrap(), b"fa");
+            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
+            assert!(after.host_write_failures >= before.host_write_failures + 1);
         }
 
         #[test]
         fn host_receipted_input_flush_failure_closes_connection_without_ack() {
+            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
             let host = test_host_shared();
             let accepted = Arc::new(Mutex::new(Vec::new()));
             let flushes = Arc::new(AtomicUsize::new(0));
@@ -7791,10 +7837,13 @@ mod unix {
             assert_failed_receipted_input_closes_host_connection(host);
             assert_eq!(&*accepted.lock().unwrap(), b"failure-path");
             assert_eq!(flushes.load(Ordering::Acquire), 1);
+            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
+            assert!(after.host_flush_failures >= before.host_flush_failures + 1);
         }
 
         #[test]
         fn host_input_ack_total_budget_rejection_is_post_delivery_connection_loss() {
+            let before = crate::diagnostics::terminal_input_receipt_stats().snapshot();
             let host = test_host_shared();
             let accepted = Arc::new(Mutex::new(Vec::new()));
             let flushes = Arc::new(AtomicUsize::new(0));
@@ -7821,6 +7870,8 @@ mod unix {
                 0,
                 "HostTap total-budget rejection must close the attachment"
             );
+            let after = crate::diagnostics::terminal_input_receipt_stats().snapshot();
+            assert!(after.host_ack_enqueue_rejections >= before.host_ack_enqueue_rejections + 1);
         }
 
         #[test]

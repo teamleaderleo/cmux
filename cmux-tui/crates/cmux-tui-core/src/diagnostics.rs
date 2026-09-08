@@ -10,8 +10,8 @@
 
 use std::collections::HashMap;
 use std::panic::Location;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -462,6 +462,127 @@ pub struct JournalWriterSnapshot {
     pub phase_for_us: u64,
 }
 
+/// Receipted terminal-input observations. These counters deliberately carry no
+/// payload text or request-id labels: the goal is to separate submission,
+/// owner-ACK wait, and bounded failure phases without retaining terminal data.
+pub struct TerminalInputReceiptStats {
+    submission_us: LogLinearHistogram,
+    ack_wait_us: LogLinearHistogram,
+    host_write_failures: AtomicU64,
+    host_flush_failures: AtomicU64,
+    host_ack_enqueue_rejections: AtomicU64,
+    ack_timeouts: AtomicU64,
+    last_host_write_error_kind: Mutex<Option<std::io::ErrorKind>>,
+    last_host_flush_error_kind: Mutex<Option<std::io::ErrorKind>>,
+    last_ack_timeout_outstanding_requests: AtomicU64,
+    last_ack_timeout_outstanding_bytes: AtomicU64,
+}
+
+impl Default for TerminalInputReceiptStats {
+    fn default() -> Self {
+        Self {
+            submission_us: LogLinearHistogram::new(),
+            ack_wait_us: LogLinearHistogram::new(),
+            host_write_failures: AtomicU64::new(0),
+            host_flush_failures: AtomicU64::new(0),
+            host_ack_enqueue_rejections: AtomicU64::new(0),
+            ack_timeouts: AtomicU64::new(0),
+            last_host_write_error_kind: Mutex::new(None),
+            last_host_flush_error_kind: Mutex::new(None),
+            last_ack_timeout_outstanding_requests: AtomicU64::new(0),
+            last_ack_timeout_outstanding_bytes: AtomicU64::new(0),
+        }
+    }
+}
+
+impl TerminalInputReceiptStats {
+    pub(crate) fn submission_finished(&self, duration: Duration) {
+        self.submission_us.record_duration(duration);
+    }
+
+    pub(crate) fn ack_wait_finished(&self, duration: Duration) {
+        self.ack_wait_us.record_duration(duration);
+    }
+
+    pub(crate) fn host_write_failed(&self, kind: std::io::ErrorKind) {
+        self.host_write_failures.fetch_add(1, Ordering::Relaxed);
+        *self.last_host_write_error_kind.lock().unwrap_or_else(|error| error.into_inner()) =
+            Some(kind);
+    }
+
+    pub(crate) fn host_flush_failed(&self, kind: std::io::ErrorKind) {
+        self.host_flush_failures.fetch_add(1, Ordering::Relaxed);
+        *self.last_host_flush_error_kind.lock().unwrap_or_else(|error| error.into_inner()) =
+            Some(kind);
+    }
+
+    pub(crate) fn host_ack_enqueue_rejected(&self) {
+        self.host_ack_enqueue_rejections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn ack_timed_out(&self, outstanding_requests: usize, outstanding_bytes: usize) {
+        self.ack_timeouts.fetch_add(1, Ordering::Relaxed);
+        self.last_ack_timeout_outstanding_requests
+            .store(u64::try_from(outstanding_requests).unwrap_or(u64::MAX), Ordering::Relaxed);
+        self.last_ack_timeout_outstanding_bytes
+            .store(u64::try_from(outstanding_bytes).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self) -> TerminalInputReceiptSnapshot {
+        TerminalInputReceiptSnapshot {
+            submission_us: self.submission_us.snapshot(),
+            ack_wait_us: self.ack_wait_us.snapshot(),
+            host_write_failures: self.host_write_failures.load(Ordering::Relaxed),
+            host_flush_failures: self.host_flush_failures.load(Ordering::Relaxed),
+            host_ack_enqueue_rejections: self.host_ack_enqueue_rejections.load(Ordering::Relaxed),
+            ack_timeouts: self.ack_timeouts.load(Ordering::Relaxed),
+            last_host_write_error_kind: self
+                .last_host_write_error_kind
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .map(|kind| format!("{kind:?}")),
+            last_host_flush_error_kind: self
+                .last_host_flush_error_kind
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .map(|kind| format!("{kind:?}")),
+            last_ack_timeout_outstanding_requests: self
+                .last_ack_timeout_outstanding_requests
+                .load(Ordering::Relaxed),
+            last_ack_timeout_outstanding_bytes: self
+                .last_ack_timeout_outstanding_bytes
+                .load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct TerminalInputReceiptSnapshot {
+    /// Time from accepted receipt reservation through complete Input-frame
+    /// submission to the terminal-host socket. This excludes the owner-ACK wait.
+    pub submission_us: HistogramSnapshot,
+    /// Time spent waiting after submission for the targeted owner acknowledgement.
+    pub ack_wait_us: HistogramSnapshot,
+    pub host_write_failures: u64,
+    pub host_flush_failures: u64,
+    /// PTY delivery completed, but HostTap could not queue the targeted ACK.
+    pub host_ack_enqueue_rejections: u64,
+    pub ack_timeouts: u64,
+    pub last_host_write_error_kind: Option<String>,
+    pub last_host_flush_error_kind: Option<String>,
+    /// Snapshot taken before the timed-out receipt releases its reservation.
+    pub last_ack_timeout_outstanding_requests: u64,
+    pub last_ack_timeout_outstanding_bytes: u64,
+}
+
+static TERMINAL_INPUT_RECEIPT_STATS: OnceLock<TerminalInputReceiptStats> = OnceLock::new();
+
+pub(crate) fn terminal_input_receipt_stats() -> &'static TerminalInputReceiptStats {
+    TERMINAL_INPUT_RECEIPT_STATS.get_or_init(TerminalInputReceiptStats::default)
+}
+
 /// Connection admission on the control socket.
 #[derive(Default)]
 pub struct ConnectionStats {
@@ -529,9 +650,10 @@ pub struct ServerStatsSnapshot {
     pub registry_lock: LockStatsSnapshot,
     pub journal_writer: Option<JournalWriterSnapshot>,
     pub connections: ConnectionSnapshot,
+    pub terminal_input_receipts: TerminalInputReceiptSnapshot,
 }
 
-pub const SERVER_STATS_SCHEMA: u32 = 1;
+pub const SERVER_STATS_SCHEMA: u32 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -642,6 +764,43 @@ mod tests {
         assert_eq!(waiting.phase, WriterPhase::WaitingLock);
         assert_eq!(committing.phase, WriterPhase::Committing);
         assert!(committing.phase_for_us < 100_000, "phase timestamp was not reset: {committing:?}");
+    }
+
+    #[test]
+    fn terminal_input_receipt_stats_distinguish_timings_and_failure_phases() {
+        let stats = TerminalInputReceiptStats::default();
+        stats.submission_finished(Duration::from_micros(11));
+        stats.ack_wait_finished(Duration::from_micros(29));
+        stats.host_write_failed(std::io::ErrorKind::BrokenPipe);
+        stats.host_flush_failed(std::io::ErrorKind::TimedOut);
+        stats.host_ack_enqueue_rejected();
+        stats.ack_timed_out(3, 99);
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.submission_us.count, 1);
+        assert_eq!(snapshot.submission_us.max, 11);
+        assert_eq!(snapshot.ack_wait_us.count, 1);
+        assert_eq!(snapshot.ack_wait_us.max, 29);
+        assert_eq!(snapshot.host_write_failures, 1);
+        assert_eq!(snapshot.host_flush_failures, 1);
+        assert_eq!(snapshot.host_ack_enqueue_rejections, 1);
+        assert_eq!(snapshot.ack_timeouts, 1);
+        assert_eq!(snapshot.last_host_write_error_kind.as_deref(), Some("BrokenPipe"));
+        assert_eq!(snapshot.last_host_flush_error_kind.as_deref(), Some("TimedOut"));
+        assert_eq!(snapshot.last_ack_timeout_outstanding_requests, 3);
+        assert_eq!(snapshot.last_ack_timeout_outstanding_bytes, 99);
+
+        let encoded = serde_json::to_value(ServerStatsSnapshot {
+            schema: SERVER_STATS_SCHEMA,
+            uptime_ms: 0,
+            registry_lock: LockStatsSnapshot::default(),
+            journal_writer: None,
+            connections: ConnectionSnapshot::default(),
+            terminal_input_receipts: snapshot,
+        })
+        .unwrap();
+        assert_eq!(encoded["schema"], SERVER_STATS_SCHEMA);
+        assert!(encoded.get("terminal_input_receipts").is_some());
     }
 
     #[test]
