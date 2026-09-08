@@ -1,0 +1,116 @@
+name: Fieldwork terminal input ACK host diagnostics fix
+
+on:
+  push:
+    branches:
+      - fieldwork/terminal-input-ack-host-diagnostics-fix-20260907
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PRODUCT_BRANCH: fix/terminal-input-owner-ack-current-main
+      EXPECTED_HEAD: d340358e4f2aa6e1e80b4d00d3d910133021e0f3
+      BASE_COMMIT: 7d78b6e4cb0236c3b4eb354d851498b685801e00
+      PATCH_SCRIPT: .github/fieldwork/apply-terminal-input-ack-host-diagnostics-fix-20260907.py
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Preserve transform and check out exact product head
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$PATCH_SCRIPT" /tmp/apply-host-diagnostics-fix.py
+          git checkout --detach "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git merge-base "$BASE_COMMIT" "$EXPECTED_HEAD")" = "$BASE_COMMIT"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Apply process-correct host diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /tmp/apply-host-diagnostics-fix.py
+          cd cmux-tui
+          cargo fmt --all
+          cd ..
+          git diff --check
+          git diff --name-only | sort > /tmp/changed.txt
+          printf '%s\n' \
+            cmux-tui/crates/cmux-tui-core/src/diagnostics.rs \
+            cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs \
+            > /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/changed.txt
+
+      - name: Commit exact candidate locally
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmux-tui/crates/cmux-tui-core/src/diagnostics.rs \
+                  cmux-tui/crates/cmux-tui-core/src/terminal_host_runtime.rs
+          git commit -m "fix(cmux-tui): keep host input diagnostics observable"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+
+      - name: Check formatting and generated boundaries
+        working-directory: cmux-tui
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/test_check_spec_inventory.py
+          python3 scripts/check-spec-inventory.py
+          python3 scripts/test_check_resource_api_boundary.py
+          python3 scripts/check-resource-api-boundary.py
+          python3 bindings/codegen/generate.py --check
+
+      - name: Run daemon and host diagnostic regressions
+        working-directory: cmux-tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p cmux-tui-core --lib --locked terminal_input_receipt_stats_distinguish_submission_ack_wait_and_timeout_pressure -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked receipted_input_timeout_can_abort_while_writer_mutex_is_held -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_receipted_input_partial_write_closes_connection_without_ack -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_receipted_input_flush_failure_closes_connection_without_ack -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked host_input_ack_total_budget_rejection_is_post_delivery_connection_loss -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked receipted_input_ -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked hosted_receipted_input_ack_round_trips_through_surface_reader -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked hosted_receipted_input_requests_pipeline_through_surface_reader -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked server_stats_report_lock_writer_and_connection_metrics -- --nocapture
+          cargo test -p cmux-tui-core --lib --locked resource_router::content::tests -- --nocapture
+
+      - name: Publish exact verified candidate to fork branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          remote_head="$(git ls-remote origin "refs/heads/$PRODUCT_BRANCH" | cut -f1)"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          git push --force-with-lease="refs/heads/$PRODUCT_BRANCH:$EXPECTED_HEAD" \
+            origin "HEAD:refs/heads/$PRODUCT_BRANCH"
+          echo "candidate=${{ steps.candidate.outputs.sha }}"
+          echo "candidate_tree=${{ steps.candidate.outputs.tree }}"
+          echo "base=$BASE_COMMIT"
