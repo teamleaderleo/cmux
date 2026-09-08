@@ -53,7 +53,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+if [[ -n "${CMUX_TUI_REPO_ROOT:-}" ]]; then
+  repo_root="$(git -C "$CMUX_TUI_REPO_ROOT" rev-parse --show-toplevel)"
+else
+  repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+fi
 
 for command_name in git python3 rustup curl tar; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
