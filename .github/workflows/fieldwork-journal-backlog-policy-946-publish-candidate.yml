@@ -1,0 +1,91 @@
+name: Fieldwork issue 946 publish measured candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/journal-backlog-policy-946-publisher-20260912
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fieldwork/journal-backlog-policy-946-candidate
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify candidate parent is current upstream head
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=52d0a69623430c72d7b5db4b4a5d27c692c30a19
+          actual=$(git rev-parse HEAD)
+          echo "candidate_base=${actual}"
+          test "${actual}" = "${expected}"
+          test "$(git hash-object cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs)" = \
+            "9b4551770e807084c48c2cdbe94f15f2cf2358e0"
+
+      - name: Apply measured bounded-backlog repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_commit=76602a7b33a7d52f9e83c96fb7a42269737f594b
+          raw="https://raw.githubusercontent.com/teamleaderleo/cmux/${artifact_commit}"
+          mkdir -p /tmp/fieldwork-946
+          for patch in journal_backpressure.patch journal_backpressure_handoff.patch; do
+            curl -fsSL "${raw}/scripts/fieldwork/cmux-resource-collapse/${patch}" \
+              -o "/tmp/fieldwork-946/${patch}"
+          done
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          text, count = re.subn(
+              r"const MAX_PENDING_RECORDS: usize = [^;]+;",
+              "const MAX_PENDING_RECORDS: usize = 2_048;",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("MAX_PENDING_RECORDS replacement failed")
+          path.write_text(text)
+          PY
+          grep -q 'const MAX_PENDING_RECORDS: usize = 2_048;' \
+            cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          grep -q 'const MAX_PENDING_BYTES: usize = MAX_BATCH_BODY_BYTES;' \
+            cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          grep -q 'post_completion_handoff_keeps_the_next_ready_batch_exact' \
+            cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          git diff --check
+          git diff -- cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+
+      - name: Run journal-forwarder tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            journal_forwarder::tests::
+
+      - name: Commit exact tested source and push candidate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          git commit -m "fix: bound journal forwarder pending backlog"
+          git push origin HEAD:refs/heads/fieldwork/journal-backlog-policy-946-candidate
+          echo "candidate_sha=$(git rev-parse HEAD)"
