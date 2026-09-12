@@ -1,4 +1,4 @@
-name: Fieldwork 942 corrected refresh on 52d0a696
+name: Fieldwork 942 corrected refresh on e9ec596d
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 env:
-  BASE_SHA: 52d0a69623430c72d7b5db4b4a5d27c692c30a19
-  RED_SHA: 922de114d21bc1f92ef88968e7b8ce30835d884f
+  BASE_SHA: e9ec596d12d854d6569b53b38bb21b62f8126d56
+  RED_SHA: a50f0480cf88e2574c7ed92e8bad7b28b51ccbb9
 
 jobs:
   issue-942-corrected:
@@ -30,7 +30,7 @@ jobs:
           git config user.name fieldwork-bot
           git config user.email fieldwork-bot@users.noreply.github.com
           test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          git switch -C fieldwork/942-missing-cwd-refresh-52d0a696 "$RED_SHA"
+          git switch -C fieldwork/942-missing-cwd-refresh-e9ec596d "$RED_SHA"
       - name: Select Xcode and GhosttyKit
         run: |
           ./scripts/select-ci-xcode.sh
@@ -101,4 +101,4 @@ jobs:
           ./scripts/test-unit.sh test -only-testing:cmuxTests/AgentSessionAutoResumeSettingsTests
           echo "942 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
       - name: Push evidence branch
-        run: git push --force origin HEAD:refs/heads/fieldwork/942-missing-cwd-refresh-52d0a696
+        run: git push --force origin HEAD:refs/heads/fieldwork/942-missing-cwd-refresh-e9ec596d
