@@ -1422,11 +1422,16 @@ if [[ "$SWIFT_FRONTEND_WORKAROUND" -eq 1 || "${CMUX_SWIFT_FRONTEND_WORKAROUND:-}
   XCODEBUILD_ARGS+=(SWIFT_ENABLE_BATCH_MODE=NO)
   XCODEBUILD_ARGS+=(DEBUG_INFORMATION_FORMAT=)
   XCODEBUILD_ARGS+=(GCC_GENERATE_DEBUGGING_SYMBOLS=NO)
-  # shellcheck disable=SC2016 # Xcode expands $(inherited), not this shell.
-  XCODEBUILD_ARGS+=('OTHER_SWIFT_FLAGS=$(inherited) -Xllvm -aarch64-enable-global-isel-at-O=-1')
 else
   SWIFT_FRONTEND_WORKAROUND_EFFECTIVE=0
 fi
+source "$SCRIPT_DIR/native-compiler-options.sh"
+if [[ "$SWIFT_FRONTEND_WORKAROUND_EFFECTIVE" -eq 1 ]]; then
+  cmux_native_compiler_options '-Xllvm -aarch64-enable-global-isel-at-O=-1'
+else
+  cmux_native_compiler_options
+fi
+XCODEBUILD_ARGS+=(${CMUX_NATIVE_XCODE_ARGS[@]+"${CMUX_NATIVE_XCODE_ARGS[@]}"})
 XCODEBUILD_ARGS+=(build)
 
 if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then

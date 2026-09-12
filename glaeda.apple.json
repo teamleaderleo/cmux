@@ -12,7 +12,8 @@
         "--no-global-cli-links"
       ],
       "environment": {
-        "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}"
+        "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}",
+        "CMUX_BUILD_FILE_HASHING": "1"
       }
     }
   },
@@ -59,5 +60,8 @@
         "glaeda.native"
       ]
     }
+  },
+  "cache_policies": {
+    "app": "native"
   }
 }

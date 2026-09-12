@@ -13,10 +13,12 @@ if [[ ! -d GhosttyKit.xcframework ]]; then
 fi
 : "${DEVELOPER_DIR:?Glaeda must select the Xcode developer directory}"
 BUNDLE_ID="com.cmuxterm.app.debug.$3"
+source "$ROOT/scripts/native-compiler-options.sh"
+cmux_native_compiler_options
 exec "$DEVELOPER_DIR/usr/bin/xcodebuild" \
   -project cmux.xcodeproj -scheme cmux -configuration Debug \
   -destination 'platform=macOS' \
   -derivedDataPath "$1" -clonedSourcePackagesDirPath "$2" \
   PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
   'CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use' \
-  CMUX_SIDEBAR_EXTENSION_POINT_ID="$BUNDLE_ID.cmux.sidebar" build
+  CMUX_SIDEBAR_EXTENSION_POINT_ID="$BUNDLE_ID.cmux.sidebar" ${CMUX_NATIVE_XCODE_ARGS[@]+"${CMUX_NATIVE_XCODE_ARGS[@]}"} build
