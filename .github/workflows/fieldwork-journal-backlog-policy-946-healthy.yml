@@ -1,0 +1,187 @@
+name: Fieldwork issue 946 complete-drain healthy repeats
+
+on:
+  push:
+    branches:
+      - fieldwork/journal-backlog-policy-946-healthy-20260912
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repeat-healthy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 01973f785ae7ea5b85dea212152b003c67528745
+          fetch-depth: 1
+
+      - name: Verify exact upstream base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "01973f785ae7ea5b85dea212152b003c67528745"
+          mkdir -p fieldwork-946-healthy-results
+          printf '{"base_sha":"%s","workflow_commit":"%s"}\n' \
+            "$(git rev-parse HEAD)" "${GITHUB_SHA}" > fieldwork-946-healthy-results/base.json
+
+      - name: Materialize pinned harness and measurement patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_commit=76602a7b33a7d52f9e83c96fb7a42269737f594b
+          raw="https://raw.githubusercontent.com/teamleaderleo/cmux/${artifact_commit}"
+          mkdir -p cmux-tui/crates/chatmux-relay/examples /tmp/fieldwork-946
+          curl -fsSL "${raw}/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs" \
+            -o cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+          for patch in journal_recovery_harness.patch journal_backpressure.patch journal_backpressure_handoff.patch; do
+            curl -fsSL "${raw}/scripts/fieldwork/cmux-resource-collapse/${patch}" \
+              -o "/tmp/fieldwork-946/${patch}"
+          done
+          git apply --check --recount /tmp/fieldwork-946/journal_recovery_harness.patch
+          git apply --recount /tmp/fieldwork-946/journal_recovery_harness.patch
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs")
+          text = path.read_text()
+          needle = """    let forwarder = journal_forwarder::start(\n"""
+          replacement = """    let workload_started = Instant::now();\n    let forwarder = journal_forwarder::start(\n"""
+          if text.count(needle) != 1:
+              raise SystemExit("workload start insertion anchor changed")
+          text = text.replace(needle, replacement, 1)
+
+          needle = """    if let Some(load_millis) = options.load_millis {\n"""
+          replacement = """    let mut producer_complete_millis = None;\n    let mut delivery_complete_millis = None;\n    if let Some(load_millis) = options.load_millis {\n"""
+          if text.count(needle) != 1:
+              raise SystemExit("healthy metric declaration anchor changed")
+          text = text.replace(needle, replacement, 1)
+
+          needle = """        wait_for_counter(&generated, expected_records, Duration::from_secs(2), \"generated records\").await?;\n"""
+          replacement = needle + """        if options.mode == HttpMode::Ack {\n            producer_complete_millis = Some(workload_started.elapsed().as_millis() as u64);\n            wait_for_counter(\n                &delivered_records,\n                expected_records,\n                Duration::from_secs(30),\n                \"healthy records delivered\",\n            )\n            .await?;\n            delivery_complete_millis = Some(workload_started.elapsed().as_millis() as u64);\n        }\n"""
+          if text.count(needle) != 1:
+              raise SystemExit("healthy delivery wait anchor changed")
+          text = text.replace(needle, replacement, 1)
+
+          needle = """        \"delivered_records_at_measurement\": loaded_delivered_records,\n"""
+          replacement = needle + """        \"producer_complete_millis\": producer_complete_millis,\n        \"delivery_complete_millis\": delivery_complete_millis,\n"""
+          if text.count(needle) != 1:
+              raise SystemExit("healthy output anchor changed")
+          text = text.replace(needle, replacement, 1)
+          path.write_text(text)
+          PY
+          git diff --check
+
+      - name: Build exact-base baseline harness
+        run: |
+          cargo build --quiet \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog
+
+      - name: Repeat complete-drain baseline healthy burst
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-healthy-results"
+          for rep in 1 2 3 4 5; do
+            "$BIN" --mode ack --sessions 50 --records-per-session 300 --payload-bytes 1024 --settle-millis 100 \
+              | jq --arg policy baseline --argjson rep "$rep" \
+                '. + {policy:$policy, repeat:$rep}' > "${OUT}/baseline-${rep}.json"
+            cat "${OUT}/baseline-${rep}.json"
+          done
+
+      - name: Apply bounded-backlog mechanism in runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          cargo test --quiet \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            journal_forwarder::tests::
+
+      - name: Repeat complete-drain candidate healthy bursts
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-healthy-results"
+          set_cap() {
+            CAP="$1" python3 - <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          cap = os.environ["CAP"]
+          text, count = re.subn(
+              r"const MAX_PENDING_RECORDS: usize = [^;]+;",
+              f"const MAX_PENDING_RECORDS: usize = {cap};",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("MAX_PENDING_RECORDS replacement failed")
+          path.write_text(text)
+          PY
+          }
+          for cap in 1024 2048 4096 65536; do
+            set_cap "$cap"
+            cargo build --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog
+            for rep in 1 2 3 4 5; do
+              "$BIN" --mode ack --sessions 50 --records-per-session 300 --payload-bytes 1024 --settle-millis 100 \
+                | jq --arg policy "backpressure-record-${cap}-byte-4MiB" --argjson cap "$cap" --argjson rep "$rep" \
+                  '. + {policy:$policy, max_pending_records:$cap, max_pending_bytes:4194304, repeat:$rep}' \
+                  > "${OUT}/cap-${cap}-${rep}.json"
+              cat "${OUT}/cap-${cap}-${rep}.json"
+            done
+          done
+
+      - name: Summarize repeats
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, pathlib, statistics
+          root = pathlib.Path('fieldwork-946-healthy-results')
+          groups = {}
+          for path in root.glob('*.json'):
+              if path.name == 'base.json':
+                  continue
+              d = json.loads(path.read_text())
+              groups.setdefault(d['policy'], []).append(d)
+          summary = []
+          for policy, rows in sorted(groups.items()):
+              def vals(key): return [r[key] for r in rows]
+              summary.append({
+                  'policy': policy,
+                  'runs': len(rows),
+                  'requests': vals('http_requests'),
+                  'requests_median': statistics.median(vals('http_requests')),
+                  'producer_complete_ms': vals('producer_complete_millis'),
+                  'producer_complete_ms_median': statistics.median(vals('producer_complete_millis')),
+                  'delivery_complete_ms': vals('delivery_complete_millis'),
+                  'delivery_complete_ms_median': statistics.median(vals('delivery_complete_millis')),
+                  'loaded_rss_kib': vals('loaded_rss_kib'),
+                  'loaded_rss_kib_median': statistics.median(vals('loaded_rss_kib')),
+                  'delivered': vals('delivered_records_at_measurement'),
+                  'cleanup_fds': vals('cleanup_fds'),
+              })
+          (root / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          print(json.dumps(summary, indent=2))
+          PY
+
+      - name: Upload complete-drain repeats
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldwork-946-healthy-repeats
+          path: fieldwork-946-healthy-results/*.json
