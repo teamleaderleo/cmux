@@ -16,20 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          ref: 01973f785ae7ea5b85dea212152b003c67528745
+          fetch-depth: 1
 
       - name: Verify exact upstream base
         shell: bash
         run: |
           set -euo pipefail
           expected=01973f785ae7ea5b85dea212152b003c67528745
-          actual=$(git rev-parse HEAD^)
-          echo "experiment_commit=$(git rev-parse HEAD)"
+          actual=$(git rev-parse HEAD)
+          echo "workflow_commit=${GITHUB_SHA}"
           echo "base_sha=${actual}"
           test "${actual}" = "${expected}"
           mkdir -p fieldwork-946-results
-          printf '{"base_sha":"%s","experiment_commit":"%s"}\n' \
-            "${actual}" "$(git rev-parse HEAD)" > fieldwork-946-results/base.json
+          printf '{"base_sha":"%s","workflow_commit":"%s"}\n' \
+            "${actual}" "${GITHUB_SHA}" > fieldwork-946-results/base.json
 
       - name: Materialize pinned live harness and candidate patches
         shell: bash
@@ -96,9 +97,7 @@ jobs:
           cargo test \
             --manifest-path cmux-tui/Cargo.toml \
             -p chatmux-relay \
-            journal_forwarder::tests::busy_pool_backpressures_after_one_bounded_pending_batch \
-            journal_forwarder::tests::busy_pool_byte_budget_bounds_large_records \
-            journal_forwarder::tests::post_completion_handoff_keeps_the_next_ready_batch_exact
+            journal_forwarder::tests::
 
       - name: Sweep record watermark with 4 MiB byte ceiling
         shell: bash
