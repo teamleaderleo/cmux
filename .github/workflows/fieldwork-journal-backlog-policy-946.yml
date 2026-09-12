@@ -1,0 +1,295 @@
+name: Fieldwork issue 946 journal backlog policy
+
+on:
+  push:
+    branches:
+      - fieldwork/journal-backlog-policy-946-20260912
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure-journal-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify exact upstream base
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=01973f785ae7ea5b85dea212152b003c67528745
+          actual=$(git rev-parse HEAD^)
+          echo "experiment_commit=$(git rev-parse HEAD)"
+          echo "base_sha=${actual}"
+          test "${actual}" = "${expected}"
+          mkdir -p fieldwork-946-results
+          printf '{"base_sha":"%s","experiment_commit":"%s"}\n' \
+            "${actual}" "$(git rev-parse HEAD)" > fieldwork-946-results/base.json
+
+      - name: Materialize pinned live harness and candidate patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_commit=76602a7b33a7d52f9e83c96fb7a42269737f594b
+          raw="https://raw.githubusercontent.com/teamleaderleo/cmux/${artifact_commit}"
+          mkdir -p cmux-tui/crates/chatmux-relay/examples /tmp/fieldwork-946
+          curl -fsSL "${raw}/cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs" \
+            -o cmux-tui/crates/chatmux-relay/examples/fieldwork_journal_backlog.rs
+          for patch in journal_recovery_harness.patch journal_backpressure.patch journal_backpressure_handoff.patch; do
+            curl -fsSL "${raw}/scripts/fieldwork/cmux-resource-collapse/${patch}" \
+              -o "/tmp/fieldwork-946/${patch}"
+          done
+          git apply --check --recount /tmp/fieldwork-946/journal_recovery_harness.patch
+          git apply --recount /tmp/fieldwork-946/journal_recovery_harness.patch
+          git diff --check
+
+      - name: Build exact-base live harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            --example fieldwork_journal_backlog
+
+      - name: Measure exact-base healthy control and stalled scaling
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-results"
+          run_case() {
+            local label="$1"; shift
+            local policy="$1"; shift
+            local start end wall
+            start=$(date +%s%3N)
+            "$BIN" "$@" > "/tmp/${label}.json"
+            end=$(date +%s%3N)
+            wall=$((end-start))
+            jq --arg policy "$policy" --argjson wall "$wall" \
+              '. + {policy:$policy, wall_millis:$wall}' "/tmp/${label}.json" > "${OUT}/${label}.json"
+            cat "${OUT}/${label}.json"
+          }
+
+          run_case baseline-healthy baseline \
+            --mode ack --sessions 50 --records-per-session 300 --payload-bytes 1024 --settle-millis 100
+
+          for sessions in 1 10 50 128; do
+            run_case "baseline-stall-${sessions}" baseline \
+              --mode stall --sessions "$sessions" --records-per-session 300 --payload-bytes 1024 --settle-millis 100
+          done
+
+      - name: Apply bounded-backlog mechanism in runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure.patch
+          git apply --check --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          git apply --recount /tmp/fieldwork-946/journal_backpressure_handoff.patch
+          git diff --check
+          cargo test \
+            --manifest-path cmux-tui/Cargo.toml \
+            -p chatmux-relay \
+            journal_forwarder::tests::busy_pool_backpressures_after_one_bounded_pending_batch \
+            journal_forwarder::tests::busy_pool_byte_budget_bounds_large_records \
+            journal_forwarder::tests::post_completion_handoff_keeps_the_next_ready_batch_exact
+
+      - name: Sweep record watermark with 4 MiB byte ceiling
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$PWD/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs"
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-results"
+
+          set_cap() {
+            CAP="$1" python3 - <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          cap = os.environ["CAP"]
+          text, count = re.subn(
+              r"const MAX_PENDING_RECORDS: usize = [^;]+;",
+              f"const MAX_PENDING_RECORDS: usize = {cap};",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("MAX_PENDING_RECORDS replacement failed")
+          path.write_text(text)
+          PY
+          }
+
+          build_variant() {
+            cargo build --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog
+          }
+
+          run_case() {
+            local label="$1"; shift
+            local policy="$1"; shift
+            local cap="$1"; shift
+            local start end wall
+            start=$(date +%s%3N)
+            "$BIN" "$@" > "/tmp/${label}.json"
+            end=$(date +%s%3N)
+            wall=$((end-start))
+            jq --arg policy "$policy" --argjson cap "$cap" --argjson wall "$wall" \
+              '. + {policy:$policy, max_pending_records:$cap, max_pending_bytes:4194304, wall_millis:$wall}' \
+              "/tmp/${label}.json" > "${OUT}/${label}.json"
+            cat "${OUT}/${label}.json"
+          }
+
+          for cap in 100 512 1024 2048 4096 65536; do
+            set_cap "$cap"
+            build_variant
+            policy="backpressure-record-${cap}-byte-4MiB"
+            run_case "cap-${cap}-healthy" "$policy" "$cap" \
+              --mode ack --sessions 50 --records-per-session 300 --payload-bytes 1024 --settle-millis 100
+            run_case "cap-${cap}-stall-128" "$policy" "$cap" \
+              --mode stall --sessions 128 --records-per-session 1000000 --payload-bytes 1024 \
+              --load-millis 1500 --settle-millis 100
+          done
+
+      - name: Measure serious-candidate stalled curves and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$PWD/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs"
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-results"
+
+          set_cap() {
+            CAP="$1" python3 - <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          cap = os.environ["CAP"]
+          text, count = re.subn(
+              r"const MAX_PENDING_RECORDS: usize = [^;]+;",
+              f"const MAX_PENDING_RECORDS: usize = {cap};",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("MAX_PENDING_RECORDS replacement failed")
+          path.write_text(text)
+          PY
+          }
+
+          run_case() {
+            local label="$1"; shift
+            local policy="$1"; shift
+            local cap="$1"; shift
+            local start end wall
+            start=$(date +%s%3N)
+            "$BIN" "$@" > "/tmp/${label}.json"
+            end=$(date +%s%3N)
+            wall=$((end-start))
+            jq --arg policy "$policy" --argjson cap "$cap" --argjson wall "$wall" \
+              '. + {policy:$policy, max_pending_records:$cap, max_pending_bytes:4194304, wall_millis:$wall}' \
+              "/tmp/${label}.json" > "${OUT}/${label}.json"
+            cat "${OUT}/${label}.json"
+          }
+
+          for cap in 1024 2048 4096; do
+            set_cap "$cap"
+            cargo build --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog
+            policy="backpressure-record-${cap}-byte-4MiB"
+            for sessions in 1 10 50; do
+              run_case "cap-${cap}-stall-${sessions}" "$policy" "$cap" \
+                --mode stall --sessions "$sessions" --records-per-session 1000000 --payload-bytes 1024 \
+                --load-millis 1500 --settle-millis 100
+            done
+            run_case "cap-${cap}-recover-128" "$policy" "$cap" \
+              --mode recover --sessions 128 --records-per-session 1000000 --payload-bytes 1024 \
+              --load-millis 1500 --settle-millis 100
+          done
+
+      - name: Check small-record overhead guard against byte-only policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
+          OUT="$PWD/fieldwork-946-results"
+          set_cap() {
+            CAP="$1" python3 - <<'PY'
+          import os, pathlib, re
+          path = pathlib.Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          cap = os.environ["CAP"]
+          text, count = re.subn(
+              r"const MAX_PENDING_RECORDS: usize = [^;]+;",
+              f"const MAX_PENDING_RECORDS: usize = {cap};",
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("MAX_PENDING_RECORDS replacement failed")
+          path.write_text(text)
+          PY
+          }
+          for cap in 4096 65536; do
+            set_cap "$cap"
+            cargo build --quiet \
+              --manifest-path cmux-tui/Cargo.toml \
+              -p chatmux-relay \
+              --example fieldwork_journal_backlog
+            start=$(date +%s%3N)
+            "$BIN" --mode stall --sessions 128 --records-per-session 1000000 --payload-bytes 64 \
+              --load-millis 1500 --settle-millis 100 > "/tmp/small-${cap}.json"
+            end=$(date +%s%3N)
+            jq --arg policy "backpressure-record-${cap}-byte-4MiB" --argjson cap "$cap" \
+              --argjson wall "$((end-start))" \
+              '. + {policy:$policy, max_pending_records:$cap, max_pending_bytes:4194304, payload_class:"small-64B", wall_millis:$wall}' \
+              "/tmp/small-${cap}.json" > "${OUT}/cap-${cap}-stall-128-small.json"
+            cat "${OUT}/cap-${cap}-stall-128-small.json"
+          done
+
+      - name: Summarize result table
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('fieldwork-946-results')
+          rows = []
+          for path in sorted(root.glob('*.json')):
+              if path.name == 'base.json':
+                  continue
+              data = json.loads(path.read_text())
+              rows.append({
+                  'file': path.name,
+                  'policy': data.get('policy'),
+                  'mode': data.get('mode'),
+                  'sessions': data.get('requested_sessions'),
+                  'active': data.get('active_sessions'),
+                  'payload': data.get('payload_bytes'),
+                  'generated': data.get('generated_records_at_measurement'),
+                  'completed': data.get('completed_producers_at_measurement'),
+                  'requests': data.get('http_requests'),
+                  'rss_kib': data.get('loaded_rss_kib'),
+                  'rss_delta_kib': (data.get('loaded_rss_kib') or 0) - (data.get('baseline_rss_kib') or 0),
+                  'cleanup_fds': data.get('cleanup_fds'),
+                  'wall_ms': data.get('wall_millis'),
+                  'recovery_ms': data.get('recovery_settle_millis'),
+                  'delivered_after_recovery': data.get('recovered_delivered_records'),
+              })
+          (root / 'summary.json').write_text(json.dumps(rows, indent=2) + '\n')
+          print(json.dumps(rows, indent=2))
+          PY
+
+      - name: Upload issue 946 measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: fieldwork-946-journal-policy
+          path: fieldwork-946-results/*.json
