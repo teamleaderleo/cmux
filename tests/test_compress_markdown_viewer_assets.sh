@@ -78,4 +78,29 @@ for content, cached in [
     assert zlib.decompress(packed.read_bytes()) == content
     assert not raw.exists()
 print('PASS: unchanged assets retain output; edited and corrupt assets rebuild')
+
+# Reproduce Xcode replacing the entire resources directory between builds.
+import shutil
+derived = root.parent / 'derived'
+environment = dict(os.environ, DERIVED_FILE_DIR=str(derived))
+raw.write_bytes(original)
+packed.unlink()
+subprocess.run([script, str(root)], check=True, env=environment, stdout=subprocess.DEVNULL)
+cached = derived / 'cmux-markdown-compressed-v1/top.js.deflate'
+os.utime(cached, ns=(1000000000, 1000000000))
+shutil.rmtree(root)
+root.mkdir()
+raw.write_bytes(original)
+subprocess.run([script, str(root)], check=True, env=environment, stdout=subprocess.DEVNULL)
+assert cached.stat().st_mtime_ns == 1000000000
+assert zlib.decompress(packed.read_bytes()) == original
+assert not raw.exists()
+for content, cached_bytes in [(b'edited source', cached.read_bytes()), (original, b'broken')]:
+    packed.unlink()
+    raw.write_bytes(content)
+    cached.write_bytes(cached_bytes)
+    subprocess.run([script, str(root)], check=True, env=environment, stdout=subprocess.DEVNULL)
+    assert zlib.decompress(packed.read_bytes()) == content
+    assert zlib.decompress(cached.read_bytes()) == content
+print('PASS: derived cache survives resource replacement and validates edits and corruption')
 PY

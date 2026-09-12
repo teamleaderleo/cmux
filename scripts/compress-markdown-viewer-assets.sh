@@ -13,11 +13,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - "$MARKDOWN_VIEWER_DIR" <<'PY'
+import os
 import pathlib
 import sys
 import zlib
 
 root = pathlib.Path(sys.argv[1])
+# Xcode replaces the resource directory when copying source assets. Keep its
+# reusable compressed copies alongside other target-specific derived files.
+derived = os.environ.get("DERIVED_FILE_DIR")
+cache = pathlib.Path(derived) / "cmux-markdown-compressed-v1" if derived else None
 
 def matches(output, raw):
     try:
@@ -42,10 +47,18 @@ for path in sorted(root.rglob("*")):
         path.unlink()
         reused += 1
         continue
-    compressed = zlib.compress(raw, level=9)
+    cached = cache / output.relative_to(root) if cache else None
+    if cached is not None and matches(cached, raw):
+        compressed = cached.read_bytes()
+        reused += 1
+    else:
+        compressed = zlib.compress(raw, level=9)
+        if cached is not None:
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(compressed)
+        print(f"compressed markdown viewer asset: {path.name} -> {output.name} ({len(raw)} -> {len(compressed)} bytes)")
     output.write_bytes(compressed)
     path.unlink()
-    print(f"compressed markdown viewer asset: {path.name} -> {output.name} ({len(raw)} -> {len(compressed)} bytes)")
 if reused:
     print(f"reused {reused} verified compressed markdown viewer assets")
 PY
