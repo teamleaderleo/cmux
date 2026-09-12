@@ -1,0 +1,54 @@
+name: Fieldwork issue 946 clean measured candidate wording
+
+on:
+  push:
+    branches:
+      - fieldwork/journal-backlog-policy-946-cleanup-20260912
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fieldwork/journal-backlog-policy-946-candidate
+          fetch-depth: 2
+          persist-credentials: true
+
+      - name: Replace stale probe-specific wording and amend candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=dfffddbfbd12c52c5e2b49a33b682bcf29627810
+          test "$(git rev-parse HEAD)" = "${expected}"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs")
+          text = path.read_text()
+          replacements = {
+              "instead of making a 101-record\n    // ready batch.":
+                  "instead of making an over-capacity\n    // ready batch.",
+              '"the 101st busy record must wait for pool capacity"':
+                  '"an overflow busy record must wait for pool capacity"',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f"replacement anchor count for {old!r}: {text.count(old)}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          ! grep -q '101-record\|101st busy record' cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          git diff --check
+          git diff -- cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs
+          git commit --amend --no-edit
+          new_sha=$(git rev-parse HEAD)
+          git push --force-with-lease=refs/heads/fieldwork/journal-backlog-policy-946-candidate:${expected} \
+            origin HEAD:refs/heads/fieldwork/journal-backlog-policy-946-candidate
+          echo "candidate_sha=${new_sha}"
