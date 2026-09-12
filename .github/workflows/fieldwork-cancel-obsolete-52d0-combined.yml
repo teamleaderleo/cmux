@@ -1,0 +1,17 @@
+name: Retire superseded combined Fieldwork 52d0 run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fieldwork-cancel-obsolete-52d0-combined.yml
+
+concurrency:
+  group: fieldwork-refresh-942-945-52d0a696
+  cancel-in-progress: true
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'superseded combined verifier retired; dedicated exact-base lanes own final evidence'
