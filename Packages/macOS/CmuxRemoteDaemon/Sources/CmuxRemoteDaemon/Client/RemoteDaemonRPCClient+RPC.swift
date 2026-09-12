@@ -276,6 +276,47 @@ extension RemoteDaemonRPCClient {
         }
     }
 
+    /// Separate liveness budget for the serialized non-WebSocket write lane.
+    /// The existing RPC `timeout` remains a response deadline that starts only
+    /// after a healthy write completes; this budget exists solely to prevent a
+    /// queued or physically blocked stdio write from waiting forever before the
+    /// response timeout owner can run.
+    private static var daemonWriteLivenessTimeout: TimeInterval { 1.0 }
+
+    /// Runs one physical non-WebSocket daemon write under the write-liveness
+    /// budget without consuming the caller's response timeout.
+    private func writePayloadWithinLivenessBudget(_ payload: Data) throws -> Bool {
+        let completion = DispatchSemaphore(value: 0)
+        let sendErrorBox = RemoteDaemonSendErrorBox()
+        writeQueue.async { [self] in
+            defer { completion.signal() }
+            do {
+                try writePayload(payload)
+            } catch {
+                sendErrorBox.error = error
+            }
+        }
+        guard completion.wait(timeout: .now() + Self.daemonWriteLivenessTimeout) == .success else {
+            return false
+        }
+        if let error = sendErrorBox.error {
+            throw error
+        }
+        return true
+    }
+
+    private static func timeoutError(method: String) -> NSError {
+        NSError(domain: "cmux.remote.daemon.rpc", code: 11, userInfo: [
+            NSLocalizedDescriptionKey: "daemon RPC timeout waiting for \(method) response",
+        ])
+    }
+
+    private static func writeLivenessError(method: String) -> NSError {
+        NSError(domain: "cmux.remote.daemon.rpc", code: 16, userInfo: [
+            NSLocalizedDescriptionKey: "failed writing daemon RPC \(method): write timed out",
+        ])
+    }
+
     func call(method: String, params: [String: Any], timeout: TimeInterval) throws -> [String: Any] {
         let pendingCall = pendingCalls.register()
         let payload: Data
@@ -287,8 +328,19 @@ extension RemoteDaemonRPCClient {
         }
 
         do {
-            try writeQueue.sync {
-                try writePayload(payload)
+            if configuration.transport == .websocket {
+                try writeQueue.sync {
+                    try writePayload(payload)
+                }
+            } else {
+                guard try writePayloadWithinLivenessBudget(payload) else {
+                    // The request is either still queued or physically blocked.
+                    // Retire the single-lane transport so every queued caller
+                    // can unwind instead of accumulating behind stale work.
+                    pendingCalls.remove(pendingCall)
+                    stop(suppressTerminationCallback: false)
+                    throw Self.timeoutError(method: method)
+                }
             }
         } catch {
             pendingCalls.remove(pendingCall)
@@ -358,9 +410,7 @@ extension RemoteDaemonRPCClient {
             } else {
                 stop(suppressTerminationCallback: false)
             }
-            throw NSError(domain: "cmux.remote.daemon.rpc", code: 11, userInfo: [
-                NSLocalizedDescriptionKey: "daemon RPC timeout waiting for \(method) response",
-            ])
+            throw Self.timeoutError(method: method)
         case .failure(let failure):
             throw NSError(domain: "cmux.remote.daemon.rpc", code: 12, userInfo: [
                 NSLocalizedDescriptionKey: failure,
@@ -400,8 +450,16 @@ extension RemoteDaemonRPCClient {
             ])
         }
 
-        try writeQueue.sync {
-            try writePayload(payload)
+        if configuration.transport == .websocket {
+            try writeQueue.sync {
+                try writePayload(payload)
+            }
+            return
+        }
+
+        guard try writePayloadWithinLivenessBudget(payload) else {
+            stop(suppressTerminationCallback: false)
+            throw Self.writeLivenessError(method: method)
         }
     }
 
