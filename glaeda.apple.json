@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "app": {
+      "engine": "script",
+      "executable": "scripts/reload.sh",
+      "arguments": [
+        "--tag", "glaeda-native",
+        "--derived-data", "{derived_data}",
+        "--no-global-cli-links"
+      ],
+      "environment": {
+        "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}"
+      }
+    }
+  }
+}
