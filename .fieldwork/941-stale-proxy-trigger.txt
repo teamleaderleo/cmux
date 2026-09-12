@@ -1,0 +1,4 @@
+Fieldwork #941 exact-current RED/GREEN execution trigger.
+Base: 01973f785ae7ea5b85dea212152b003c67528745
+RED: 70bba9ed9890e9f9b053127372c3afd031d733f0
+GREEN: c3aacc6375b0750d8da46225aa3eb6266aeba03a
