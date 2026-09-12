@@ -48,5 +48,16 @@
         ]
       }
     }
+  },
+  "checks": {
+    "app": {
+      "engine": "script",
+      "executable": "scripts/check-native.sh",
+      "arguments": [
+        "{derived_data}",
+        "{source_packages}",
+        "glaeda.native"
+      ]
+    }
   }
 }
