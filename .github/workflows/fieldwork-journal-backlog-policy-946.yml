@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Verify exact upstream base
         shell: bash
@@ -102,7 +104,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC="$PWD/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs"
           BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
           OUT="$PWD/fieldwork-946-results"
 
@@ -161,7 +162,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC="$PWD/cmux-tui/crates/chatmux-relay/src/journal_forwarder.rs"
           BIN="$PWD/cmux-tui/target/debug/examples/fieldwork_journal_backlog"
           OUT="$PWD/fieldwork-946-results"
 
