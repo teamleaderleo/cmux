@@ -78,3 +78,5 @@ tmux-*.log
 # Remote-only Blacksmith cmux-tui benchmark output
 /testbox-benchmark/
 /.cmux-scratch/
+# Machine-local native Apple build caches and private logs.
+.glaeda/apple-build/
