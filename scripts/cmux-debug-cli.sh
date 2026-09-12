@@ -10,6 +10,8 @@ Usage:
 
 Example:
   CMUX_TAG=codext scripts/cmux-debug-cli.sh list-workspaces
+
+For a build with --derived-data, also set CMUX_DERIVED_DATA_DIR to that directory.
 EOF
   exit 2
 fi
@@ -59,7 +61,8 @@ EOF
   exit 1
 fi
 
-cli_path="${HOME}/Library/Developer/Xcode/DerivedData/cmux-${tag_slug}/Build/Products/Debug/cmux DEV ${tag_slug}.app/Contents/Resources/bin/cmux"
+derived_data="${CMUX_DERIVED_DATA_DIR:-${HOME}/Library/Developer/Xcode/DerivedData/cmux-${tag_slug}}"
+cli_path="${derived_data}/Build/Products/Debug/cmux DEV ${tag_slug}.app/Contents/Resources/bin/cmux"
 if [[ ! -x "$cli_path" ]]; then
   cat >&2 <<EOF
 Tagged cmux CLI not found:

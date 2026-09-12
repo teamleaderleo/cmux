@@ -4,11 +4,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-TAG="Debug_Helper.Test"
-TAG_SLUG="debug-helper-test"
-TAG_BUNDLE_ID="debug.helper.test"
-SOCKET_PATH="/tmp/cmux-debug-${TAG_SLUG}.sock"
 TMP_DIR="$(mktemp -d)"
+TOKEN="$(basename "$TMP_DIR" | tr -cd 'a-zA-Z0-9' | tr '[:upper:]' '[:lower:]')"
+TAG="Debug_Helper.Test.$TOKEN"
+TAG_SLUG="debug-helper-test-$TOKEN"
+TAG_BUNDLE_ID="debug.helper.test.$TOKEN"
+SOCKET_PATH="/tmp/cmux-debug-${TAG_SLUG}.sock"
 SERVER_PID=""
 
 cleanup() {
@@ -37,19 +38,13 @@ printf '\n'
 EOF
 chmod +x "$FAKE_CLI"
 
-rm -f "$SOCKET_PATH"
+[[ ! -e "$SOCKET_PATH" ]] || { echo "FAIL: test socket already exists"; exit 1; }
 python3 - "$SOCKET_PATH" <<'PY' >/dev/null 2>&1 &
-import os
 import socket
 import sys
 import time
 
 path = sys.argv[1]
-try:
-    os.unlink(path)
-except FileNotFoundError:
-    pass
-
 sock = socket.socket(socket.AF_UNIX)
 sock.bind(path)
 sock.listen(1)
@@ -117,5 +112,14 @@ reject_prefix "CMUX_SURFACE_ID"
 reject_prefix "CMUX_PANEL_ID"
 reject_prefix "CMUXD_UNIX_PATH"
 reject_prefix "CMUX_DEBUG_LOG"
+
+MANAGED_DATA="$TMP_DIR/managed cache/derived_data"
+mkdir -p "$MANAGED_DATA/Build/Products/Debug"
+mv "$FAKE_HOME/Library/Developer/Xcode/DerivedData/cmux-${TAG_SLUG}/Build/Products/Debug/cmux DEV ${TAG_SLUG}.app" \
+  "$MANAGED_DATA/Build/Products/Debug/"
+OUTPUT="$(HOME="$FAKE_HOME" CMUX_TAG="$TAG" CMUX_DERIVED_DATA_DIR="$MANAGED_DATA" \
+  "$ROOT_DIR/scripts/cmux-debug-cli.sh" env)"
+require_line "CMUX_BUNDLED_CLI_PATH=$MANAGED_DATA/Build/Products/Debug/cmux DEV ${TAG_SLUG}.app/Contents/Resources/bin/cmux"
+require_line "CMUX_SOCKET_PATH=$SOCKET_PATH"
 
 echo "PASS: cmux-debug-cli.sh routes through the tagged CLI/socket and scrubs ambient cmux env"
