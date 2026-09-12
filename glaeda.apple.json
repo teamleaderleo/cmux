@@ -5,13 +5,22 @@
       "engine": "script",
       "executable": "scripts/reload.sh",
       "arguments": [
-        "--tag", "glaeda-native",
-        "--derived-data", "{derived_data}",
+        "--tag",
+        "glaeda-native",
+        "--derived-data",
+        "{derived_data}",
         "--no-global-cli-links"
       ],
       "environment": {
         "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}"
       }
+    }
+  },
+  "preparations": {
+    "app": {
+      "engine": "xcode",
+      "project": "cmux.xcodeproj",
+      "scheme": "cmux"
     }
   }
 }
