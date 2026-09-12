@@ -11,6 +11,7 @@ permissions:
 
 env:
   BASE_SHA: 52d0a69623430c72d7b5db4b4a5d27c692c30a19
+  RED_SHA: 94879639fb527d09b6125e4d1040188387b7060f
 
 jobs:
   issue-943-readproof:
@@ -19,131 +20,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.BASE_SHA }}
+          ref: ${{ env.RED_SHA }}
           fetch-depth: 0
           submodules: recursive
-      - name: Build test-only RED from exact current base
+      - name: Verify exact test-first ancestry
         shell: bash
         run: |
           set -euo pipefail
           git config user.name fieldwork-bot
           git config user.email fieldwork-bot@users.noreply.github.com
-          git switch -C fieldwork/943-rpc-target-alias-readproof-52d0a696 "$BASE_SHA"
-          test "$(git rev-parse HEAD)" = "$BASE_SHA"
-          git cherry-pick 702784686141f453454fea2afcda15c9b9573753
-          git cherry-pick 0f4e0144398cfda3efd096bc68a560f7b9f2e220
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('cmuxTests/SocketTerminalBindingRegressionTests.swift')
-          s = p.read_text()
-          anchor = '    @Test func camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal() async throws {\n'
-          addition = r'''    @Test func camelCaseSurfaceAliasCannotReplayFocusedTerminal() async throws {
-              try await withAppContext { workspace in
-                  let originalPanel = try #require(
-                      workspace.focusedPanelId.flatMap { workspace.panels[$0] as? TerminalPanel }
-                  )
-                  let replacement = TerminalSurface(
-                      id: originalPanel.id,
-                      tabId: workspace.id,
-                      context: GHOSTTY_SURFACE_CONTEXT_SPLIT,
-                      configTemplate: nil,
-                      initialCommand: "/bin/cat"
-                  )
-                  defer {
-                      replacement.teardownSurface()
-                      GhosttyApp.terminalSurfaceRegistry.unregister(replacement)
-                  }
-
-                  try await waitForLiveSurface(replacement)
-                  let requestedSurfaceID = UUID().uuidString
-                  let envelope = try await socketEnvelopeUsingExecutionPolicy(
-                      method: "terminal.replay",
-                      params: ["surfaceId": requestedSurfaceID]
-                  )
-
-                  if envelope["ok"] as? Bool == true {
-                      let result = try #require(envelope["result"] as? [String: Any])
-                      let returnedSurfaceID = try #require(result["surface_id"] as? String)
-                      #expect(returnedSurfaceID != requestedSurfaceID)
-                      Issue.record("camelCase surfaceId silently replayed the focused terminal")
-                      return
-                  }
-
-                  let error = try #require(envelope["error"] as? [String: Any])
-                  #expect(error["code"] as? String == "invalid_params")
-              }
-          }
-
-          @Test func trueNoTargetReplayStillUsesFocusedTerminal() async throws {
-              try await withAppContext { workspace in
-                  let originalPanel = try #require(
-                      workspace.focusedPanelId.flatMap { workspace.panels[$0] as? TerminalPanel }
-                  )
-                  let replacement = TerminalSurface(
-                      id: originalPanel.id,
-                      tabId: workspace.id,
-                      context: GHOSTTY_SURFACE_CONTEXT_SPLIT,
-                      configTemplate: nil,
-                      initialCommand: "/bin/cat"
-                  )
-                  defer {
-                      replacement.teardownSurface()
-                      GhosttyApp.terminalSurfaceRegistry.unregister(replacement)
-                  }
-
-                  try await waitForLiveSurface(replacement)
-                  let envelope = try await socketEnvelopeUsingExecutionPolicy(
-                      method: "terminal.replay",
-                      params: [:]
-                  )
-                  #expect(envelope["ok"] as? Bool == true)
-                  let result = try #require(envelope["result"] as? [String: Any])
-                  #expect((result["surface_id"] as? String) == replacement.id.uuidString)
-              }
-          }
-
-'''
-          if anchor not in s:
-              raise SystemExit('app test anchor drifted')
-          p.write_text(s.replace(anchor, addition + anchor, 1))
-
-          p = Path('Packages/macOS/CmuxControlSocket/Tests/CmuxControlSocketTests/ControlRequestParserTests.swift')
-          s = p.read_text()
-          anchor = '    @Test func strictRejectsCamelCaseTargetAlias() {\n'
-          addition = r'''    @Test func strictRejectsKnownTargetAliasVariants() {
-              let aliases = [
-                  "windowId", "groupId", "workspaceId", "surfaceId",
-                  "terminalId", "tabId", "paneId", "surfaceID", "Surface_Id",
-              ]
-              for alias in aliases {
-                  let line = "{\"method\":\"terminal.replay\",\"params\":{\"\(alias)\":\"00000000-0000-0000-0000-000000000001\"}}"
-                  #expect((try? parser.request(fromLine: line).get()) == nil)
-              }
-          }
-
-          @Test func strictPreservesCanonicalNoTargetAndUnrelatedExtensionKeys() {
-              let canonical = #"{"method":"terminal.replay","params":{"surface_id":"00000000-0000-0000-0000-000000000001"}}"#
-              let noTarget = #"{"method":"terminal.replay","params":{}}"#
-              let extensionKey = #"{"method":"terminal.replay","params":{"totally_bogus_key":1}}"#
-              #expect((try? parser.request(fromLine: canonical).get()) != nil)
-              #expect((try? parser.request(fromLine: noTarget).get()) != nil)
-              #expect((try? parser.request(fromLine: extensionKey).get()) != nil)
-          }
-
-'''
-          if anchor not in s:
-              raise SystemExit('parser test anchor drifted')
-          p.write_text(s.replace(anchor, addition + anchor, 1))
-          PY
-          git add cmuxTests/SocketTerminalBindingRegressionTests.swift Packages/macOS/CmuxControlSocket/Tests/CmuxControlSocketTests/ControlRequestParserTests.swift
-          git commit -m 'test: prove read-side RPC target aliases fail closed'
-          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git switch -C fieldwork/943-rpc-target-alias-readproof-52d0a696 "$RED_SHA"
       - name: Select Xcode and GhosttyKit
         run: |
           ./scripts/select-ci-xcode.sh
           ./scripts/download-prebuilt-ghosttykit.sh
-      - name: RED parser aliases are accepted on current main
+      - name: RED parser accepts known target aliases
         shell: bash
         run: |
           set -euo pipefail
@@ -154,12 +46,12 @@ jobs:
           test "$status" -ne 0
           grep -F 'strictRejectsKnownTargetAliasVariants' /tmp/943-parser-red-read.log
           echo "943 parser RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
-      - name: RED read-only terminal.replay falls through to focus
+      - name: RED read-only terminal replay falls through to focus
         shell: bash
         run: |
           set -euo pipefail
           set +e
-          ./scripts/test-unit.sh test -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotReplayFocusedTerminal 2>&1 | tee /tmp/943-read-red.log
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/RPCTargetAliasReadProofTests/camelCaseSurfaceAliasCannotReplayFocusedTerminal 2>&1 | tee /tmp/943-read-red.log
           status=${PIPESTATUS[0]}
           set -e
           test "$status" -ne 0
@@ -179,18 +71,16 @@ jobs:
           swift test --package-path Packages/macOS/CmuxControlSocket 2>&1 | tee /tmp/943-parser-green-read.log
           grep -F 'strictRejectsKnownTargetAliasVariants' /tmp/943-parser-green-read.log
           grep -F 'strictPreservesCanonicalNoTargetAndUnrelatedExtensionKeys' /tmp/943-parser-green-read.log
-      - name: GREEN read no-target and controlled mutation app proofs
+      - name: GREEN read and no-target app controls
         shell: bash
         run: |
           set -euo pipefail
           ./scripts/test-unit.sh test \
-            -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotReplayFocusedTerminal \
-            -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/trueNoTargetReplayStillUsesFocusedTerminal \
-            -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal \
+            -only-testing:cmuxTests/RPCTargetAliasReadProofTests/camelCaseSurfaceAliasCannotReplayFocusedTerminal \
+            -only-testing:cmuxTests/RPCTargetAliasReadProofTests/trueNoTargetReplayStillUsesFocusedTerminal \
             2>&1 | tee /tmp/943-app-green-read.log
           grep -F 'camelCaseSurfaceAliasCannotReplayFocusedTerminal' /tmp/943-app-green-read.log
           grep -F 'trueNoTargetReplayStillUsesFocusedTerminal' /tmp/943-app-green-read.log
-          grep -F 'camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal' /tmp/943-app-green-read.log
           echo "943 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
       - name: Push complete evidence branch
         run: git push --force origin HEAD:refs/heads/fieldwork/943-rpc-target-alias-readproof-52d0a696
