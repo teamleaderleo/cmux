@@ -21,4 +21,4 @@ exec "$DEVELOPER_DIR/usr/bin/xcodebuild" \
   -derivedDataPath "$1" -clonedSourcePackagesDirPath "$2" \
   PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
   'CMUX_CUA_HELPER_DISPLAY_NAME=cmux Computer Use' \
-  CMUX_SIDEBAR_EXTENSION_POINT_ID="$BUNDLE_ID.cmux.sidebar" ${CMUX_NATIVE_XCODE_ARGS[@]+"${CMUX_NATIVE_XCODE_ARGS[@]}"} build
+  CMUX_SIDEBAR_EXTENSION_POINT_ID="$BUNDLE_ID.cmux.sidebar" ${CMUX_NATIVE_XCODE_ARGS[@]+"${CMUX_NATIVE_XCODE_ARGS[@]}"} build -showBuildTimingSummary
