@@ -20,7 +20,33 @@
     "app": {
       "engine": "xcode",
       "project": "cmux.xcodeproj",
-      "scheme": "cmux"
+      "scheme": "cmux",
+      "reuse": {
+        "inputs": [
+          "cmux.xcodeproj/project.pbxproj",
+          "cmux.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+          "cmux.xcworkspace/contents.xcworkspacedata",
+          "Packages/**/Package.swift"
+        ],
+        "required_files": [
+          {
+            "cache": "source_packages",
+            "path": "workspace-state.json"
+          },
+          {
+            "cache": "source_packages",
+            "path": "artifacts/sparkle/Sparkle/Sparkle.xcframework/Info.plist"
+          },
+          {
+            "cache": "source_packages",
+            "path": "artifacts/sentry-cocoa/Sentry/Sentry.xcframework/Info.plist"
+          },
+          {
+            "cache": "source_packages",
+            "path": "artifacts/iroh-ffi/Iroh/Iroh.xcframework/Info.plist"
+          }
+        ]
+      }
     }
   }
 }
