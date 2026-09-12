@@ -1,0 +1,15 @@
+name: Retire obsolete Fieldwork 01973f78 verifier
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fieldwork-cancel-obsolete-01973f78.yml
+concurrency:
+  group: fieldwork-refresh-942-945-01973f78
+  cancel-in-progress: true
+jobs:
+  retire:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
