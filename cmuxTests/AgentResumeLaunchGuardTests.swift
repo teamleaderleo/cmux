@@ -13,6 +13,16 @@ import Testing
 @MainActor
 @Suite
 struct AgentResumeLaunchGuardTests {
+    @Test func closingOwnerReleasesOnlyItsReservations() {
+        let guardState = AgentResumeLaunchGuard()
+        let owner = UUID(), other = UUID()
+        #expect(guardState.claimResumeLaunchWithToken(kind: "codex", sessionId: "one", ownerPanelID: owner) != nil)
+        #expect(guardState.claimResumeLaunchWithToken(kind: "claude", sessionId: "two", ownerPanelID: other) != nil)
+        guardState.releaseResumeLaunches(ownedBy: owner)
+        #expect(guardState.claimResumeLaunchWithToken(kind: "codex", sessionId: "one", ownerPanelID: other) != nil)
+        #expect(guardState.claimResumeLaunchWithToken(kind: "claude", sessionId: "two", ownerPanelID: owner) == nil)
+    }
+
     @Test
     func secondClaimForTheSameSessionIsRejected() {
         let launchGuard = AgentResumeLaunchGuard()

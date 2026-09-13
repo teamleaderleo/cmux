@@ -49,6 +49,17 @@ struct DefaultsKeyDirectAccessTests {
 
 @Suite("CloseTabWarningStore")
 struct CloseTabWarningStoreTests {
+    @Test func suppressionPersistsOnlyAfterConfirmedClose() {
+        let defaults = makeScratchDefaults()
+        defaults.set(true, forKey: "warnBeforeClosingTabXButton")
+        let store = CloseTabWarningStore(defaults: defaults)
+        store.recordCloseConfirmation(confirmed: false, suppressFutureWarnings: true)
+        #expect(store.shouldConfirmClose(requiresConfirmation: true, source: .tabCloseButton))
+        store.recordCloseConfirmation(confirmed: true, suppressFutureWarnings: true)
+        #expect(!CloseTabWarningStore(defaults: defaults).shouldConfirmClose(requiresConfirmation: true, source: .tabCloseButton))
+        #expect(!store.shouldConfirmClose(requiresConfirmation: true, source: .shortcut))
+    }
+
     @Test func defaultsMatchLegacyNamespace() {
         let store = CloseTabWarningStore(defaults: makeScratchDefaults())
         #expect(store.warnsBeforeClosingTab == true)
