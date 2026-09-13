@@ -33,7 +33,14 @@ function buildLinks(workspaces) {
   return {...fallback,...links};
 }
 const liveLinks = computed(() => buildLinks(data.workspaces() || []));
-function linked(r) { return liveLinks()[linkKey(r.provider, r.id)] || null; }
+function linked(r) {
+  const target = liveLinks()[linkKey(r.provider, r.id)] || null;
+  if (!target || target.panel) return target;
+  // Old workspace-only markers predate panel bindings. Recover only an
+  // unambiguous complete title segment; never guess from a truncated prefix.
+  const matches = (target.w.tabs || []).filter(t => String(t.title || '').split(' | ').includes(r.title));
+  return matches.length === 1 ? {...target, panel:matches[0].id} : target;
+}
 
 function isSelected(r) {
   const target = linked(r);

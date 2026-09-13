@@ -141,7 +141,11 @@ private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] 
                                surface: surface.panelId)
             }
             if fallback == nil, snapshot.customDescription == description, !snapshot.surfaces.isEmpty {
-                fallback = actions(window: context.windowId, workspace: workspace.id, surface: nil)
+                let matches = snapshot.surfaces.filter {
+                    $0.title.components(separatedBy: " | ").contains(params["title"] ?? "")
+                }
+                fallback = actions(window: context.windowId, workspace: workspace.id,
+                                   surface: matches.count == 1 ? matches[0].panelId : nil)
             }
         }
     }

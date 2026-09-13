@@ -29,8 +29,8 @@ public struct CustomSidebarAgentSnapshot: Sendable, Equatable {
     /// The hosting terminal panel's UUID, matching `tabs[k].id`
     /// (`agents[j].panelId`).
     public let panelId: UUID?
-    /// The hosting tab's surface UUID, matching `tabs[k].surfaceId`; the id
-    /// `surface.focus` accepts (`agents[j].surfaceId`).
+    /// The hosting Bonsplit tab UUID, matching `tabs[k].surfaceId`.
+    /// `surface.focus` accepts `panelId` instead.
     public let surfaceId: UUID?
     /// The session's working directory, when known (`agents[j].directory`).
     public let workingDirectory: String?
