@@ -32,7 +32,8 @@
         "required_files": [
           {
             "cache": "source_packages",
-            "path": "workspace-state.json"
+            "path": "workspace-state.json",
+            "match": "exists"
           },
           {
             "cache": "source_packages",
