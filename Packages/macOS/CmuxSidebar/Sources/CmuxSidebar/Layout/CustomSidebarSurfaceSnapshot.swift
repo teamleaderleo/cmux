@@ -10,9 +10,9 @@ public import Foundation
 public struct CustomSidebarSurfaceSnapshot: Sendable, Equatable {
     /// The panel identifier, projected to the interpreter `tabs[i].id` string.
     public let panelId: UUID
-    /// The surface (tab) identifier, projected as `tabs[i].surfaceId`. This is
-    /// the id `surface.focus` and the other `surface.*` verbs accept; panelId
-    /// is the panel behind the tab and is NOT interchangeable with it.
+    /// The Bonsplit tab identifier, projected as `tabs[i].surfaceId` for tab
+    /// transfer operations. Control methods such as `surface.focus` accept
+    /// `panelId` (`tabs[i].id`), not this internal tab identifier.
     public let surfaceId: UUID?
     /// The surface title (`tabs[i].title`).
     public let title: String

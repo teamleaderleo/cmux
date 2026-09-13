@@ -12,7 +12,8 @@ public struct ConversationSidebarView: View {
         self.hostContext = dataContext; self.dispatch = dispatch; self.live = live
     }
     let dispatch: SidebarActionDispatch
-    @State private var navigationMode = "chats"
+    @State private var visibleCount = 24
+    @State private var visibleIdentity = "Codex:"
     @State private var providerFilter = "Codex"
     @State private var providerMenuVisible = false
     @State private var headingHovered = false
@@ -57,13 +58,32 @@ public struct ConversationSidebarView: View {
     private var replaySource: String { Self.program }
     private static let program = (try? String(contentsOf: Bundle.module.url(forResource: "ConversationSidebar", withExtension: "js")!, encoding: .utf8)) ?? ""
     private var context: [String: SwiftValue] {
-        var result = hostContext
+        // Only send the fields this sidebar consumes. Timestamps, process
+        // diagnostics and unrelated workspace metadata must not invalidate rows.
+        let workspaces = (hostContext["workspaces"]?.iterationValues ?? []).map { workspace -> SwiftValue in
+            var fields: [String: SwiftValue] = [:]
+            for key in ["id", "title", "selected", "description"] { fields[key] = workspace.member(key) }
+            fields["tabs"] = .array((workspace.member("tabs")?.iterationValues ?? []).map { tab in
+                var leaf: [String: SwiftValue] = [:]
+                for key in ["id", "title", "focused"] { leaf[key] = tab.member(key) }
+                return .object(leaf)
+            })
+            fields["agents"] = .array((workspace.member("agents")?.iterationValues ?? []).map { agent in
+                var leaf: [String: SwiftValue] = [:]
+                for key in ["id", "kind", "panelId"] { leaf[key] = agent.member(key) }
+                return .object(leaf)
+            })
+            return .object(fields)
+        }
+        var result: [String: SwiftValue] = ["workspaces": .array(workspaces)]
         result["history"] = historyStore.rows
-        result["navigationMode"] = .string(navigationMode)
+        result["historyView"] = .object([
+            "provider": .string(providerFilter), "query": .string(searchQuery),
+            "limit": .int(visibleIdentity == providerFilter + ":" + searchQuery ? visibleCount : 24)
+        ])
+        result["historyLabel"] = .string(String(localized: "conversation.history", defaultValue: "History", bundle: .module))
         // Resync the retained action handler when its native window attaches.
         result["ownerWindow"] = .string((ownerWindowID ?? "") + ":" + (ownerWindowNumber.map(String.init) ?? ""))
-        result["providerFilter"] = .string(providerFilter)
-        result["searchQuery"] = .string(searchQuery)
         result["commandHeld"] = .bool(commandHeld)
         result["pinJump"] = .int(pinJump)
         result["jumpSerial"] = .int(jumpSerial)
@@ -76,7 +96,7 @@ public struct ConversationSidebarView: View {
             if searchVisible {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search conversations", text: $searchQuery)
+                    TextField("Search conversations", text: Binding(get: { searchQuery }, set: { visibleCount = 24; searchQuery = $0 }))
                         .textFieldStyle(.plain).font(.system(size: 12)).focused($searchFocused)
                         .onAppear { searchFocused = true }
                         .onExitCommand { searchVisible = false; searchQuery = "" }
@@ -95,18 +115,16 @@ public struct ConversationSidebarView: View {
 
             } else {
             HStack {
-                Button { if navigationMode == "chats" { providerMenuVisible.toggle() } } label: {
+                Button { providerMenuVisible.toggle() } label: {
                     HStack(spacing: 7) {
-                        if navigationMode == "workspaces" {
-                            Image(systemName: "rectangle.split.2x2").font(.system(size: 15))
-                        } else if providerFilter == "All" {
+                        if providerFilter == "All" {
                             Image(systemName: "square.grid.2x2").font(.system(size: 15))
                         } else {
                             ProviderIcon(providerFilter).frame(width: 18, height: 18)
                         }
-                        Text(navigationMode == "workspaces" ? String(localized: "conversation.workspaces", defaultValue: "Workspaces", bundle: .module) : providerFilter == "All" ? "All providers" : providerFilter)
+                        Text(providerFilter == "All" ? "All providers" : providerFilter)
                             .font(.system(size: 16, weight: .semibold))
-                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).opacity(navigationMode == "workspaces" ? 0 : 1)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
                     }
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(headingHovered ? Color.primary.opacity(0.09) : .clear,
@@ -114,6 +132,7 @@ public struct ConversationSidebarView: View {
                 }.buttonStyle(.plain).fixedSize()
                     .popover(isPresented: $providerMenuVisible, arrowEdge: .bottom) {
                         QuietProviderChoices(providers: ["All"] + providers, selected: providerFilter) { provider in
+                            visibleCount = 24
                             providerFilter = provider
                             providerMenuVisible = false
                         }.transaction { $0.animation = nil; $0.disablesAnimations = true }
@@ -128,27 +147,29 @@ public struct ConversationSidebarView: View {
             }.padding(.leading, 8).padding(.trailing, 6).padding(.top, 3).padding(.bottom, 3)
             }
             }.frame(height: 40)
-            Picker(String(localized: "conversation.navigation", defaultValue: "Sidebar view", bundle: .module), selection: $navigationMode) {
-                Text(String(localized: "conversation.chats", defaultValue: "Chats", bundle: .module)).tag("chats")
-                Text(String(localized: "conversation.workspaces", defaultValue: "Workspaces", bundle: .module)).tag("workspaces")
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 8).padding(.bottom, 5)
-            if navigationMode == "workspaces" {
-                Button {
-                    scopedDispatch.run(ButtonAction(commands: [.cmux(method: "workspace.create", params: ["focus": "true"])]))
-                } label: {
-                    Label(String(localized: "conversation.newWorkspace", defaultValue: "New workspace", bundle: .module), systemImage: "plus")
-                        .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12).padding(.vertical, 7).contentShape(Rectangle())
-                }.buttonStyle(.plain)
-            } else {
             QuietNewRow(provider: newProvider, providers: providers, create: newDraft)
                 .padding(.horizontal, 4).padding(.bottom, 3)
                 .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
-            }
+            Menu {
+                ForEach(Array((hostContext["workspaces"]?.iterationValues ?? []).enumerated()), id: \.offset) { _, workspace in
+                    if let id = workspace.member("id")?.displayString {
+                        Button(workspace.member("title")?.displayString ?? id) {
+                            scopedDispatch.run(ButtonAction(commands: [.cmux(method: "workspace.select", params: ["workspace_id": id])]))
+                        }
+                    }
+                }
+            } label: {
+                Text(String(localized: "conversation.openNow", defaultValue: "Open now", bundle: .module))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }.menuStyle(.borderlessButton).fixedSize().padding(.leading, 14).padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(String(localized: "conversation.switchLayout", defaultValue: "Switch between groups of open tabs", bundle: .module))
             if let error = historyStore.error {
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary).padding(8)
             }
+            ScrollViewReader { scroll in
             ScrollView {
+                Color.clear.frame(height: 0).id("conversation-top")
                 JSSidebarHostView(
                     source: replaySource,
                     dataContext: context,
@@ -156,9 +177,29 @@ public struct ConversationSidebarView: View {
                 )
                 .padding(4)
                 .background(QuietScrollChrome())
+                .background(ConversationScrollDemand(identity: providerFilter + ":" + searchQuery) {
+                    let count = historyStore.rows.iterationValues?.count ?? 0
+                    let identity = providerFilter + ":" + searchQuery
+                    let displayed = visibleIdentity == identity ? visibleCount : 24
+                    if displayed < count {
+                        visibleIdentity = identity
+                        visibleCount = min(count, displayed + 24)
+                    }
+                })
             }
             .contentShape(Rectangle())
             .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
+            .onChange(of: providerFilter) { _, _ in
+                visibleIdentity = providerFilter + ":" + searchQuery
+                visibleCount = 24
+                scroll.scrollTo("conversation-top", anchor: .top)
+            }
+            .onChange(of: searchQuery) { _, _ in
+                visibleIdentity = providerFilter + ":" + searchQuery
+                visibleCount = 24
+                scroll.scrollTo("conversation-top", anchor: .top)
+            }
+            }
         }
         .background(ConversationWindowReader { window in
             ownerWindowID = window?.identifier?.rawValue
@@ -166,9 +207,11 @@ public struct ConversationSidebarView: View {
         })
         .task {
             guard live else { return }
+            await historyStore.refresh()
             while !Task.isCancelled {
-                await historyStore.refresh()
-                try? await Task.sleep(for: .seconds(15))
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                if NSApp.isActive { await historyStore.refresh() }
             }
         }
         .onAppear {

@@ -6,16 +6,22 @@ public struct ProviderIcon: View {
     public let provider: String
     @Environment(\.colorScheme) private var scheme
     public init(_ provider: String) { self.provider = provider }
-    public static func menuImage(_ provider: String) -> NSImage? {
-        guard let url = Bundle.module.url(forResource: provider, withExtension: "png"),
-              let image = NSImage(contentsOf: url) else { return nil }
+    @MainActor private static let artwork: [String: NSImage] = {
+        var result: [String: NSImage] = [:]
+        for name in ["Claude", "Codex", "Codex-dark", "OpenCode"] {
+            if let url = Bundle.module.url(forResource: name, withExtension: "png"),
+               let image = NSImage(contentsOf: url) { result[name] = image }
+        }
+        return result
+    }()
+    @MainActor public static func menuImage(_ provider: String) -> NSImage? {
+        guard let image = artwork[provider]?.copy() as? NSImage else { return nil }
         image.size = NSSize(width: 16, height: 16)
         return image
     }
     public var body: some View {
         let name = provider == "Codex" && scheme == .dark ? "Codex-dark" : provider
-        if let url = Bundle.module.url(forResource: name, withExtension: "png"),
-           let image = NSImage(contentsOf: url) {
+        if let image = Self.artwork[name] {
             Image(nsImage: image).resizable().scaledToFit().accessibilityLabel(provider)
         }
     }

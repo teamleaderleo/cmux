@@ -1,9 +1,12 @@
 // Shared live conversation sidebar. Metadata arrives as per-key context updates.
 const history = computed(() => data.history() || []);
 const [collapsed, setCollapsed] = signal({});
-const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
-const [workspaceExpanded, setWorkspaceExpanded] = signal({});
+// Filter, query and page size arrive atomically so a provider switch cannot
+// briefly mount the previous provider's expanded page count.
+function viewProvider() { return data.historyView?.()?.provider ?? data.providerFilter(); }
+function viewQuery() { return data.historyView?.()?.query ?? (data.searchQuery?.() || ''); }
+function viewLimit() { return data.historyView?.()?.limit ?? (data.visibleCount?.() || 24); }
 function groupLabel(r) { return typeof r.group === 'string' && r.group ? r.group : r.cwd; }
 function key(r) { return r.provider + ':' + r.id; }
 function linkKey(provider, id) { return provider + ':' + (provider === 'OpenCode' ? String(id) : String(id).toLowerCase()); }
@@ -17,7 +20,7 @@ function buildLinks(workspaces) {
       const provider = kind.includes('claude') ? 'Claude' : kind.includes('codex') ? 'Codex' : kind.includes('opencode') ? 'OpenCode' : null;
       if (!provider || !panels.has(a.panelId)) continue;
       const id = linkKey(provider, a.id);
-      if (!links[id]) links[id] = {w, panel:a.surfaceId || (w.tabs || []).find(t => t.id === a.panelId)?.surfaceId || a.panelId};
+      if (!links[id]) links[id] = {w, panel:a.panelId};
     }
     if (String(w.description || '').startsWith('tk-history:')) {
       const saved = w.description.slice('tk-history:'.length);
@@ -32,8 +35,13 @@ function buildLinks(workspaces) {
 const liveLinks = computed(() => buildLinks(data.workspaces() || []));
 function linked(r) { return liveLinks()[linkKey(r.provider, r.id)] || null; }
 
+function isSelected(r) {
+  const target = linked(r);
+  if (!target || !target.w.selected) return false;
+  if (!target.panel) return (target.w.tabs || []).length === 1 && !!target.w.tabs[0].focused;
+  return (target.w.tabs || []).some(t => t.id === target.panel && t.focused);
+}
 function focus(r) {
-  setSelectedRow(key(r));
   const target = linked(r);
   if (target) {
     cmux('workspace.select', {workspace_id: target.w.id});
@@ -50,7 +58,7 @@ function resume(r) {
 }
 
 function visibleHistory() {
-  return history().filter(r => data.providerFilter() === 'All' || r.provider === data.providerFilter());
+  return history().filter(r => viewProvider() === 'All' || r.provider === viewProvider());
 }
 const shortcutPins = computed(() => visibleHistory().filter(r => r.pinned).slice(0, 9));
 function pinNumber(r) { return shortcutPins().findIndex(p => key(p) === key(r)) + 1; }
@@ -80,7 +88,18 @@ function conversationGroups(rows, provider, query) {
   }
   return result;
 }
-const groups = computed(() => conversationGroups(history(), data.providerFilter(), data.searchQuery() || ''));
+const allGroups = computed(() => conversationGroups(history(), viewProvider(), viewQuery()));
+function pageGroups(all, limit, hidden = {}, searching = false) {
+  let remaining = limit;
+  return all.flatMap(group => {
+    if (remaining <= 0) return [];
+    if (hidden[group.id] && !searching) return [{...group, rows:[]}];
+    const rows = group.rows.slice(0, remaining);
+    remaining -= rows.length;
+    return [{...group, rows}];
+  });
+}
+const groups = computed(() => pageGroups(allGroups(), viewLimit(), collapsed(), !!viewQuery().trim()));
 function conversationList() { return VStack({spacing:2}, [
   ForEach({items:groups,key:g=>g.id},g=>VStack({spacing:2},[
     HStack({spacing:5},[
@@ -88,14 +107,14 @@ function conversationList() { return VStack({spacing:2}, [
       Text(()=>g().name.startsWith('/')?g().name.split('/').filter(Boolean).pop():g().name)
         .font(()=>g().pinned?11:12).weight('regular').color(()=>g().pinned?'secondary':'primary').lineLimit(1), Spacer()
     ]).paddingLeading(10).paddingVertical(4).onTap(()=>setCollapsed({...collapsed(),[g().id]:!collapsed()[g().id]})),
-    ForEach({items:()=>collapsed()[g().id] && !(data.searchQuery()||'').trim() ? [] : g().rows,key:key},r=>VStack({spacing:3},[
+    ForEach({items:()=>collapsed()[g().id] && !viewQuery().trim() ? [] : g().rows,key:key},r=>VStack({spacing:3},[
       Button(()=>r().title,()=>focus(r()),[HStack({spacing:7,directHover:true,hoverBackground:'#ffffff12',
         shortcutHint:()=>data.commandHeld()&&pinNumber(r())>0?'⌘'+pinNumber(r()):'',
         hoverDetails:()=>[r().title,r().provider+' · '+groupLabel(r()).replace(/^(Codex|Claude|Folder) · /,''),r().cwd,linked(r())?'Open in this window':'Click to resume in this window'].filter(Boolean).join('\n')},[
-        ForEach({items:()=>data.providerFilter()==='All'?[r()]:[],key:key},p=>Image('',{provider:()=>p().provider}).frame({width:14,height:14})),
+        ForEach({items:()=>viewProvider()==='All'?[r()]:[],key:key},p=>Image('',{provider:()=>p().provider}).frame({width:14,height:14})),
         Text(()=>r().title).nativeMarquee(0.04).font(12).lineLimit(1).truncation('tail')
       ]).paddingLeading(()=>g().pinned?10:28).paddingTrailing(1).paddingVertical(6).cornerRadius(7)
-        .background(()=>{const x=linked(r());return selectedRow()===key(r()) || (x && x.w.selected) ? '#80808030' : null;})
+        .background(()=>isSelected(r()) ? '#80808030' : null)
       ]).conversationProvider(()=>r().provider).conversationID(()=>r().id)
         .conversationTitle(()=>r().title).conversationDirectory(()=>r().cwd)
     ]))
@@ -109,31 +128,27 @@ function workspaceRows(workspaces, query) {
 }
 function focusSurface(w, t) {
   cmux('workspace.select', {workspace_id:w.id});
-  cmux('surface.focus', {workspace_id:w.id, surface_id:t.surfaceId || t.id});
+  cmux('surface.focus', {workspace_id:w.id, surface_id:t.id});
 }
-function workspaceList() {
+function openList() {
   return VStack({spacing:2}, [
-    ForEach({items:()=>workspaceRows(data.workspaces() || [], data.searchQuery()),key:w=>w.id},w=>VStack({spacing:2},[
-      HStack({spacing:3},[
-        Button('',()=>setWorkspaceExpanded({...workspaceExpanded(),[w().id]:!(workspaceExpanded()[w().id] ?? true)}),[
-          Image(()=> (workspaceExpanded()[w().id] ?? true) ? 'chevron.down' : 'chevron.right').font(9).secondary().frame({width:16})
-        ]),
-        Button(()=>w().title,()=>cmux('workspace.select',{workspace_id:w().id}),[
-          HStack({spacing:5},[Text(()=>w().title).font(12).lineLimit(1),Spacer()]).paddingVertical(6)
-        ])
-      ]).paddingHorizontal(5).cornerRadius(7).background(()=>w().selected?'#80808030':null).hoverBackground('#ffffff12'),
-      ForEach({items:()=> (workspaceExpanded()[w().id] ?? true) ? (w().tabs || []) : [],key:t=>t.id},t=>
-        Button(()=>t().title,()=>focusSurface(w(),t()),[
-          HStack({spacing:6},[
-            Image('rectangle').font(11).secondary(),
-            Text(()=>t().title).font(12).lineLimit(1).nativeMarquee(0.04)
-          ]).paddingLeading(25).paddingTrailing(2).paddingVertical(5).cornerRadius(7)
-            .background(()=>w().selected&&t().focused?'#80808030':null).hoverBackground('#ffffff12')
-        ])
-      )
-    ]))
+    ForEach({items:()=> (data.workspaces() || []).filter(w=>w.selected),key:w=>w.id},w=>
+      VStack({spacing:2},[
+        ForEach({items:()=>w().tabs || [],key:t=>t.id},t=>
+          Button(()=>t().title,()=>focusSurface(w(),t()),[
+            HStack({spacing:6,directHover:true,hoverBackground:'#ffffff12'},[
+              Image('rectangle').font(11).secondary(),
+              Text(()=>t().title).font(12).lineLimit(1).nativeMarquee(0.04)
+            ]).paddingLeading(10).paddingTrailing(2).paddingVertical(5).cornerRadius(7)
+              .background(()=>t().focused?'#80808030':null)
+          ])
+        )
+      ])
+    )
   ]);
 }
-sidebar(()=>VStack({spacing:0},[
-  ForEach({items:()=>[data.navigationMode() || 'chats'],key:x=>x},mode=>mode()==='workspaces'?workspaceList():conversationList())
+sidebar(()=>VStack({spacing:3},[
+  openList(), Divider().paddingVertical(4),
+  Text(()=>data.historyLabel ? (data.historyLabel() || 'History') : 'History').font(11).secondary().paddingLeading(10).paddingVertical(3),
+  conversationList()
 ]).padding(0));

@@ -138,7 +138,7 @@ private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] 
                 guard let panel = agent.panelId,
                       let surface = snapshot.surfaces.first(where: { $0.panelId == panel }) else { continue }
                 return actions(window: context.windowId, workspace: workspace.id,
-                               surface: agent.surfaceId ?? surface.surfaceId)
+                               surface: surface.panelId)
             }
             if fallback == nil, snapshot.customDescription == description, !snapshot.surfaces.isEmpty {
                 fallback = actions(window: context.windowId, workspace: workspace.id, surface: nil)

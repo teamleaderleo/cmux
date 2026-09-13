@@ -42,7 +42,7 @@ assert.equal(run("conversationGroups(history(),'Claude','')[0].name"),'/fallback
 assert.equal(run("groupLabel(history()[0])"),'/fallback');
 console.log('Missing project labels fall back to folders');
 
-// Reuse must focus the actual surface, even when its panel has a different ID.
+// Control surface.focus accepts the panel ID, not the internal Bonsplit tab UUID.
 history=[row('existing','Claude','/a',1)];calls=[];
 workspaces=[{id:'w',agents:[{id:'existing',kind:'claude',panelId:'panel',surfaceId:'surface'}],tabs:[{id:'panel',surfaceId:'surface'}]}];
 run('focus(history()[0])');
@@ -60,3 +60,5 @@ assert.equal(calls[1].params.surface_id,'panelB');
 console.log('Workspace search and exact surface navigation passed');
 
 require("./test-conversation-tiling-runtime.cjs");
+
+require("./test-conversation-selection-runtime.cjs");
