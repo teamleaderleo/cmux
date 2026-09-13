@@ -115,14 +115,14 @@ function workspaceList() {
   return VStack({spacing:2}, [
     ForEach({items:()=>workspaceRows(data.workspaces() || [], data.searchQuery()),key:w=>w.id},w=>VStack({spacing:2},[
       HStack({spacing:3},[
-        Button('',()=>setWorkspaceExpanded({...workspaceExpanded(),[w().id]:!(workspaceExpanded()[w().id] ?? w().selected)}),[
-          Image(()=> (workspaceExpanded()[w().id] ?? w().selected) ? 'chevron.down' : 'chevron.right').font(9).secondary().frame({width:16})
+        Button('',()=>setWorkspaceExpanded({...workspaceExpanded(),[w().id]:!(workspaceExpanded()[w().id] ?? true)}),[
+          Image(()=> (workspaceExpanded()[w().id] ?? true) ? 'chevron.down' : 'chevron.right').font(9).secondary().frame({width:16})
         ]),
         Button(()=>w().title,()=>cmux('workspace.select',{workspace_id:w().id}),[
           HStack({spacing:5},[Text(()=>w().title).font(12).lineLimit(1),Spacer()]).paddingVertical(6)
         ])
       ]).paddingHorizontal(5).cornerRadius(7).background(()=>w().selected?'#80808030':null).hoverBackground('#ffffff12'),
-      ForEach({items:()=> (workspaceExpanded()[w().id] ?? w().selected) ? (w().tabs || []) : [],key:t=>t.id},t=>
+      ForEach({items:()=> (workspaceExpanded()[w().id] ?? true) ? (w().tabs || []) : [],key:t=>t.id},t=>
         Button(()=>t().title,()=>focusSurface(w(),t()),[
           HStack({spacing:6},[
             Image('rectangle').font(11).secondary(),
