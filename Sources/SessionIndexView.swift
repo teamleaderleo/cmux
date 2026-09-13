@@ -1601,7 +1601,7 @@ enum SessionTranscriptLoader {
     /// A restore preview reads only the selected session's recent data. It never
     /// copies provider databases or walks the history directory.
     static func loadRecent(entry: SessionEntry) async -> [SessionTranscriptTurn] {
-        await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) { () -> [SessionTranscriptTurn] in
             if entry.agent == .opencode {
                 return recentOpenCode(sessionID: entry.sessionId)
             }
@@ -1642,7 +1642,8 @@ enum SessionTranscriptLoader {
                 if turns.count == 8 { break }
             }
             return Array(turns.reversed())
-        }.value
+        }
+        return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
     private static func recentQuery(path: String, sql: String, id: String) -> [[String]] {
@@ -1679,8 +1680,9 @@ enum SessionTranscriptLoader {
         for row in rows {
             guard row.count == 2, let role = openCodeMessageRole(from: row[0]),
                   role == .user || role == .assistant,
-                  let turn = parseOpenCodePart(row[1], messageRole: role, id: turns.count) else { continue }
-            turns.append(SessionTranscriptTurn(id: turns.count, role: role, text: String(turn.text.suffix(4000))))
+                  let turn = parseOpenCodePart(row[1], messageRole: role, id: turns.count),
+                  turn.role == .user || turn.role == .assistant else { continue }
+            turns.append(SessionTranscriptTurn(id: turns.count, role: turn.role, text: String(turn.text.suffix(4000))))
             if turns.count == 8 { break }
         }
         return Array(turns.reversed())
