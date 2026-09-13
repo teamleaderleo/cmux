@@ -168,6 +168,7 @@ def assert_session_entrypoint_is_instrumented(
         restore_token=restore_token,
     )
     expect(code == 0, f"{label}: wrapper exited {code}: {stderr}", failures)
+    expect(stderr == "", f"{label}: unexpected wrapper diagnostic: {stderr}", failures)
     expect(real_argv[:3] == ["--enable", "hooks", "--dangerously-bypass-hook-trust"],
            f"{label}: missing injected hook prefix: {real_argv}", failures)
     expect(any(arg.startswith("hooks.SessionStart=") for arg in real_argv),
