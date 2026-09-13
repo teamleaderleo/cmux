@@ -2181,7 +2181,7 @@ struct ContentView: View {
                             .padding(.leading, 0)
                     }
 
-                    Text(focusedDirectory.map { ($0 as NSString).lastPathComponent } ?? titlebarText)
+                    Text(titlebarLocationText)
                         .cmuxFont(size: 12, weight: .medium)
                         .foregroundColor(fakeTitlebarTextColor(appearance: appearance))
                         .lineLimit(1)
@@ -2342,6 +2342,11 @@ struct ContentView: View {
                 hostingSafeAreaTop = nextSafeAreaTop
             }
         }
+    }
+
+    private var titlebarLocationText: String {
+        guard let directory = focusedDirectory else { return titlebarText }
+        return (directory as NSString).lastPathComponent
     }
 
     @MainActor private func updateTitlebarText() {
