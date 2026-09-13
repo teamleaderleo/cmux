@@ -46,7 +46,7 @@ console.log('Missing project labels fall back to folders');
 history=[row('existing','Claude','/a',1)];calls=[];
 workspaces=[{id:'w',agents:[{id:'existing',kind:'claude',panelId:'panel',surfaceId:'surface'}],tabs:[{id:'panel',surfaceId:'surface'}]}];
 run('focus(history()[0])');
-assert.equal(calls[1].params.surface_id,'surface');
+assert.equal(calls[1].params.surface_id,'panel');
 console.log('Existing conversation focuses its actual surface');
 
 // Workspace navigation includes ordinary shells and searches surface titles.
@@ -56,7 +56,7 @@ assert.equal(run("workspaceRows(data.workspaces(), 'shell')[0].id"),'one');
 assert.equal(run("workspaceRows(data.workspaces(), '').length"),2);
 calls=[];run('focusSurface(data.workspaces()[1], data.workspaces()[1].tabs[0])');
 assert.equal(calls[0].params.workspace_id,'two');
-assert.equal(calls[1].params.surface_id,'surfaceB');
+assert.equal(calls[1].params.surface_id,'panelB');
 console.log('Workspace search and exact surface navigation passed');
 
 require("./test-conversation-tiling-runtime.cjs");

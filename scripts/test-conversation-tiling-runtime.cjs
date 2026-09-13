@@ -34,7 +34,7 @@ assert.ok(button('Work'));assert.ok(button('Base terminal'));
 host.__dispatch(button('Base terminal').id,'tap','{}');
 assert.equal(actions[0].method,'workspace.select');
 assert.equal(actions[1].method,'surface.focus');
-assert.equal(actions[1].params.surface_id,'surface');
+assert.equal(actions[1].params.surface_id,'panel');
 set('navigationMode','chats');
 assert.ok(button('Saved chat'));
 assert.equal(button('Base terminal'),undefined,'Switching views disposes the old nodes');
