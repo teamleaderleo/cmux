@@ -43,3 +43,9 @@ const count=actions.length;
 host.__dispatch(oldTerminal.id,'tap','{}');
 assert.equal(actions.length,count,'Disposed handlers cannot activate a stale surface');
 console.log('Live scene exposes open tabs beside history and focuses exact control targets');
+
+set('showOpenTabs',false);
+assert.equal(button('Other terminal'),undefined,'Vertical tabs can be hidden without closing their surfaces');
+assert.ok(button('Saved chat'),'History remains visible with vertical tabs hidden');
+set('showOpenTabs',true);assert.ok(button('Other terminal'));
+assert.equal(actions.length,count,'Revealing vertical tabs must not open sessions');

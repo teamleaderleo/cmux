@@ -464,12 +464,12 @@ private struct DirectHoverOverlay: NSViewRepresentable {
     }
 }
 
-private final class DirectHoverView: NSView {
+final class DirectHoverView: NSView {
     private static weak var active: DirectHoverView?
     var hoverColor: NSColor = .clear
     var cornerRadius: CGFloat = 0
     private var tracking: NSTrackingArea?
-    private var hovered = false
+    private(set) var hovered = false
     var details: String?
     private var pending: DispatchWorkItem?
     private var popover: NSPanel?
