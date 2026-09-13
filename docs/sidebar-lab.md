@@ -67,9 +67,9 @@ The lab still logs actions. The app uses its existing window-scoped command disp
 
 Pins retain inherited/manual order. Projects sort by newest activity; chats sort
 newest first within projects. All providers merges exact resolved working folders.
-Provider-specific views preserve source group names. The initial list shows up to
-five chats per unpinned project; search checks the full loaded history, including
-collapsed projects. Show more expands the loaded history. Discovery currently
+Provider-specific views preserve source group names. The list shows
+all loaded chats per project in one continuous scroll; search includes
+collapsed projects. There is no per-project cap or Show more control. Discovery currently
 bounds recent records to 200 plus inherited pins.
 
 Each mounted sidebar owns its filter, search, last creation provider and scroll

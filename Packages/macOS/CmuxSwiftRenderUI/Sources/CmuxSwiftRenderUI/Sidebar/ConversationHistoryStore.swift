@@ -16,7 +16,9 @@ final class ConversationHistoryStore {
         refreshing = true
         let result = await Task.detached(priority: .utility) { ConversationHistoryReader.read() }.value
         switch result {
-        case .success(let value): rows = value; error = nil
+        case .success(let value):
+            if rows != value { rows = value }
+            if error != nil { error = nil }
         case .failure: error = "Conversation history couldn't refresh. Showing the last available history."
         }
         lastRefresh = Date()

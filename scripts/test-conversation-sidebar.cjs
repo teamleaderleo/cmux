@@ -29,3 +29,9 @@ run('focus(history()[3])');assert.equal(calls[0].params.workspace_id,'resumed');
 workspaces=[{id:'different',agents:[{id:'ses_mixedcase',kind:'opencode',panelId:'other'}],tabs:[{id:'other'}]}];calls=[];
 run('focus(history()[3])');assert.equal(calls.length,0,'OpenCode IDs are case-sensitive');
 console.log('Case-sensitive OpenCode resume linking passed');
+
+// Continuous project history must not hide the sixth or later conversation.
+history=Array.from({length:35},(_,i)=>row('chat'+i,'Codex','/large',i));
+assert.equal(run("conversationGroups(history(),'All','')[0].rows.length"),35);
+assert.equal(run("conversationGroups(history(),'All','')[0].rows[34].id"),'chat0');
+console.log('Continuous project history includes every loaded conversation');

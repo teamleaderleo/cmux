@@ -47,7 +47,9 @@ public struct ConversationSidebarView: View {
     private var scopedDispatch: SidebarActionDispatch {
         let sink = dispatch
         let identifier = ownerWindowID
+        let attached = ownerWindowNumber != nil
         return SidebarActionDispatch { action in
+            guard attached else { return }
             sink.run(ConversationWindowRouting.scope(action, identifier: identifier))
         }
     }
@@ -56,6 +58,8 @@ public struct ConversationSidebarView: View {
     private var context: [String: SwiftValue] {
         var result = hostContext
         result["history"] = historyStore.rows
+        // Resync the retained action handler when its native window attaches.
+        result["ownerWindow"] = .string((ownerWindowID ?? "") + ":" + (ownerWindowNumber.map(String.init) ?? ""))
         result["providerFilter"] = .string(providerFilter)
         result["searchQuery"] = .string(searchQuery)
         result["commandHeld"] = .bool(commandHeld)
@@ -289,12 +293,12 @@ private final class ScrollChromeView: NSView {
         super.viewDidMoveToWindow()
         DispatchQueue.main.async { [weak self] in
             guard let scroll = self?.enclosingScrollView else { return }
-            scroll.scrollerStyle = .overlay
+            if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
             if !(scroll.verticalScroller is QuietSidebarScroller) {
                 scroll.verticalScroller = QuietSidebarScroller()
             }
-            scroll.scrollerKnobStyle = .light
-            scroll.autohidesScrollers = true
+            if scroll.scrollerKnobStyle != .light { scroll.scrollerKnobStyle = .light }
+            if !scroll.autohidesScrollers { scroll.autohidesScrollers = true }
         }
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

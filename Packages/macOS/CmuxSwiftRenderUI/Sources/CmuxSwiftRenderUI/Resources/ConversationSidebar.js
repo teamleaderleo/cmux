@@ -4,7 +4,6 @@ const [collapsed, setCollapsed] = signal({});
 const [detail, setDetail] = signal('');
 const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
-const [showMore, setShowMore] = signal(false);
 function key(r) { return r.provider + ':' + r.id; }
 function linkKey(provider, id) { return provider + ':' + (provider === 'OpenCode' ? String(id) : String(id).toLowerCase()); }
 function buildLinks(workspaces) {
@@ -63,7 +62,7 @@ effect(() => {
     const row = shortcutPins()[index - 1]; if (row) focus(row);
   }
 });
-function conversationGroups(rows, provider, query, expanded) {
+function conversationGroups(rows, provider, query) {
   const needle = query.trim().toLowerCase();
   const groups = new Map();
   for (const r of rows) {
@@ -77,12 +76,11 @@ function conversationGroups(rows, provider, query, expanded) {
   const result = Array.from(groups.values()).sort((a,b) => Number(b.pinned)-Number(a.pinned) || b.updated-a.updated || a.id.localeCompare(b.id));
   for (const group of result) {
     if (!group.pinned) group.rows.sort((a,b) => b.updated-a.updated || key(a).localeCompare(key(b)));
-    // Preserve inherited/manual pin order. Cap within projects, never drop whole projects.
-    if (!expanded && !needle && !group.pinned) group.rows = group.rows.slice(0, 5);
+    // Preserve inherited/manual pin order; projects scroll through all loaded chats.
   }
   return result;
 }
-const groups = computed(() => conversationGroups(history(), data.providerFilter(), data.searchQuery() || '', showMore()));
+const groups = computed(() => conversationGroups(history(), data.providerFilter(), data.searchQuery() || ''));
 sidebar(() => VStack({spacing:2}, [
   ForEach({items:groups,key:g=>g.id},g=>VStack({spacing:2},[
     HStack({spacing:5},[
@@ -106,6 +104,5 @@ sidebar(() => VStack({spacing:2}, [
       ]).padding(8))
     ]))
   ])),
-  Button(()=>showMore() ? 'Show fewer' : 'Show more',()=>setShowMore(!showMore())),
   ForEach({items:()=>groups().length ? [] : [0],key:n=>n},()=>Text('No conversations found').font(12).secondary().padding(10))
 ]).padding(0));

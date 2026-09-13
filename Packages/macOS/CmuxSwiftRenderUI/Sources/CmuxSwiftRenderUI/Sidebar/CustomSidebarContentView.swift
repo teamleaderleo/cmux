@@ -93,7 +93,7 @@ public struct CustomSidebarContentView: View {
             // The reactive JS runtime: program runs once, data flows as
             // per-key diffs, and rows keep stable identity (so the
             // Reorderable drag survives live data updates).
-            if source.trimmingCharacters(in: .whitespacesAndNewlines) == "// cmux:conversation-sidebar" {
+            if CustomSidebarValidator.isConversationSidebar(source) {
                 ConversationSidebarView(dataContext: dataContext, dispatch: dispatch)
                     .padding(.top, contentInsets.top)
                     .padding(.bottom, contentInsets.bottom)
