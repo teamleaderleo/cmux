@@ -261,6 +261,7 @@ struct CloudTreeNativeDragOwnershipTests {
     }
 
     private static let machineActions = MachineRowActions(
+        setupVPN: { _ in },
         openShell: { _ in },
         openDesktop: { _ in },
         runCommand: { _, _ in },
@@ -285,6 +286,7 @@ struct CloudTreeNativeDragOwnershipTests {
         renameTerminal: { _, _ in },
         selectLocalWorkspace: { _ in },
         copyToPasteboard: { _ in },
+        copyPortLink: { _ in },
         refresh: {}
     )
 

@@ -122,6 +122,9 @@ struct TerminalPanelView: View {
             .id(panel.id)
             .background(Color.clear)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                CloudTerminalAttachmentBanner(status: panel.cloudAttachment)
+            }
 #if DEBUG
             .reportTerminalViewportGeometryForUITest(panel: panel)
 #endif
@@ -180,7 +183,7 @@ struct TerminalPanelView: View {
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
-        .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttyTerminalFontSizeDidChange)) { _ in
             terminalFontSize = GhosttyConfig.loadForCmux(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
     }
@@ -304,15 +307,14 @@ private struct AgentHibernationPlaceholderView: View {
                     .controlSize(.small)
                     .accessibilityIdentifier("AgentHibernationTerminationRecoveryProgress")
             case .hibernated:
-                CmuxSystemSymbolImage(magnified: "pause.circle", pointSize: 34, weight: .regular)
-                    .foregroundStyle(.secondary)
+                CmuxSystemSymbolImage(magnified: "pause.circle", pointSize: 34, weight: .regular, tint: .secondary)
             case .failed:
                 CmuxSystemSymbolImage(
                     magnified: "exclamationmark.triangle",
                     pointSize: 34,
-                    weight: .regular
+                    weight: .regular,
+                    tint: .secondary
                 )
-                .foregroundStyle(.secondary)
             }
             VStack(spacing: 4) {
                 Text(title)

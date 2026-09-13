@@ -22,6 +22,7 @@ import {
   type CloudVmSessionRow,
   type CloudVmRow,
   type VmRepositoryShape,
+  vmRepositoryLiveShape,
 } from "../services/vms/repository";
 import {
   VmCreateCreditsInsufficientError,
@@ -498,7 +499,8 @@ describe("VM Effect workflows", () => {
     let createOptions: { memoryMb?: number } | undefined;
     const repo = {
       ...testWorkflowRepo({ vm: provisioning }),
-      hasOwnedSnapshot: () => Effect.succeed(true),
+      pendingSnapshotDeletions: () => Effect.succeed([]),
+    hasOwnedSnapshot: () => Effect.succeed(true),
       ownedSnapshotResourceReservation: () => Effect.succeed({
         vcpus: 1,
         memoryMb: 4096,
@@ -582,6 +584,53 @@ describe("VM Effect workflows", () => {
     expect(usageEvents).toHaveLength(1);
     expect(usageEvents[0]?.eventType).toBe("vm.resize");
   });
+
+  for (const storageMb of [undefined, 65536]) {
+    test.each([true, false])(`reservation compare-and-set controls ${storageMb ? "combined" : "compute"} resize success: %s`, async (committed) => {
+      const vm = testCloudVmRow({
+        userId: "resize-reservation-race", providerVmId: "provider-reservation-race",
+        status: "running", billingPlanId: "max",
+        providerMetadata: { cmuxResourceReservation: { vcpus: 2, memoryMb: 4096, diskMb: 32768 } },
+      });
+      const usageEvents: RecordedUsageEvent[] = [];
+      const confirmations: Parameters<NonNullable<VmRepositoryShape["setResourceReservation"]>>[0][] = [];
+      let resized = false;
+      const repo: VmRepositoryShape = {
+        ...testWorkflowRepo({ vm, usageEvents }),
+        setResourceReservation: (confirmation) => Effect.sync(() => {
+          expect(resized).toBe(true);
+          confirmations.push(confirmation);
+          return committed;
+        }),
+      };
+      const provider: VmProviderGatewayShape = {
+        ...unusedProviderGateway(),
+        getStatus: () => Effect.succeed("running"),
+        getStats: () => Effect.sync(() => ({
+          state: "awake", sampledAt: 1780000000000,
+          cpus: resized ? 4 : 2, memoryTotalMb: resized ? 8192 : 4096,
+          diskTotalMb: resized ? storageMb ?? 32768 : 32768,
+        })),
+        resize: () => Effect.sync(() => { resized = true; }),
+      };
+      const result = await Effect.runPromise(resizeVm({
+        userId: vm.userId, teamIds: [vm.billingTeamId!], providerVmId: vm.providerVmId!,
+        billingPlanId: "max", cpu: 4, memoryMb: 8192, storageMb,
+      }).pipe(Effect.either, Effect.provide(workflowLayer(repo, provider))));
+      expect(confirmations).toEqual([{
+        id: vm.id,
+        reservation: { vcpus: 4, memoryMb: 8192, diskMb: storageMb ?? 32768 },
+        expectedReservation: { vcpus: 2, memoryMb: 4096, diskMb: 32768 },
+      }]);
+      if (committed) {
+        expect(result).toMatchObject({ _tag: "Right", right: { cpus: 4, memoryTotalMb: 8192 } });
+        expect(usageEvents).toHaveLength(1);
+      } else {
+        expect(result).toMatchObject({ _tag: "Left", left: { _tag: "VmResizeInProgressError", vmId: vm.providerVmId } });
+        expect(usageEvents).toHaveLength(0);
+      }
+    });
+  }
 
   test("persists a provider-rounded disk claim after a paid resize", async () => {
     const vm = testCloudVmRow({
@@ -1996,6 +2045,37 @@ describe("VM Effect workflows", () => {
     });
   });
 
+  test("openVmCmuxRemote rejects an explicitly unsupported transport before provider work", async () => {
+    const vm = testCloudVmRow({ userId: "user-remote-unsupported", providerVmId: "vm-remote-unsupported", status: "running" });
+    const repo = testWorkflowRepo({ vm });
+    let providerCalls = 0;
+    const provider: VmProviderGatewayShape = {
+      ...unusedProviderGateway(),
+      attachTransports: () => ["ssh"],
+      getStatus: () => Effect.sync(() => {
+        providerCalls += 1;
+        return "running" as const;
+      }),
+      openCmuxRemote: () => Effect.sync(() => {
+        providerCalls += 1;
+        return {
+          transport: "cmux-remote" as const,
+          route: "ws://10.0.0.5:1337/v1/link",
+          token: "",
+          expiresAtUnix: 0,
+          session: "cloud",
+          trustedCarrier: true,
+        };
+      }),
+    };
+    const error = await Effect.runPromise(openVmCmuxRemote({ userId: vm.userId, providerVmId: "vm-remote-unsupported" }).pipe(
+      Effect.flip,
+      Effect.provide(workflowLayer(repo, provider)),
+    ));
+    expect(isVmAttachTransportUnsupportedError(error)).toBe(true);
+    expect(providerCalls).toBe(0);
+  });
+
   test("openVmCmuxRemote wakes a provider-paused VM even when its row still says running", async () => {
     const vm = testCloudVmRow({
       id: "00000000-0000-4000-8000-000000000146",
@@ -2529,7 +2609,8 @@ describe("VM Effect workflows", () => {
       setDisplayName: () => Effect.succeed(true),
       markCreateRunning: () => Effect.succeed(running),
       markCreateFailed: () => Effect.void,
-      hasOwnedSnapshot: () => Effect.succeed(false),
+      pendingSnapshotDeletions: () => Effect.succeed([]),
+    hasOwnedSnapshot: () => Effect.succeed(false),
       findUserVm: () => Effect.succeed(null),
       markDestroyed: () => Effect.void,
       recordLease: () => Effect.void,
@@ -5537,6 +5618,8 @@ describe("VM Effect workflows", () => {
   dbTest("same-team concurrent retries of one idempotency key create exactly one provider VM", async () => {
     if (!sql) throw new Error("test database not initialized");
     await sql`truncate cloud_vm_billing_grants, cloud_vm_usage_events, cloud_vm_leases, cloud_vms restart identity cascade`;
+    // A warm network hides the first-use persistence race between these requests.
+    await sql`delete from cloud_vm_networks where user_id = 'user-workflow-race-retry'`;
 
     await sql`
       insert into cloud_vms (
@@ -5590,7 +5673,10 @@ describe("VM Effect workflows", () => {
     // yield exactly one provider create, with the loser observing the
     // winner's row.
     const results = await Promise.allSettled([attempt(), attempt()]);
-    expect(createCalls).toBe(1);
+    expect({
+      createCalls,
+      outcomes: results.map((result) => result.status === "rejected" ? String(result.reason) : "fulfilled"),
+    }).toMatchObject({ createCalls: 1 });
     const fulfilled = results.filter((r) => r.status === "fulfilled");
     expect(fulfilled.length).toBeGreaterThanOrEqual(1);
 
@@ -5598,6 +5684,99 @@ describe("VM Effect workflows", () => {
       select status from cloud_vms where idempotency_key = 'race-retry-1'
     `;
     expect(rows).toHaveLength(1);
+  });
+
+  dbTest("upsertNetwork waits behind the owner's network lock instead of racing the unique indexes", async () => {
+    if (!sql) throw new Error("test database not initialized");
+    await sql`truncate cloud_vm_networks restart identity cascade`;
+    const input = {
+      userId: "user-network-upsert-lock",
+      provider: "freestyle" as const,
+      providerNetworkId: "network-cmux-net-lock",
+      slug: "cmux-net-lock",
+      cidr: "10.41.0.0/24",
+      cidrV6: "fd00:41::/64",
+    };
+    // Warm the repository's own pool so the observation below is about the lock,
+    // not the first connection.
+    expect(await Effect.runPromise(vmRepositoryLiveShape.findNetwork!(input.userId, input.provider))).toBeNull();
+    // Mirrors repository.ts's networkUpsertLockKey: `network:<provider>:<user>`.
+    const lockKey = `network:${input.provider}:${input.userId}`;
+    // The shared `sql` client has one connection, which the holder transaction
+    // occupies; observe lock state from a second connection.
+    const observer = postgres(databaseURL(), { max: 1 });
+    let release: () => void = () => {};
+    let holder: Promise<unknown> | undefined;
+    try {
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let announceLock: () => void = () => {};
+      const lockTaken = new Promise<void>((resolve) => {
+        announceLock = resolve;
+      });
+      // Hold the per-owner lock in a transaction of our own: the upsert must
+      // queue behind it (this is what keeps two concurrent creates from racing
+      // the (provider, provider_network_id) index) and land once it is released.
+      holder = sql.begin(async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        announceLock();
+        await held;
+      });
+      await lockTaken;
+      let settled = false;
+      const upsert = Effect.runPromise(vmRepositoryLiveShape.upsertNetwork!(input)).then((row) => {
+        settled = true;
+        return row;
+      });
+      // Deadline-bounded poll of Postgres itself: the upsert's session must show
+      // up blocked on an advisory lock while the holder owns it. Without the
+      // per-owner lock the upsert simply completes, and `settled` flips first.
+      const deadline = Date.now() + 10_000;
+      let blocked = 0;
+      while (blocked === 0 && !settled && Date.now() < deadline) {
+        const [lockRow] = await observer<{ blocked: number }[]>`
+          select count(*)::int as blocked
+          from pg_locks l
+          join pg_stat_activity a on a.pid = l.pid
+          where l.locktype = 'advisory' and not l.granted and a.datname = current_database()
+        `;
+        blocked = lockRow?.blocked ?? 0;
+        if (blocked === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(settled).toBe(false);
+      expect(blocked).toBe(1);
+      release();
+      await holder;
+      const row = await upsert;
+      expect(row.providerNetworkId).toBe("network-cmux-net-lock");
+    } finally {
+      release();
+      await holder?.catch(() => {});
+      await observer.end({ timeout: 5 });
+    }
+  });
+
+  dbTest("concurrent owner-network upserts with one provider id all succeed and converge on one row", async () => {
+    if (!sql) throw new Error("test database not initialized");
+    await sql`truncate cloud_vm_networks restart identity cascade`;
+    const input = {
+      userId: "user-network-upsert-race",
+      provider: "freestyle" as const,
+      providerNetworkId: "network-cmux-net-race",
+      slug: "cmux-net-race",
+      cidr: "10.42.0.0/24",
+      cidrV6: "fd00:42::/64",
+    };
+    const results = await Promise.allSettled(
+      Array.from({ length: 8 }, () => Effect.runPromise(vmRepositoryLiveShape.upsertNetwork!(input))),
+    );
+    expect(results.map((result) => (result.status === "rejected" ? String(result.reason) : "fulfilled")))
+      .toEqual(Array.from({ length: 8 }, () => "fulfilled"));
+    const rows = await sql<{ provider_network_id: string }[]>`
+      select provider_network_id from cloud_vm_networks where user_id = ${input.userId}
+    `;
+    expect(rows).toEqual([{ provider_network_id: "network-cmux-net-race" }]);
   });
 
   dbTest("a transient provider create failure does not poison the idempotency key", async () => {
@@ -6267,6 +6446,7 @@ function testWorkflowRepo(input: {
         ? input.vm
         : null,
       ),
+    pendingSnapshotDeletions: () => Effect.succeed([]),
     hasOwnedSnapshot: () => Effect.succeed(false),
     markDestroyed: input.markDestroyed ?? ((id) =>
       Effect.sync(() => {
