@@ -258,12 +258,13 @@ private struct ProviderMenuButton: View {
     @State private var hovered = false
     var body: some View {
         Button { visible.toggle() } label: {
-            Image(systemName: "plus.bubble").font(.system(size: 15))
+            Image(systemName: "plus.circle").font(.system(size: 15))
                 .foregroundStyle(.secondary).frame(width: 36, height: 36)
                 .contentShape(Rectangle())
                 .background(hovered ? Color.primary.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }.buttonStyle(.plain).onHover { hovered = $0 }
             .accessibilityLabel("New chat with another provider")
+            .help("New chat with another provider")
             .popover(isPresented: $visible, arrowEdge: .bottom) {
                 QuietProviderChoices(providers: providers) { provider in
                     visible = false
