@@ -35,3 +35,9 @@ history=Array.from({length:35},(_,i)=>row('chat'+i,'Codex','/large',i));
 assert.equal(run("conversationGroups(history(),'All','')[0].rows.length"),35);
 assert.equal(run("conversationGroups(history(),'All','')[0].rows[34].id"),'chat0');
 console.log('Continuous project history includes every loaded conversation');
+
+// A missing provider project label falls back to the working folder.
+history=[row('ungrouped','Claude','/fallback',1)];delete history[0].group;
+assert.equal(run("conversationGroups(history(),'Claude','')[0].name"),'/fallback');
+assert.equal(run("groupLabel(history()[0])"),'/fallback');
+console.log('Missing project labels fall back to folders');

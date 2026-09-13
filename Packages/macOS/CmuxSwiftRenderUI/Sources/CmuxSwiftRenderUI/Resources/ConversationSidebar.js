@@ -4,6 +4,7 @@ const [collapsed, setCollapsed] = signal({});
 const [detail, setDetail] = signal('');
 const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
+function groupLabel(r) { return typeof r.group === 'string' && r.group ? r.group : r.cwd; }
 function key(r) { return r.provider + ':' + r.id; }
 function linkKey(provider, id) { return provider + ':' + (provider === 'OpenCode' ? String(id) : String(id).toLowerCase()); }
 function buildLinks(workspaces) {
@@ -68,8 +69,8 @@ function conversationGroups(rows, provider, query) {
   for (const r of rows) {
     if (provider !== 'All' && r.provider !== provider) continue;
     if (needle && ![r.title,r.group,r.provider,r.cwd].join(' ').toLowerCase().includes(needle)) continue;
-    const id = r.pinned ? 'pins' : provider === 'All' && r.canonical_folder ? 'folder:'+r.canonical_folder : 'group:'+r.group;
-    const name = r.pinned ? 'Pinned' : provider === 'All' && r.canonical_folder ? r.canonical_folder : r.group.replace(/^(Codex|Claude|Folder) · /,'');
+    const id = r.pinned ? 'pins' : provider === 'All' && r.canonical_folder ? 'folder:'+r.canonical_folder : 'group:'+groupLabel(r);
+    const name = r.pinned ? 'Pinned' : provider === 'All' && r.canonical_folder ? r.canonical_folder : groupLabel(r).replace(/^(Codex|Claude|Folder) · /,'');
     if (!groups.has(id)) groups.set(id, {id, name, pinned:!!r.pinned, updated:0, rows:[]});
     const g = groups.get(id); g.updated = Math.max(g.updated, r.updated); g.rows.push(r);
   }
@@ -91,7 +92,7 @@ sidebar(() => VStack({spacing:2}, [
     ForEach({items:()=>collapsed()[g().id] && !(data.searchQuery()||'').trim() ? [] : g().rows,key:key},r=>VStack({spacing:3},[
       Button(()=>r().title,()=>focus(r()),[HStack({spacing:7,directHover:true,
         shortcutHint:()=>data.commandHeld()&&pinNumber(r())>0?'⌘'+pinNumber(r()):'',
-        hoverDetails:()=>[r().title,r().provider+' · '+r().group.replace(/^(Codex|Claude|Folder) · /,''),r().cwd,linked(r())?'Linked in this window':'Not linked in this window'].filter(Boolean).join('\n')},[
+        hoverDetails:()=>[r().title,r().provider+' · '+groupLabel(r()).replace(/^(Codex|Claude|Folder) · /,''),r().cwd,linked(r())?'Linked in this window':'Not linked in this window'].filter(Boolean).join('\n')},[
         ForEach({items:()=>data.providerFilter()==='All'?[r()]:[],key:key},p=>Image('',{provider:()=>p().provider}).frame({width:14,height:14})),
         Text(()=>r().title).nativeMarquee(0.04).font(12).lineLimit(1).truncation('tail')
       ]).paddingLeading(()=>g().pinned?10:28).paddingTrailing(1).paddingVertical(6).cornerRadius(7)
