@@ -15,6 +15,8 @@ struct OneShotTerminalLauncherStore {
         /// Preserves the pre-existing startup-command behavior used by restored
         /// terminal tools such as tmux. Local agent resume input never uses it.
         case userLoginShell
+        /// Starts a history restore without typing into an unready PTY.
+        case resumeLoginShell
     }
 
     private let fileManager: FileManager
@@ -98,6 +100,15 @@ struct OneShotTerminalLauncherStore {
             switch execution {
             case .direct:
                 lines.append(trimmedCommand)
+            case .resumeLoginShell:
+                let payload = trimmedCommand + "; exec \"$SHELL\" -l"
+                lines.append("[[ -n \"${SHELL:-}\" ]] || exit 127")
+                lines.append(contentsOf: [
+                    #"case "${SHELL:t}" in"#,
+                    "  nu) exec /bin/sh -c \(TerminalStartupShellQuoting.singleQuoted(payload)) ;;",
+                    "  *) exec \"$SHELL\" -lic \(TerminalStartupShellQuoting.singleQuoted(payload)) ;;",
+                    "esac",
+                ])
             case .userLoginShell:
                 lines.append("[[ -n \"${SHELL:-}\" ]] || exit 127")
                 // Nushell cannot parse the POSIX command (`nu -lc` has no such
@@ -145,12 +156,13 @@ struct OneShotTerminalLauncherStore {
     /// Returns a non-resume startup command that interprets a private launcher script.
     func writeStartupCommand(
         command: String,
-        workingDirectory: String?
+        workingDirectory: String?,
+        execution: CommandExecution = .userLoginShell
     ) -> String? {
         guard let launcherURL = writeLauncherScript(
             command: command,
             workingDirectory: workingDirectory,
-            execution: .userLoginShell
+            execution: execution
         ) else {
             return nil
         }

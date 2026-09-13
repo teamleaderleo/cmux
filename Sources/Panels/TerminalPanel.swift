@@ -158,6 +158,9 @@ final class TerminalPanel: Panel, ObservableObject {
         false
     }
 
+    var restorePreviewHost: NSView?
+    var restorePreviewTask: Task<Void, Never>?
+
     /// The hosted NSView for embedding in SwiftUI
     var hostedView: GhosttySurfaceScrollView {
         surface.hostedView
@@ -675,6 +678,7 @@ final class TerminalPanel: Panel, ObservableObject {
     }
 
     func close() {
+        dismissRestorePreview()
         isClosingPanel = true
         AgentHibernationController.shared.discardTrackingStateForClosedPanel(
             workspaceId: workspaceId,

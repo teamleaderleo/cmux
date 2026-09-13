@@ -9261,7 +9261,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             additionalEnvironment: effectiveStartupEnvironment,
             runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
                 requestedPolicy: runtimeSpawnPolicy,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: startupRestoreAgent != nil && initialInput != nil
             )
         )
@@ -9304,7 +9304,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 panel: newPanel,
                 snapshot: startupRestoreAgent,
                 manualResumeAvailable: true,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: initialInput != nil,
                 resumeWorkingDirectory: startupRestoreAgent.workingDirectory
             )
@@ -12716,15 +12716,18 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             }
         }
         guard let launch = entry.resumeLaunch else { return false }
+        let startup = launch.makeTerminalStartup()
         switch destination {
         case .insert(let paneId, _):
             let panel = newTerminalSurface(
                 inPane: paneId,
                 focus: true,
                 workingDirectory: launch.workingDirectory,
-                initialInput: launch.initialInput,
+                initialCommand: startup.command,
+                initialInput: startup.input,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
+            panel?.showRestorePreview(entry: entry)
             return panel != nil
         case .split(let paneId, let orientation, let insertFirst):
             let panel = splitPaneWithNewTerminal(
@@ -12732,9 +12735,11 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 orientation: orientation,
                 insertFirst: insertFirst,
                 workingDirectory: launch.workingDirectory,
-                initialInput: launch.initialInput,
+                initialInput: startup.input,
+                initialCommand: startup.command,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
+            panel?.showRestorePreview(entry: entry)
             return panel != nil
         }
     }
@@ -12858,16 +12863,18 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         insertFirst: Bool,
         workingDirectory: String?,
         initialInput: String?,
+        initialCommand: String? = nil,
         startupRestoreAgent: SessionRestorableAgentSnapshot? = nil,
         remoteStartupCommand: String? = nil
     ) -> TerminalPanel? {
         guard !isRetiredFromOwningTabManager else { return nil }
         var inheritedConfig = inheritedTerminalConfig(inPane: paneId)
         let requestedRemoteStartupCommand = remoteStartupCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let startupCommand = requestedRemoteStartupCommand?.isEmpty == false ? requestedRemoteStartupCommand : nil
+        let remoteCommand = requestedRemoteStartupCommand?.isEmpty == false ? requestedRemoteStartupCommand : nil
+        let startupCommand = initialCommand ?? remoteCommand
         let effectiveStartupEnvironment = terminalStartupEnvironment(
             base: startupEnvironmentMergingWorkspaceEnvironment([:]),
-            remoteStartupCommand: startupCommand
+            remoteStartupCommand: remoteCommand
         )
         if startupCommand != nil {
             var template = inheritedConfig ?? CmuxSurfaceConfigTemplate()
@@ -12886,14 +12893,14 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             additionalEnvironment: effectiveStartupEnvironment,
             runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
                 requestedPolicy: .immediate,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: startupRestoreAgent != nil && initialInput != nil
             )
         )
         configureNewTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
-        if startupCommand != nil {
+        if remoteCommand != nil {
             trackRemoteTerminalSurface(newPanel.id)
         }
 
@@ -12912,7 +12919,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             panels.removeValue(forKey: newPanel.id)
             panelTitles.removeValue(forKey: newPanel.id)
             removeSurfaceMapping(forSurfaceId: newTab.id)
-            if startupCommand != nil {
+            if remoteCommand != nil {
                 untrackRemoteTerminalSurface(newPanel.id)
             }
             return nil
@@ -12922,7 +12929,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 panel: newPanel,
                 snapshot: startupRestoreAgent,
                 manualResumeAvailable: true,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: initialInput != nil,
                 resumeWorkingDirectory: startupRestoreAgent.workingDirectory
             )
