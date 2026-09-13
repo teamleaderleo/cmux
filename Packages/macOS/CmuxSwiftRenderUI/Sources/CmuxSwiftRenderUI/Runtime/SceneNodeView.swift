@@ -137,6 +137,9 @@ private struct SceneNodeContent: View {
                     sink.send(node.id, "tap", [:])
                 } label: {
                     VStack(alignment: .leading, spacing: 0) { children }
+                        // Native visual-only labels contribute no SwiftUI hit region.
+                        // The entire rendered label must still activate its button.
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
