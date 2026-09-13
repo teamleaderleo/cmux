@@ -6,7 +6,8 @@ public struct ConversationSidebarView: View {
     private let hostContext: [String: SwiftValue]
     private let live: Bool
     @State private var historyStore = ConversationHistoryStore.shared
-    @State private var ownerWindow: NSWindow?
+    @State private var ownerWindowID: String?
+    @State private var ownerWindowNumber: Int?
     public init(dataContext: [String: SwiftValue] = [:], dispatch: SidebarActionDispatch, live: Bool = true) {
         self.hostContext = dataContext; self.dispatch = dispatch; self.live = live
     }
@@ -24,6 +25,7 @@ public struct ConversationSidebarView: View {
     @FocusState private var searchFocused: Bool
     @State private var searchVisible = false
     @State private var searchQuery = ""
+    @State private var searchBounds = CGRect.zero
     @State private var lastProvider = "Codex"
     private let providers = ["Claude", "Codex", "OpenCode"]
     private var newProvider: String { providerFilter == "All" ? lastProvider : providerFilter }
@@ -33,10 +35,17 @@ public struct ConversationSidebarView: View {
         let selected = hostContext["workspaces"]?.iterationValues?.first { $0.member("id")?.displayString == selectedID }
         let directory = selected?.member("directory")?.displayString ?? NSHomeDirectory()
         let command = provider == "Claude" ? "claude" : provider == "OpenCode" ? "opencode" : "codex"
-        dispatch.run(ButtonAction(commands: [.cmux(method: "workspace.create", params: [
+        scopedDispatch.run(ButtonAction(commands: [.cmux(method: "workspace.create", params: [
             "title": "New " + provider + " chat", "working_directory": directory,
             "initial_command": command, "operation_id": UUID().uuidString, "focus": "true"
         ])]))
+    }
+    private var scopedDispatch: SidebarActionDispatch {
+        let sink = dispatch
+        let identifier = ownerWindowID
+        return SidebarActionDispatch { action in
+            sink.run(ConversationWindowRouting.scope(action, identifier: identifier))
+        }
     }
     private var replaySource: String { Self.program }
     private static let program = (try? String(contentsOf: Bundle.module.url(forResource: "ConversationSidebar", withExtension: "js")!, encoding: .utf8)) ?? ""
@@ -73,6 +82,11 @@ public struct ConversationSidebarView: View {
                 .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.15)))
                 .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
                 .padding(.horizontal, 6).padding(.vertical, 5)
+                .background(GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { searchBounds = geometry.frame(in: .global) }
+                        .onChange(of: geometry.frame(in: .global)) { _, frame in searchBounds = frame }
+                })
             } else {
             HStack {
                 Button { providerMenuVisible.toggle() } label: {
@@ -115,13 +129,16 @@ public struct ConversationSidebarView: View {
                 JSSidebarHostView(
                     source: replaySource,
                     dataContext: context,
-                    dispatch: dispatch
+                    dispatch: scopedDispatch
                 )
                 .padding(4)
                 .background(QuietScrollChrome())
             }
         }
-        .background(ConversationWindowReader { ownerWindow = $0 })
+        .background(ConversationWindowReader { window in
+            ownerWindowID = window?.identifier?.rawValue
+            ownerWindowNumber = window?.windowNumber
+        })
         .task {
             guard live else { return }
             while !Task.isCancelled {
@@ -131,10 +148,10 @@ public struct ConversationSidebarView: View {
         }
         .onAppear {
             outsideSearchMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-                guard event.window === ownerWindow, searchVisible, let content = event.window?.contentView else { return event }
+                guard event.window?.windowNumber == ownerWindowNumber, searchVisible, let content = event.window?.contentView else { return event }
                 let point = content.convert(event.locationInWindow, from: nil)
                 let y = content.isFlipped ? point.y : content.bounds.height - point.y
-                if y > 40 {
+                if !searchBounds.contains(CGPoint(x: point.x, y: y)) {
                     searchFocused = false
                     event.window?.makeFirstResponder(nil)
                     if searchQuery.isEmpty { searchVisible = false }
@@ -142,12 +159,12 @@ public struct ConversationSidebarView: View {
                 return event
             }
             flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                guard ownerWindow?.isKeyWindow == true else { return event }
+                guard NSApp.keyWindow?.windowNumber == ownerWindowNumber && ownerWindowNumber != nil else { return event }
                 commandHeld = event.modifierFlags.contains(.command)
                 return event
             }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                guard event.window === ownerWindow, ownerWindow?.isKeyWindow == true else { return event }
+                guard event.window?.windowNumber == ownerWindowNumber, NSApp.keyWindow?.windowNumber == ownerWindowNumber && ownerWindowNumber != nil else { return event }
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 if flags == .command && event.charactersIgnoringModifiers?.lowercased() == "k" {
                     searchVisible = true; searchFocused = true; return nil
@@ -167,6 +184,9 @@ public struct ConversationSidebarView: View {
             keyMonitor = nil; flagsMonitor = nil; commandHeld = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in commandHeld = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { notification in
+            if (notification.object as? NSWindow)?.windowNumber == ownerWindowNumber { commandHeld = false }
+        }
     }
 }
 
@@ -301,5 +321,18 @@ private struct ConversationWindowReader: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in self?.found?(self?.window) }
         }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+enum ConversationWindowRouting {
+    static func scope(_ action: ButtonAction, identifier: String?) -> ButtonAction {
+        guard let identifier, identifier.hasPrefix("cmux.main."),
+              let id = UUID(uuidString: String(identifier.dropFirst("cmux.main.".count))) else { return action }
+        return ButtonAction(commands: action.commands.map { command in
+            guard case let .cmux(method, original) = command else { return command }
+            var params = original
+            if params["window_id"] == nil { params["window_id"] = id.uuidString }
+            return .cmux(method: method, params: params)
+        })
     }
 }

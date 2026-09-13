@@ -8,6 +8,13 @@ cmux_native_compiler_options() {
     1) swift_flags="$swift_flags -enable-incremental-file-hashing" ;;
     *) echo "error: CMUX_BUILD_FILE_HASHING must be 0 or 1" >&2; return 64 ;;
   esac
+  case "${CMUX_BUILD_BATCH_SIZE:-0}" in
+    0) ;;
+    8|16|32)
+      CMUX_NATIVE_XCODE_ARGS+=(CMUX_APP_BATCH_MODE=YES "CMUX_APP_BATCH_FLAGS=-driver-batch-size-limit $CMUX_BUILD_BATCH_SIZE")
+      ;;
+    *) echo "error: CMUX_BUILD_BATCH_SIZE must be 0, 8, 16, or 32" >&2; return 64 ;;
+  esac
   if [[ -n "$swift_flags" ]]; then
     CMUX_NATIVE_XCODE_ARGS+=("OTHER_SWIFT_FLAGS=\$(inherited) $swift_flags")
   fi

@@ -14,7 +14,8 @@
       "environment": {
         "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}",
         "CMUX_BUILD_FILE_HASHING": "1",
-        "CMUX_RELOAD_KEEP_RUNNING": "1"
+        "CMUX_RELOAD_KEEP_RUNNING": "1",
+        "CMUX_BUILD_BATCH_SIZE": "8"
       }
     },
     "sidebar-lab": {

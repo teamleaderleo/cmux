@@ -12,7 +12,7 @@ final class ConversationHistoryStore {
     private var lastRefresh = Date.distantPast
 
     func refresh() async {
-        guard !refreshing, Date().timeIntervalSince(lastRefresh) > 3 else { return }
+        guard !refreshing, Date().timeIntervalSince(lastRefresh) > 14 else { return }
         refreshing = true
         let result = await Task.detached(priority: .utility) { ConversationHistoryReader.read() }.value
         switch result {
