@@ -472,6 +472,7 @@ extension Workspace {
         }
         if closePanel {
             panel?.close()
+            AgentResumeLaunchGuard.shared.releaseResumeLaunches(ownedBy: panelId)
         }
 
         let shouldPreserveRemoteDisconnectOnClose =

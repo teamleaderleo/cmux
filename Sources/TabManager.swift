@@ -2663,7 +2663,7 @@ class TabManager: ObservableObject {
                 title: prompt.title,
                 message: prompt.message,
                 scrollableDetails: prompt.details,
-                acceptCmdD: false
+                acceptCmdD: false, allowsTabWarningSuppression: true
             ) else { return }
         }
 
@@ -2828,7 +2828,8 @@ class TabManager: ObservableObject {
         title: String,
         message: String,
         scrollableDetails: String? = nil,
-        acceptCmdD: Bool
+        acceptCmdD: Bool,
+        allowsTabWarningSuppression: Bool = false
     ) -> Bool {
         guard beginCloseConfirmationSession() else { return false }
         defer { endCloseConfirmationSession() }
@@ -2864,7 +2865,14 @@ class TabManager: ObservableObject {
         ])
         #endif
 
-        return runCloseConfirmationAlert(alert, content: content) == .alertFirstButtonReturn
+        if allowsTabWarningSuppression {
+            alert.showsSuppressionButton = true
+            alert.suppressionButton?.title = String(localized: "dialog.closeTab.dontWarnAgain", defaultValue: "Don’t warn again when closing tabs")
+        }
+        let confirmed = runCloseConfirmationAlert(alert, content: content) == .alertFirstButtonReturn
+        CloseTabWarningStore(defaults: closeTabWarningDefaults).recordCloseConfirmation(
+            confirmed: confirmed, suppressFutureWarnings: allowsTabWarningSuppression && alert.suppressionButton?.state == .on)
+        return confirmed
     }
 
     private func runCloseConfirmationAlert(
@@ -3192,7 +3200,7 @@ class TabManager: ObservableObject {
             guard confirmClose(
                 title: String(localized: "dialog.closeTab.title", defaultValue: "Close tab?"),
                 message: String(localized: "dialog.closeTab.message", defaultValue: "This will close the current tab."),
-                acceptCmdD: false
+                acceptCmdD: false, allowsTabWarningSuppression: true
             ) else { return }
         }
 

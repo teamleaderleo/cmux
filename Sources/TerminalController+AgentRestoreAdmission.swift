@@ -153,7 +153,8 @@ extension TerminalController {
             }
             guard let claim = AgentResumeLaunchGuard.shared.claimResumeLaunchWithToken(
                 kind: inputs.kind,
-                sessionId: inputs.sessionID
+                sessionId: inputs.sessionID,
+                ownerPanelID: inputs.surfaceID
             ) else {
                 return .concurrentLaunch
             }

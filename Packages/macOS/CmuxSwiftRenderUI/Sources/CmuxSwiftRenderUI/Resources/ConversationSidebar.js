@@ -39,8 +39,19 @@ function linked(r) {
   // Old workspace-only markers predate panel bindings. Recover only an
   // unambiguous complete title segment; never guess from a truncated prefix.
   const matches = (target.w.tabs || []).filter(t => String(t.title || '').split(' | ').includes(r.title));
-  return matches.length === 1 ? {...target, panel:matches[0].id} : target;
+  return matches.length === 1 ? {...target, panel:matches[0].id} : null;
 }
+
+// Once a launched row is linked, its debounce has served its purpose. Do not
+// keep a 15-second cooldown across closing and immediately reopening that tab.
+effect(() => {
+  const values = pending();
+  const completed = history().filter(r => values[key(r)] && linked(r));
+  if (!completed.length) return;
+  const next = {...values};
+  for (const r of completed) delete next[key(r)];
+  setPending(next);
+});
 
 function isSelected(r) {
   const target = linked(r);

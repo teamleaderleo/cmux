@@ -787,7 +787,8 @@ extension Workspace {
             if let ownedClaim,
                !AgentResumeLaunchGuard.shared.claimResumeLaunch(
                    kind: ownedClaim.kind,
-                   sessionId: ownedClaim.sessionId
+                   sessionId: ownedClaim.sessionId,
+                   ownerPanelID: panelId
                ) {
                 cancelDeferredAgentResumeRestore(panelId: panelId, restore: restore)
                 continue

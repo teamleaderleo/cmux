@@ -2174,15 +2174,15 @@ struct ContentView: View {
                             .allowsHitTesting(false)
                     }
 
-                    // Draggable folder icon + focused command name
+                    // The header describes the active folder; workspace names live in Open now.
                     if let directory = focusedDirectory {
                         DetachedFolderDragIcon(directory: directory)
                             .frame(width: 16, height: 16)
-                            .padding(.leading, -6)
+                            .padding(.leading, 0)
                     }
 
-                    Text(titlebarText)
-                        .cmuxFont(size: 13, weight: .bold)
+                    Text(focusedDirectory.map { ($0 as NSString).lastPathComponent } ?? titlebarText)
+                        .cmuxFont(size: 12, weight: .medium)
                         .foregroundColor(fakeTitlebarTextColor(appearance: appearance))
                         .lineLimit(1)
                         .allowsHitTesting(false)

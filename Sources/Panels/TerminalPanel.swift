@@ -111,7 +111,7 @@ final class TerminalPanel: Panel, ObservableObject {
     }
 
     var displayIcon: String? {
-        "terminal.fill"
+        "terminal"
     }
 
     func readSurfaceSelection() async -> SurfaceSelectionReadResult {

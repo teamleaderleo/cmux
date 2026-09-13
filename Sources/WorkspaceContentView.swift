@@ -62,6 +62,17 @@ private struct WorkspacePanelContentHostView: View {
     let onTriggerFlash: () -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            if isVisibleInUI && (workspace.deferredAgentResumeRestoresByPanelId[panel.id] != nil ||
+                workspace.restoredAgentResumeStatesByPanelId[panel.id] == .awaitingAutoResumeCommand) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(String(localized: "conversation.restoring", defaultValue: "Restoring conversation…"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                }.padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Color(nsColor: appearance.contentBackgroundColor))
+            }
         PanelContentView(
             panel: panel,
             workspaceId: workspace.id,
@@ -97,6 +108,7 @@ private struct WorkspacePanelContentHostView: View {
                 workspace.requestDeferredBrowserMaterialization(panelId: panel.id, isVisibleInUI: isVisibleInUI)
             }
         )
+        }
     }
 }
 

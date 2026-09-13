@@ -78,7 +78,7 @@ extension Workspace {
                 title: prompt.title,
                 message: prompt.message,
                 scrollableDetails: prompt.details,
-                acceptCmdD: false
+                acceptCmdD: false, allowsTabWarningSuppression: true
             ) else { return }
         }
 

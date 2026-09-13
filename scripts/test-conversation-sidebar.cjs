@@ -25,7 +25,7 @@ run('resume(history()[3]);resume(history()[3])'); assert.equal(calls.length,1); 
 console.log('Conversation grouping, search, pin order, OpenCode focus, and explicit resume passed');
 
 workspaces=[{id:'resumed',description:'tk-history:OpenCode:ses_MixedCase',tabs:[]}];calls=[];
-run('focus(history()[3])');assert.equal(calls[0].params.workspace_id,'resumed');
+run('setPending({});focus(history()[3])');assert.equal(calls[0].method,'workspace.create','An empty legacy workspace does not own a closed chat');
 workspaces=[{id:'different',agents:[{id:'ses_mixedcase',kind:'opencode',panelId:'other'}],tabs:[{id:'other'}]}];calls=[];
 run('focus(history()[3])');assert.equal(calls.length,0,'OpenCode IDs are case-sensitive');
 console.log('Case-sensitive OpenCode resume linking passed');

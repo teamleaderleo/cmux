@@ -74,7 +74,8 @@ final class DraggableFolderNSView: NSView, NSDraggingSource {
     /// UTType-based generic folder icon. Avoid `icon(forFile:)`: it stats the
     /// path, and remote tmux directories can block on the autofs automounter.
     private static func genericFolderIcon(size: CGFloat) -> NSImage {
-        let generic = (NSWorkspace.shared.icon(for: .folder).copy() as? NSImage) ?? NSWorkspace.shared.icon(for: .folder)
+        let generic = NSImage(systemSymbolName: "folder", accessibilityDescription: nil) ?? NSImage()
+        generic.isTemplate = true
         generic.size = NSSize(width: size, height: size)
         return generic
     }
@@ -101,6 +102,7 @@ final class DraggableFolderNSView: NSView, NSDraggingSource {
         #endif
 
         imageView.image = Self.genericFolderIcon(size: 16)
+        imageView.contentTintColor = .secondaryLabelColor
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {

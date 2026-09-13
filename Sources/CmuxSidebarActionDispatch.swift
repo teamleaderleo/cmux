@@ -144,8 +144,9 @@ private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] 
                 let matches = snapshot.surfaces.filter {
                     $0.title.components(separatedBy: " | ").contains(params["title"] ?? "")
                 }
-                fallback = actions(window: context.windowId, workspace: workspace.id,
-                                   surface: matches.count == 1 ? matches[0].panelId : nil)
+                if matches.count == 1 {
+                    fallback = actions(window: context.windowId, workspace: workspace.id, surface: matches[0].panelId)
+                }
             }
         }
     }

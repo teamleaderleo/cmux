@@ -4152,7 +4152,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             // Create initial tab in bonsplit and store the mapping
             if let tabId = bonsplitController.createTab(
                 title: title,
-                icon: "terminal.fill",
+                icon: "terminal",
                 kind: SurfaceKind.terminal.rawValue,
                 isDirty: false,
                 isPinned: false
@@ -13270,6 +13270,14 @@ extension Workspace: BonsplitDelegate {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = String(localized: "dialog.closeTab.dontWarnAgain", defaultValue: "Don’t warn again when closing tabs")
+        let warningStore = CloseTabWarningStore(defaults: closeTabWarningDefaults)
+        func accepted(_ response: NSApplication.ModalResponse) -> Bool {
+            let confirmed = response == .alertFirstButtonReturn
+            warningStore.recordCloseConfirmation(confirmed: confirmed, suppressFutureWarnings: alert.suppressionButton?.state == .on)
+            return confirmed
+        }
         alert.addButton(withTitle: String(localized: "dialog.closeTab.close", defaultValue: "Close"))
         alert.addButton(withTitle: String(localized: "dialog.closeTab.cancel", defaultValue: "Cancel"))
 
@@ -13290,13 +13298,13 @@ extension Workspace: BonsplitDelegate {
             content.apply(to: alert, presentingWindow: window)
             return await withCheckedContinuation { continuation in
                 alert.beginSheetModal(for: window) { response in
-                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                    continuation.resume(returning: accepted(response))
                 }
             }
         }
 
         content.apply(to: alert, presentingWindow: nil)
-        return alert.runModal() == .alertFirstButtonReturn
+        return accepted(alert.runModal())
     }
 
     /// Apply the side-effects of selecting a tab (unfocus others, focus this panel, update state).

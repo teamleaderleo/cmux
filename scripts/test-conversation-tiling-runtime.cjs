@@ -49,3 +49,10 @@ assert.equal(button('Other terminal'),undefined,'Vertical tabs can be hidden wit
 assert.ok(button('Saved chat'),'History remains visible with vertical tabs hidden');
 set('showOpenTabs',true);assert.ok(button('Other terminal'));
 assert.equal(actions.length,count,'Revealing vertical tabs must not open sessions');
+
+const beforeResume=actions.length;
+host.__dispatch(button('Saved chat').id,'tap','{}');
+set('workspaces',[{id:'w',selected:true,tabs:[{id:'p',title:'Saved chat',focused:true}],agents:[{id:'ses_Exact',kind:'opencode',panelId:'p'}]}]);
+set('workspaces',[{id:'w',selected:true,tabs:[],agents:[]}]);
+host.__dispatch(button('Saved chat').id,'tap','{}');
+assert.equal(actions.length,beforeResume+2,'Closing a linked chat permits immediate reopening without a cooldown');
