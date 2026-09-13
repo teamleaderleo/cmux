@@ -12,28 +12,6 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SessionEntryResumeLaunchTests {
-    @Test("restore preview reads recent complete messages after a large history head")
-    func recentPreviewIsTailFirst() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jsonl")
-        defer { try? FileManager.default.removeItem(at: url) }
-        var data = Data((String(repeating: "x", count: 1_100_000) + "\n").utf8)
-        for index in 0..<20 {
-            let line: [String: Any] = ["type": "response_item", "payload": [
-                "type": "message", "role": "assistant",
-                "content": [["type": "output_text", "text": "Recent message \(index)"]]
-            ]]
-            data.append(try JSONSerialization.data(withJSONObject: line))
-            data.append(10)
-        }
-        data.append(Data("{\"incomplete\":".utf8))
-        try data.write(to: url)
-        let entry = SessionEntry(id: "codex:test", agent: .codex, sessionId: "test",
-            title: "Test", cwd: nil, gitBranch: nil, pullRequest: nil, modified: .now,
-            fileURL: url, specifics: .codex(model: nil, approvalPolicy: nil, sandboxMode: nil, effort: nil))
-        let turns = await SessionTranscriptLoader.loadRecent(entry: entry)
-        #expect(turns.map(\.text) == (12..<20).map { "Recent message \($0)" })
-    }
-
     @Test("Vault resume plans the short restore verb with structured Codex settings")
     func vaultResumeUsesShortRestoreVerb() throws {
         let entry = SessionEntry(

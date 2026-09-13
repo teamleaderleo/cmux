@@ -12727,7 +12727,6 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 initialInput: startup.input,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
-            panel?.showRestorePreview(entry: entry)
             return panel != nil
         case .split(let paneId, let orientation, let insertFirst):
             let panel = splitPaneWithNewTerminal(
@@ -12739,7 +12738,6 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 initialCommand: startup.command,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
-            panel?.showRestorePreview(entry: entry)
             return panel != nil
         }
     }
