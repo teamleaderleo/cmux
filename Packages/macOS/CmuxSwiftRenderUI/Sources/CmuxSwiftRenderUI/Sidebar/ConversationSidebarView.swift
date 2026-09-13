@@ -20,12 +20,10 @@ public struct ConversationSidebarView: View {
     @State private var jumpSerial = 0
     @State private var keyMonitor: Any?
     @State private var flagsMonitor: Any?
-    @State private var outsideSearchMonitor: Any?
     @State private var searchHovered = false
     @FocusState private var searchFocused: Bool
     @State private var searchVisible = false
     @State private var searchQuery = ""
-    @State private var searchBounds = CGRect.zero
     @State private var lastProvider = "Codex"
     private let providers = ["Claude", "Codex", "OpenCode"]
     private var newProvider: String { providerFilter == "All" ? lastProvider : providerFilter }
@@ -39,6 +37,12 @@ public struct ConversationSidebarView: View {
             "title": "New " + provider + " chat", "working_directory": directory,
             "initial_command": command, "operation_id": UUID().uuidString, "focus": "true"
         ])]))
+    }
+    private func dismissSearchFocus() {
+        guard searchVisible else { return }
+        searchFocused = false
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        if searchQuery.isEmpty { searchVisible = false }
     }
     private var scopedDispatch: SidebarActionDispatch {
         let sink = dispatch
@@ -82,11 +86,7 @@ public struct ConversationSidebarView: View {
                 .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.15)))
                 .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
                 .padding(.horizontal, 6).padding(.vertical, 5)
-                .background(GeometryReader { geometry in
-                    Color.clear
-                        .onAppear { searchBounds = geometry.frame(in: .global) }
-                        .onChange(of: geometry.frame(in: .global)) { _, frame in searchBounds = frame }
-                })
+
             } else {
             HStack {
                 Button { providerMenuVisible.toggle() } label: {
@@ -122,6 +122,7 @@ public struct ConversationSidebarView: View {
             }.frame(height: 40)
             QuietNewRow(provider: newProvider, providers: providers, create: newDraft)
                 .padding(.horizontal, 4).padding(.bottom, 3)
+                .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
             if let error = historyStore.error {
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary).padding(8)
             }
@@ -134,6 +135,8 @@ public struct ConversationSidebarView: View {
                 .padding(4)
                 .background(QuietScrollChrome())
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
         }
         .background(ConversationWindowReader { window in
             ownerWindowID = window?.identifier?.rawValue
@@ -147,17 +150,6 @@ public struct ConversationSidebarView: View {
             }
         }
         .onAppear {
-            outsideSearchMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-                guard event.window?.windowNumber == ownerWindowNumber, searchVisible, let content = event.window?.contentView else { return event }
-                let point = content.convert(event.locationInWindow, from: nil)
-                let y = content.isFlipped ? point.y : content.bounds.height - point.y
-                if !searchBounds.contains(CGPoint(x: point.x, y: y)) {
-                    searchFocused = false
-                    event.window?.makeFirstResponder(nil)
-                    if searchQuery.isEmpty { searchVisible = false }
-                }
-                return event
-            }
             flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
                 guard NSApp.keyWindow?.windowNumber == ownerWindowNumber && ownerWindowNumber != nil else { return event }
                 commandHeld = event.modifierFlags.contains(.command)
@@ -179,8 +171,6 @@ public struct ConversationSidebarView: View {
         .onDisappear {
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
             if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
-            if let outsideSearchMonitor { NSEvent.removeMonitor(outsideSearchMonitor) }
-            outsideSearchMonitor = nil
             keyMonitor = nil; flagsMonitor = nil; commandHeld = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in commandHeld = false }

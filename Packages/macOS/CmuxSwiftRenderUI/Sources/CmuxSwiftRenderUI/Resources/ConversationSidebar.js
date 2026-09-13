@@ -6,6 +6,7 @@ const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
 const [showMore, setShowMore] = signal(false);
 function key(r) { return r.provider + ':' + r.id; }
+function linkKey(provider, id) { return provider + ':' + (provider === 'OpenCode' ? String(id) : String(id).toLowerCase()); }
 function buildLinks(workspaces) {
   const links = Object.create(null);
   const fallback = Object.create(null);
@@ -15,11 +16,13 @@ function buildLinks(workspaces) {
       const kind = String(a.kind).toLowerCase();
       const provider = kind.includes('claude') ? 'Claude' : kind.includes('codex') ? 'Codex' : kind.includes('opencode') ? 'OpenCode' : null;
       if (!provider || !panels.has(a.panelId)) continue;
-      const id = provider + ':' + String(a.id).toLowerCase();
+      const id = linkKey(provider, a.id);
       if (!links[id]) links[id] = {w, panel:a.panelId};
     }
     if (String(w.description || '').startsWith('tk-history:')) {
-      const id = w.description.slice('tk-history:'.length);
+      const saved = w.description.slice('tk-history:'.length);
+      const colon = saved.indexOf(':');
+      const id = linkKey(saved.slice(0, colon), saved.slice(colon + 1));
       if (!fallback[id]) fallback[id] = {w,panel:null};
     }
   }
@@ -27,7 +30,7 @@ function buildLinks(workspaces) {
   return {...fallback,...links};
 }
 const liveLinks = computed(() => buildLinks(data.workspaces() || []));
-function linked(r) { return liveLinks()[r.provider + ':' + r.id.toLowerCase()] || null; }
+function linked(r) { return liveLinks()[linkKey(r.provider, r.id)] || null; }
 
 function focus(r) {
   setSelectedRow(key(r));
