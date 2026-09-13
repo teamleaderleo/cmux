@@ -62,3 +62,9 @@ console.log('Workspace search and exact surface navigation passed');
 require("./test-conversation-tiling-runtime.cjs");
 
 require("./test-conversation-selection-runtime.cjs");
+
+// Legacy workspace markers must resolve a unique titled tab, not just its group.
+history=[row('legacy','OpenCode','/a',1)]; history[0].title='Original review';
+workspaces=[{id:'legacy-work',description:'tk-history:OpenCode:legacy',tabs:[{id:'original',title:'OC | Original review',focused:false},{id:'other',title:'Different chat',focused:true}]}];calls=[];
+run('focus(history()[0])'); assert.equal(calls[1]?.params.surface_id,'original');
+console.log('Legacy history marker returns to its unique original tab');
