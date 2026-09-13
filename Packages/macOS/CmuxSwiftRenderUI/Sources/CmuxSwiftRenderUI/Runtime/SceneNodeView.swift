@@ -489,14 +489,20 @@ final class DirectHoverView: NSView {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
         let area = NSTrackingArea(rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: self, userInfo: nil)
         addTrackingArea(area)
         tracking = area
         setHovered(window.map { visibleRect.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false)
     }
 
-    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseEntered(with event: NSEvent) { updatePointer(event) }
+    override func mouseMoved(with event: NSEvent) { updatePointer(event) }
+    private func updatePointer(_ event: NSEvent) {
+        guard NSApp.currentEvent?.type != .scrollWheel else { return }
+        setHovered(window?.windowNumber == event.windowNumber &&
+                   visibleRect.contains(convert(event.locationInWindow, from: nil)))
+    }
     override func mouseExited(with event: NSEvent) { setHovered(false) }
 
     override func viewDidMoveToWindow() {
@@ -511,7 +517,6 @@ final class DirectHoverView: NSView {
 
     private func setHovered(_ value: Bool) {
         if value {
-            guard window.map({ visibleRect.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) }) == true else { return }
             if Self.active !== self { Self.active?.setHovered(false); Self.active = self }
         }
         guard value != hovered else { return }
@@ -529,7 +534,7 @@ final class DirectHoverView: NSView {
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { pending?.cancel(); popover?.close(); popover = nil }
+        if newWindow == nil { setHovered(false) }
         super.viewWillMove(toWindow: newWindow)
     }
 

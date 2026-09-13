@@ -139,7 +139,7 @@ function focusSurface(w, t) {
 }
 function openList() {
   return VStack({spacing:2}, [
-    ForEach({items:()=> (data.workspaces() || []).filter(w=>w.selected),key:w=>w.id},w=>
+    ForEach({items:()=> (data.workspaces() || []).filter(w=>w.selected && data.showOpenTabs?.() !== false),key:w=>w.id},w=>
       VStack({spacing:2},[
         ForEach({items:()=>w().tabs || [],key:t=>t.id},t=>
           Button(()=>t().title,()=>focusSurface(w(),t()),[

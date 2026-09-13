@@ -12,6 +12,7 @@ public struct ConversationSidebarView: View {
         self.hostContext = dataContext; self.dispatch = dispatch; self.live = live
     }
     let dispatch: SidebarActionDispatch
+    @State private var showOpenTabs = true
     @State private var visibleCount = 24
     @State private var visibleIdentity = "Codex:"
     @State private var providerFilter = "Codex"
@@ -76,6 +77,7 @@ public struct ConversationSidebarView: View {
             return .object(fields)
         }
         var result: [String: SwiftValue] = ["workspaces": .array(workspaces)]
+        result["showOpenTabs"] = .bool(showOpenTabs)
         result["history"] = historyStore.rows
         result["historyView"] = .object([
             "provider": .string(providerFilter), "query": .string(searchQuery),
@@ -150,7 +152,14 @@ public struct ConversationSidebarView: View {
             QuietNewRow(provider: newProvider, providers: providers, create: newDraft)
                 .padding(.horizontal, 4).padding(.bottom, 3)
                 .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
-            Menu {
+            HStack(spacing: 5) {
+                Button { showOpenTabs.toggle() } label: {
+                    Image(systemName: showOpenTabs ? "sidebar.left" : "rectangle")
+                        .font(.system(size: 12)).frame(width: 24, height: 24)
+                }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help(String(localized: "conversation.openTabs", defaultValue: "Open tabs", bundle: .module))
+                    .accessibilityLabel(String(localized: "conversation.openTabs", defaultValue: "Open tabs", bundle: .module))
+                Menu {
                 ForEach(Array((hostContext["workspaces"]?.iterationValues ?? []).enumerated()), id: \.offset) { _, workspace in
                     if let id = workspace.member("id")?.displayString {
                         Button(workspace.member("title")?.displayString ?? id) {
@@ -161,9 +170,10 @@ public struct ConversationSidebarView: View {
             } label: {
                 Text(String(localized: "conversation.openNow", defaultValue: "Open now", bundle: .module))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-            }.menuStyle(.borderlessButton).fixedSize().padding(.leading, 14).padding(.vertical, 3)
+            }.menuStyle(.borderlessButton).fixedSize().padding(.vertical, 3)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .help(String(localized: "conversation.switchLayout", defaultValue: "Switch between groups of open tabs", bundle: .module))
+            }.padding(.leading, 8)
             if let error = historyStore.error {
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary).padding(8)
             }

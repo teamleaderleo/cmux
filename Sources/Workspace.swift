@@ -4016,7 +4016,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         )
         let config = BonsplitConfiguration(
             allowSplits: true,
-            allowCloseTabs: !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton,
+            showsTabCloseButton: !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton,
             allowCloseLastPane: false,
             allowTabReordering: true,
             allowCrossPaneTabMove: true,
@@ -4334,10 +4334,10 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
     }
 
     func refreshTabCloseButtonVisibility() {
-        let allowCloseTabs = !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton
+        let showsTabCloseButton = !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton
         var configuration = bonsplitController.configuration
-        guard configuration.allowCloseTabs != allowCloseTabs else { return }
-        configuration.allowCloseTabs = allowCloseTabs
+        guard configuration.showsTabCloseButton != showsTabCloseButton else { return }
+        configuration.showsTabCloseButton = showsTabCloseButton
         bonsplitController.configuration = configuration
     }
 
