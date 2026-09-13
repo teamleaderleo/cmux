@@ -170,6 +170,11 @@ Rules of the runtime:
   (pin/unpin/ungroup/delete), `workspace.group.collapse` / `.expand`.
 - Actions: `cmux(method, params)`, `openURL(url)`, `log(message)` anywhere in
   a handler.
+- For a visual-only row hover wash, `HStack({ directHover: true }, children)`
+  together with `.hoverBackground(...)` uses an AppKit tracking layer. Pointer
+  entry/exit changes that layer directly, without publishing SwiftUI hover state
+  to descendants. Do not use this option for rows relying on `showOnHover`,
+  `hideOnHover`, or drag-hover propagation; those keep the standard hover path.
 - Containment: the context has no filesystem, network, or timers, and a
   runaway evaluation is terminated by a watchdog. Errors show in the sidebar
   with a line number.

@@ -13,7 +13,18 @@
       ],
       "environment": {
         "CMUX_SOURCE_PACKAGES_DIR": "{source_packages}",
-        "CMUX_BUILD_FILE_HASHING": "1"
+        "CMUX_BUILD_FILE_HASHING": "1",
+        "CMUX_RELOAD_KEEP_RUNNING": "1"
+      }
+    },
+    "sidebar-lab": {
+      "engine": "script",
+      "executable": "scripts/build-sidebar-lab.sh",
+      "arguments": [
+        "{derived_data}"
+      ],
+      "environment": {
+        "CMUX_SIDEBAR_LAB_TESTS": "1"
       }
     }
   },
@@ -63,6 +74,7 @@
     }
   },
   "cache_policies": {
-    "app": "native"
+    "app": "native",
+    "sidebar-lab": "native"
   }
 }

@@ -80,3 +80,6 @@ tmux-*.log
 /.cmux-scratch/
 # Machine-local native Apple build caches and private logs.
 .glaeda/apple-build/
+
+# Private sidebar snapshots and build receipts.
+.glaeda/sidebar-lab/

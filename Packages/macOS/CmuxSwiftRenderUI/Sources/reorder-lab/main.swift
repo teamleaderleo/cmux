@@ -9,7 +9,21 @@ import CmuxSwiftRender
 import CmuxSwiftRenderUI
 import SwiftUI
 
-let source = """
+@MainActor
+func writeLabDiagnostic(_ message: String) {
+    let line = "\(Date().timeIntervalSince1970) \(message)"
+    FileHandle.standardError.write(Data(line.utf8))
+    let url = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("sidebar-lab-latency.log")
+    if !FileManager.default.fileExists(atPath: url.path) {
+        FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+    }
+    guard let handle = try? FileHandle(forWritingTo: url) else { return }
+    defer { try? handle.close() }
+    _ = try? handle.seekToEnd()
+    try? handle.write(contentsOf: Data(line.utf8))
+}
+
+let defaultSource = """
 sidebar(() =>
   VStack({ spacing: 6 }, [
     Text("Reorder lab").font("headline"),
@@ -50,6 +64,19 @@ sidebar(() =>
 )
 """
 
+// A real sidebar can be replayed without giving the lab cmux command authority.
+let source: String = {
+    let index = CommandLine.arguments.firstIndex(of: "--source")
+    let path = index.flatMap { i in CommandLine.arguments.indices.contains(i + 1) ? CommandLine.arguments[i + 1] : nil }
+        ?? Bundle.main.path(forResource: "work", ofType: "js")
+    guard let path else { return defaultSource }
+    do { return try String(contentsOfFile: path, encoding: .utf8) }
+    catch {
+        FileHandle.standardError.write(Data("Cannot read sidebar source: \(error)\n".utf8))
+        exit(1)
+    }
+}()
+
 let items: SwiftValue = .array(
     [.object(["id": .string("long"), "title": .string("An extremely long workspace title that certainly overflows the lab window width")])]
     + (1...3).map { i in
@@ -63,22 +90,38 @@ let items: SwiftValue = .array(
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
+    private var responsivenessTimer: Timer?
+    private var lastTick = ProcessInfo.processInfo.systemUptime
+    private var gaps: [Double] = []
+
+    @objc private func sampleResponsiveness() {
+        let now = ProcessInfo.processInfo.systemUptime
+        gaps.append(max(0, (now - lastTick - 1.0 / 60.0) * 1000))
+        lastTick = now
+        if gaps.count >= 300 {
+            let sorted = gaps.sorted()
+            let message = String(format: "main-loop lateness p95=%.1fms max=%.1fms\n", sorted[284], sorted.last ?? 0)
+            writeLabDiagnostic(message)
+            gaps.removeAll(keepingCapacity: true)
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         FileHandle.standardError.write(Data("lab launched forceHover=\(ProcessInfo.processInfo.environment["CMUX_LAB_FORCE_HOVER"] ?? "0")\n".utf8))
         let dispatch = SidebarActionDispatch { action in
             FileHandle.standardError.write(Data("lab action: \(action)\n".utf8))
         }
-        let view = LabRoot(source: source, dispatch: dispatch)
-            .frame(width: 280, height: 480)
+        let view = ConversationSidebarView(dispatch: dispatch)
+            .frame(minWidth: 230, idealWidth: 270, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 200, y: 200, width: 280, height: 480),
-            styleMask: [.titled, .closable],
+            contentRect: NSRect(x: 200, y: 200, width: 270, height: 700),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "reorder-lab"
+        window.minSize = NSSize(width: 230, height: 450)
+        window.title = "Sidebar lab"
         window.contentView = NSHostingView(rootView: view)
         // Pin to the main display: synthesized pointer events must land on
         // the same display the driver computes coordinates for.
@@ -87,6 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window.makeKeyAndOrderFront(nil)
         self.window = window
+        let timer = Timer(timeInterval: 1.0 / 60.0, target: self,
+            selector: #selector(sampleResponsiveness), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        responsivenessTimer = timer
+        lastTick = ProcessInfo.processInfo.systemUptime
         NSApp.activate(ignoringOtherApps: true)
 
         // Self-driving drag: CMUX_LAB_AUTODRAG="fromY,toY,ms" sends a scripted
@@ -189,47 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Lab content: the sidebar host plus a probe button. With
 /// CMUX_LAB_TOGGLE=1 the item list alternates every 2s between the full and a
 /// reduced set, driving enter/exit slot animations for FPS sampling.
-struct LabRoot: View {
-    let source: String
-    let dispatch: SidebarActionDispatch
-    @State private var reduced = false
-    /// CMUX_LAB_FORCE_HOVER=1 publishes sceneHovered=true to the whole tree:
-    /// NSTrackingArea ignores synthesized events, so hover-gated behavior
-    /// (marquee, fadeOnHover, showOnHover) is otherwise undrivable here.
-    private let forceHover = ProcessInfo.processInfo.environment["CMUX_LAB_FORCE_HOVER"] == "1"
-
-    private var context: [String: SwiftValue] {
-        guard reduced, case let .array(all) = items else { return ["items": items] }
-        return ["items": .array(Array(all.prefix(2)) + Array(all.suffix(1)))]
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Control probe: if this native Button doesn't react to injected
-            // events, the injection is broken, not the sidebar runtime.
-            Button("probe") {
-                FileHandle.standardError.write(Data("lab probe button fired\n".utf8))
-            }
-            .padding(.top, 4)
-            ScrollView {
-                JSSidebarHostView(
-                    source: source,
-                    dataContext: context,
-                    dispatch: dispatch
-                )
-                .padding(12)
-                .environment(\.sceneHovered, forceHover)
-            }
-        }
-        .task {
-            guard ProcessInfo.processInfo.environment["CMUX_LAB_TOGGLE"] == "1" else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                reduced.toggle()
-            }
-        }
-    }
-}
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
