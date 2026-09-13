@@ -1,7 +1,6 @@
 // Shared live conversation sidebar. Metadata arrives as per-key context updates.
 const history = computed(() => data.history() || []);
 const [collapsed, setCollapsed] = signal({});
-const [detail, setDetail] = signal('');
 const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
 function groupLabel(r) { return typeof r.group === 'string' && r.group ? r.group : r.cwd; }
@@ -38,8 +37,7 @@ function focus(r) {
   if (target) {
     cmux('workspace.select', {workspace_id: target.w.id});
     if (target.panel) cmux('surface.focus', {workspace_id: target.w.id, surface_id: target.panel});
-    setDetail('');
-  } else setDetail(detail() === key(r) ? '' : key(r));
+  } else resume(r);
 }
 function resume(r) {
   if (linked(r)) return focus(r);
@@ -90,19 +88,14 @@ sidebar(() => VStack({spacing:2}, [
         .font(()=>g().pinned?11:12).weight('regular').color(()=>g().pinned?'secondary':'primary').lineLimit(1), Spacer()
     ]).paddingLeading(10).paddingVertical(4).onTap(()=>setCollapsed({...collapsed(),[g().id]:!collapsed()[g().id]})),
     ForEach({items:()=>collapsed()[g().id] && !(data.searchQuery()||'').trim() ? [] : g().rows,key:key},r=>VStack({spacing:3},[
-      Button(()=>r().title,()=>focus(r()),[HStack({spacing:7,directHover:true,
+      Button(()=>r().title,()=>focus(r()),[HStack({spacing:7,directHover:true,hoverBackground:'#ffffff12',
         shortcutHint:()=>data.commandHeld()&&pinNumber(r())>0?'⌘'+pinNumber(r()):'',
         hoverDetails:()=>[r().title,r().provider+' · '+groupLabel(r()).replace(/^(Codex|Claude|Folder) · /,''),r().cwd,linked(r())?'Linked in this window':'Not linked in this window'].filter(Boolean).join('\n')},[
         ForEach({items:()=>data.providerFilter()==='All'?[r()]:[],key:key},p=>Image('',{provider:()=>p().provider}).frame({width:14,height:14})),
         Text(()=>r().title).nativeMarquee(0.04).font(12).lineLimit(1).truncation('tail')
       ]).paddingLeading(()=>g().pinned?10:28).paddingTrailing(1).paddingVertical(6).cornerRadius(7)
         .background(()=>{const x=linked(r());return selectedRow()===key(r()) || (x && x.w.selected) ? '#80808030' : null;})
-      ]),
-      ForEach({items:()=>detail()===key(r()) && !linked(r()) ? [r()] : [],key:key},d=>VStack({spacing:5},[
-        Text('Not linked in this window. It may be open in another app.').font(11).secondary().lineLimit(3),
-        Text(()=>d().cwd).font(10).secondary().lineLimit(2),
-        Button(()=>pending()[key(d())] ? 'Resume requested' : 'Resume in a new terminal',()=>resume(d()))
-      ]).padding(8))
+      ])
     ]))
   ])),
   ForEach({items:()=>groups().length ? [] : [0],key:n=>n},()=>Text('No conversations found').font(12).secondary().padding(10))

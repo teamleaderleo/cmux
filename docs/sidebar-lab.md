@@ -80,3 +80,5 @@ rename/archive/fork and bidirectional pin writes are not implemented by this ste
 
 The scrollbar has no rail, with a 16% white rounded thumb. Provider choices use
 compact grey rows and a four-square grid for All providers.
+
+Conversation rows open on the first click: focus an existing linked terminal or resume the conversation in a new terminal. Repeated clicks are guarded while creation is pending. Rows use the native grey hover overlay; the former inline Resume disclosure is removed.

@@ -17,7 +17,7 @@ assert.equal(run("conversationGroups(history(),'All','',true)[0].rows.map(r=>r.i
 assert.equal(run("conversationGroups(history(),'All','',true)[1].rows.map(r=>r.id).join('|')"),'ses_MixedCase|old');
 assert.equal(run("conversationGroups(history(),'Codex','',true)[1].rows.length"),1);
 assert.equal(run("conversationGroups(history(),'All','middle',true)[0].rows[0].id"),'middle');
-run('focus(history()[3])'); assert.equal(calls.length,0);
+run('focus(history()[3]);focus(history()[3])'); assert.equal(calls.length,1);assert.equal(calls[0].method,'workspace.create');calls=[];run('setPending({})');
 workspaces=[{id:'w',agents:[{id:'ses_MixedCase',kind:'opencode',panelId:'p'}],tabs:[{id:'p'}]}];
 run('focus(history()[3])'); assert.equal(calls[0].method,'workspace.select'); assert.equal(calls[1].params.surface_id,'p');
 workspaces=[]; calls=[];
