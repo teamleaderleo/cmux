@@ -12,6 +12,31 @@ import Testing
 @MainActor
 @Suite("Vault native drag source", .serialized)
 struct VaultNativeDragSourceTests {
+    @Test("Conversation rows activate on click but never after a drag", arguments: [false, true])
+    func conversationClickAndDragAreExclusive(drag: Bool) throws {
+        var activations = 0
+        var drags = 0
+        let source = SessionDragSourceView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 28),
+            entry: Self.makeEntry(title: "Conversation"),
+            beginDrag: { _, _, _, _, _ in drags += 1; return true },
+            onDoubleClick: { activations += 1 }
+        )
+        source.activatesOnSingleClick = true
+        let window = NSWindow(contentRect: source.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = source
+        defer { window.orderOut(nil) }
+        let start = source.convert(NSPoint(x: 40, y: 14), to: nil)
+        source.mouseDown(with: try Self.mouseEvent(type: .leftMouseDown, location: start, window: window))
+        if drag {
+            source.mouseDragged(with: try Self.mouseEvent(type: .leftMouseDragged,
+                location: NSPoint(x: start.x + 12, y: start.y), window: window))
+        }
+        source.mouseUp(with: try Self.mouseEvent(type: .leftMouseUp, location: start, window: window))
+        #expect(activations == (drag ? 0 : 1))
+        #expect(drags == (drag ? 1 : 0))
+    }
+
     @Test("Hosted duplicate rows remain draggable after their AppKit cell recycles")
     func hostedDuplicateRowsRemainDraggableAfterCellReuse() async throws {
         let duplicate = Self.makeEntry(title: "Repeated hosted duplicate")

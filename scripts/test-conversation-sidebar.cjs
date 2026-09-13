@@ -17,7 +17,7 @@ assert.equal(run("conversationGroups(history(),'All','',true)[0].rows.map(r=>r.i
 assert.equal(run("conversationGroups(history(),'All','',true)[1].rows.map(r=>r.id).join('|')"),'ses_MixedCase|old');
 assert.equal(run("conversationGroups(history(),'Codex','',true)[1].rows.length"),1);
 assert.equal(run("conversationGroups(history(),'All','middle',true)[0].rows[0].id"),'middle');
-run('focus(history()[3]);focus(history()[3])'); assert.equal(calls.length,1);assert.equal(calls[0].method,'workspace.create');calls=[];run('setPending({})');
+run('focus(history()[3]);focus(history()[3])'); assert.equal(calls.length,1);assert.equal(calls[0].method,'workspace.create');assert.equal(calls[0].params.conversation_placement,'tab');calls=[];run('setPending({})');
 workspaces=[{id:'w',agents:[{id:'ses_MixedCase',kind:'opencode',panelId:'p'}],tabs:[{id:'p'}]}];
 run('focus(history()[3])'); assert.equal(calls[0].method,'workspace.select'); assert.equal(calls[1].params.surface_id,'p');
 workspaces=[]; calls=[];
@@ -48,3 +48,15 @@ workspaces=[{id:'w',agents:[{id:'existing',kind:'claude',panelId:'panel',surface
 run('focus(history()[0])');
 assert.equal(calls[1].params.surface_id,'surface');
 console.log('Existing conversation focuses its actual surface');
+
+// Workspace navigation includes ordinary shells and searches surface titles.
+workspaces=[{id:'one',title:'Build',tabs:[{id:'panelA',surfaceId:'surfaceA',title:'Shell'}]},
+            {id:'two',title:'Research',tabs:[{id:'panelB',surfaceId:'surfaceB',title:'Browser'}]}];
+assert.equal(run("workspaceRows(data.workspaces(), 'shell')[0].id"),'one');
+assert.equal(run("workspaceRows(data.workspaces(), '').length"),2);
+calls=[];run('focusSurface(data.workspaces()[1], data.workspaces()[1].tabs[0])');
+assert.equal(calls[0].params.workspace_id,'two');
+assert.equal(calls[1].params.surface_id,'surfaceB');
+console.log('Workspace search and exact surface navigation passed');
+
+require("./test-conversation-tiling-runtime.cjs");

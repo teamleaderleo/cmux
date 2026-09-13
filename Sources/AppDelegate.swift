@@ -1,3 +1,4 @@
+import CmuxSwiftRenderUI
 import AppKit
 import CmuxAppKitSupportUI
 import CmuxAuthRuntime
@@ -10302,6 +10303,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .environmentObject(sidebarSelectionState)
             .environmentObject(fileExplorerState)
             .environmentObject(cmuxConfigStore)
+            .environment(\.conversationDragAdapter, ConversationDragAdapter { provider, id, title, directory, activate in
+                AnyView(ConversationSidebarDragSource(provider: provider, sessionID: id,
+                    title: title, directory: directory, activate: activate))
+            })
             .environment(\.sessionDragRegistry, sessionDragRegistry)
             .environment(\.tabDragTransferRegistry, tabDragTransferRegistry)
             // AppKit hosts this ContentView in its own NSHostingView, which does

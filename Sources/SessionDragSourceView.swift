@@ -13,6 +13,7 @@ final class SessionDragSourceView: NSView {
     private(set) var beginDrag: SessionDragBeginAction
     private var onDoubleClick: @MainActor () -> Void
     private var pendingDrag: PendingDrag?
+    var activatesOnSingleClick = false
     private let dragThresholdSquared: CGFloat = 16
 
     override var isFlipped: Bool { true }
@@ -113,7 +114,11 @@ final class SessionDragSourceView: NSView {
     override func mouseUp(with event: NSEvent) {
         guard let pendingDrag else { return }
         self.pendingDrag = nil
-        guard pendingDrag.mouseDownEvent.clickCount == 2 else { return }
+        guard activatesOnSingleClick || pendingDrag.mouseDownEvent.clickCount == 2 else { return }
+        if activatesOnSingleClick {
+            guard let window, event.windowNumber == window.windowNumber,
+                  bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        }
         onDoubleClick()
     }
 

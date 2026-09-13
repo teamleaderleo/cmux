@@ -190,7 +190,7 @@
     "paddingLeading", "paddingTrailing", "paddingTop", "paddingBottom",
     "fixed", "block", "layoutPriority", "marginLeading",
     "showOnHover", "hideOnHover", "dragBackground", "dragSet", "rotation",
-    "fade", "marquee", "nativeMarquee",
+    "fade", "marquee", "nativeMarquee", "conversationProvider", "conversationID", "conversationTitle", "conversationDirectory",
   ];
 
   function makeHandle(id) {

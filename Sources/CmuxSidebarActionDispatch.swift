@@ -2,6 +2,7 @@ import AppKit
 import CmuxSwiftRender
 import CmuxSwiftRenderUI
 import Foundation
+import SwiftUI
 
 /// Serial lane for in-process `cmux(...)` sidebar actions. Worker-lane methods
 /// (browser JS, waits) must run off the main actor: on the main actor they
@@ -144,5 +145,66 @@ private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] 
             }
         }
     }
-    return fallback ?? [command]
+    if let fallback { return fallback }
+    // The conversation library opens into the selected workspace's active tile.
+    // Native drop handling owns both launch metadata and live-surface reuse.
+    if params["conversation_placement"] == "tab",
+       let context = contexts.first(where: { $0.windowId.uuidString == params["window_id"] }),
+       let selectedID = context.tabManager.selectedTabId,
+       let workspace = context.tabManager.tabs.first(where: { $0.id == selectedID }),
+       let panelID = workspace.focusedPanelId,
+       let pane = workspace.paneId(forPanelId: panelID),
+       let entry = ConversationSidebarDragSource.makeEntry(provider: provider, sessionID: session,
+           title: params["title"] ?? "", directory: params["working_directory"] ?? "") {
+        _ = workspace.handleSessionDrop(entry: entry, destination: .insert(targetPane: pane, targetIndex: nil))
+        return []
+    }
+    return [command]
+}
+
+/// Hosts the existing native session drag source over a conversation library row.
+struct ConversationSidebarDragSource: View {
+    let provider: String
+    let sessionID: String
+    let title: String
+    let directory: String
+    let activate: @MainActor () -> Void
+    @Environment(\.sessionDragRegistry) private var registry
+    @Environment(\.tabDragTransferRegistry) private var transferRegistry
+    @State private var coordinator = SessionDragCoordinator()
+
+    private var entry: SessionEntry? {
+        Self.makeEntry(provider: provider, sessionID: sessionID, title: title, directory: directory)
+    }
+
+    static func makeEntry(provider: String, sessionID: String, title: String, directory: String) -> SessionEntry? {
+        let agent: SessionAgent
+        let specifics: AgentSpecifics
+        switch provider {
+        case "Claude":
+            agent = .claude
+            specifics = .claude(model: nil, permissionMode: nil, configDirectoryForResume: nil)
+        case "Codex":
+            agent = .codex
+            specifics = .codex(model: nil, approvalPolicy: nil, sandboxMode: nil, effort: nil)
+        case "OpenCode":
+            agent = .opencode
+            specifics = .opencode(providerModel: nil, agentName: nil)
+        default: return nil
+        }
+        guard !sessionID.isEmpty, directory.hasPrefix("/") else { return nil }
+        return SessionEntry(id: provider + ":" + sessionID, agent: agent, sessionId: sessionID,
+                            title: title, cwd: directory, gitBranch: nil, pullRequest: nil,
+                            modified: .distantPast, fileURL: nil, specifics: specifics)
+    }
+
+    var body: some View {
+        if let entry, let registry, let transferRegistry {
+            SessionDragSource(entry: entry, beginDrag: { entry, view, event, frame, image in
+                coordinator.beginSessionDrag(entry, registry: registry,
+                    tabDragTransferRegistry: transferRegistry, from: view,
+                    event: event, frame: frame, image: image)
+            }, onDoubleClick: activate, activatesOnSingleClick: true)
+        }
+    }
 }

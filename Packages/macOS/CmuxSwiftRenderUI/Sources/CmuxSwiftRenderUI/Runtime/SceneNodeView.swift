@@ -79,17 +79,31 @@ private struct SceneNodeContent: View {
     @Environment(\.sceneEventSink) private var sink
     @Environment(\.sceneHovered) private var ancestorHovered
     @State private var lastTapAt: Date?
+    @Environment(\.conversationDragAdapter) private var conversationDragAdapter
 
     var body: some View {
         // A child of type "contextMenu" is the node's right-click menu, not
         // inline content; everything else renders in place.
         if let menuId = contextMenuChildId {
-            styled(content)
+            draggableContent
                 .contextMenu {
                     SceneNodeView(nodeId: menuId)
                 }
         } else {
-            styled(content)
+            draggableContent
+        }
+    }
+
+    private var draggableContent: some View {
+        styled(content).overlay {
+            if let adapter = conversationDragAdapter,
+               let provider = node.string("conversationProvider"),
+               let id = node.string("conversationID") {
+                adapter.overlay(provider, id, node.string("conversationTitle") ?? "",
+                                node.string("conversationDirectory") ?? "") {
+                    sink.send(node.id, "tap", [:])
+                }
+            }
         }
     }
 

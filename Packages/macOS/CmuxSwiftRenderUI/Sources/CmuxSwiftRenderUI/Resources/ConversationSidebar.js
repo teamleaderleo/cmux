@@ -3,6 +3,7 @@ const history = computed(() => data.history() || []);
 const [collapsed, setCollapsed] = signal({});
 const [selectedRow, setSelectedRow] = signal('');
 const [pending, setPending] = signal({});
+const [workspaceExpanded, setWorkspaceExpanded] = signal({});
 function groupLabel(r) { return typeof r.group === 'string' && r.group ? r.group : r.cwd; }
 function key(r) { return r.provider + ':' + r.id; }
 function linkKey(provider, id) { return provider + ':' + (provider === 'OpenCode' ? String(id) : String(id).toLowerCase()); }
@@ -44,7 +45,7 @@ function resume(r) {
   if (Date.now() - (pending()[key(r)] || 0) < 15000) return;
   setPending({...pending(), [key(r)]: Date.now()});
   cmux('workspace.create', {title: r.title, working_directory: r.cwd,
-    description: 'tk-history:' + key(r), initial_command: r.command,
+    description: 'tk-history:' + key(r), initial_command: r.command, conversation_placement: 'tab',
     operation_id: 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);}), focus: true});
 }
 
@@ -80,7 +81,7 @@ function conversationGroups(rows, provider, query) {
   return result;
 }
 const groups = computed(() => conversationGroups(history(), data.providerFilter(), data.searchQuery() || ''));
-sidebar(() => VStack({spacing:2}, [
+function conversationList() { return VStack({spacing:2}, [
   ForEach({items:groups,key:g=>g.id},g=>VStack({spacing:2},[
     HStack({spacing:5},[
       ForEach({items:()=>g().pinned?[]:[g().id],key:n=>n},n=>Image('folder').font(12).secondary()),
@@ -95,8 +96,44 @@ sidebar(() => VStack({spacing:2}, [
         Text(()=>r().title).nativeMarquee(0.04).font(12).lineLimit(1).truncation('tail')
       ]).paddingLeading(()=>g().pinned?10:28).paddingTrailing(1).paddingVertical(6).cornerRadius(7)
         .background(()=>{const x=linked(r());return selectedRow()===key(r()) || (x && x.w.selected) ? '#80808030' : null;})
-      ])
+      ]).conversationProvider(()=>r().provider).conversationID(()=>r().id)
+        .conversationTitle(()=>r().title).conversationDirectory(()=>r().cwd)
     ]))
   ])),
   ForEach({items:()=>groups().length ? [] : [0],key:n=>n},()=>Text('No conversations found').font(12).secondary().padding(10))
+]).padding(0); }
+
+function workspaceRows(workspaces, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  return workspaces.filter(w => !needle || [w.title, w.directory, ...(w.tabs || []).map(t => t.title)].some(v => String(v || '').toLowerCase().includes(needle)));
+}
+function focusSurface(w, t) {
+  cmux('workspace.select', {workspace_id:w.id});
+  cmux('surface.focus', {workspace_id:w.id, surface_id:t.surfaceId || t.id});
+}
+function workspaceList() {
+  return VStack({spacing:2}, [
+    ForEach({items:()=>workspaceRows(data.workspaces() || [], data.searchQuery()),key:w=>w.id},w=>VStack({spacing:2},[
+      HStack({spacing:3},[
+        Button('',()=>setWorkspaceExpanded({...workspaceExpanded(),[w().id]:!(workspaceExpanded()[w().id] ?? w().selected)}),[
+          Image(()=> (workspaceExpanded()[w().id] ?? w().selected) ? 'chevron.down' : 'chevron.right').font(9).secondary().frame({width:16})
+        ]),
+        Button(()=>w().title,()=>cmux('workspace.select',{workspace_id:w().id}),[
+          HStack({spacing:5},[Text(()=>w().title).font(12).lineLimit(1),Spacer()]).paddingVertical(6)
+        ])
+      ]).paddingHorizontal(5).cornerRadius(7).background(()=>w().selected?'#80808030':null).hoverBackground('#ffffff12'),
+      ForEach({items:()=> (workspaceExpanded()[w().id] ?? w().selected) ? (w().tabs || []) : [],key:t=>t.id},t=>
+        Button(()=>t().title,()=>focusSurface(w(),t()),[
+          HStack({spacing:6},[
+            Image('rectangle').font(11).secondary(),
+            Text(()=>t().title).font(12).lineLimit(1).nativeMarquee(0.04)
+          ]).paddingLeading(25).paddingTrailing(2).paddingVertical(5).cornerRadius(7)
+            .background(()=>w().selected&&t().focused?'#80808030':null).hoverBackground('#ffffff12')
+        ])
+      )
+    ]))
+  ]);
+}
+sidebar(()=>VStack({spacing:0},[
+  ForEach({items:()=>[data.navigationMode() || 'chats'],key:x=>x},mode=>mode()==='workspaces'?workspaceList():conversationList())
 ]).padding(0));

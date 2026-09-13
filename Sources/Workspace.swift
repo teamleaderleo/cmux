@@ -12702,6 +12702,19 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         entry: SessionEntry,
         destination: BonsplitController.ExternalTabDropRequest.Destination
     ) -> Bool {
+        // A history row is another handle on an existing session. Resolve at drop
+        // time across windows, then use the same move path as a live tab drag.
+        if let app = AppDelegate.shared {
+            for context in app.mainWindowContexts.values where context.window != nil {
+                guard let target = SessionEntryResumeCoordinator.activeTarget(for: entry, tabManager: context.tabManager),
+                      let source = context.tabManager.tabs.first(where: { $0.id == target.workspaceID }),
+                      let tab = source.surfaceIdFromPanelId(target.surfaceID),
+                      let pane = source.paneId(forPanelId: target.surfaceID) else { continue }
+                return handleExternalTabDrop(BonsplitController.ExternalTabDropRequest(
+                    tabId: tab, sourcePaneId: pane, destination: destination
+                ))
+            }
+        }
         guard let launch = entry.resumeLaunch else { return false }
         switch destination {
         case .insert(let paneId, _):

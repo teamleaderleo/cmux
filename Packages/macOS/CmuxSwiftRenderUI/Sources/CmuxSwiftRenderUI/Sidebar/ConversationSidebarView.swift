@@ -12,6 +12,7 @@ public struct ConversationSidebarView: View {
         self.hostContext = dataContext; self.dispatch = dispatch; self.live = live
     }
     let dispatch: SidebarActionDispatch
+    @State private var navigationMode = "chats"
     @State private var providerFilter = "Codex"
     @State private var providerMenuVisible = false
     @State private var headingHovered = false
@@ -58,6 +59,7 @@ public struct ConversationSidebarView: View {
     private var context: [String: SwiftValue] {
         var result = hostContext
         result["history"] = historyStore.rows
+        result["navigationMode"] = .string(navigationMode)
         // Resync the retained action handler when its native window attaches.
         result["ownerWindow"] = .string((ownerWindowID ?? "") + ":" + (ownerWindowNumber.map(String.init) ?? ""))
         result["providerFilter"] = .string(providerFilter)
@@ -93,16 +95,18 @@ public struct ConversationSidebarView: View {
 
             } else {
             HStack {
-                Button { providerMenuVisible.toggle() } label: {
+                Button { if navigationMode == "chats" { providerMenuVisible.toggle() } } label: {
                     HStack(spacing: 7) {
-                        if providerFilter == "All" {
+                        if navigationMode == "workspaces" {
+                            Image(systemName: "rectangle.split.2x2").font(.system(size: 15))
+                        } else if providerFilter == "All" {
                             Image(systemName: "square.grid.2x2").font(.system(size: 15))
                         } else {
                             ProviderIcon(providerFilter).frame(width: 18, height: 18)
                         }
-                        Text(providerFilter == "All" ? "All providers" : providerFilter)
+                        Text(navigationMode == "workspaces" ? String(localized: "conversation.workspaces", defaultValue: "Workspaces", bundle: .module) : providerFilter == "All" ? "All providers" : providerFilter)
                             .font(.system(size: 16, weight: .semibold))
-                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).opacity(navigationMode == "workspaces" ? 0 : 1)
                     }
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(headingHovered ? Color.primary.opacity(0.09) : .clear,
@@ -124,9 +128,23 @@ public struct ConversationSidebarView: View {
             }.padding(.leading, 8).padding(.trailing, 6).padding(.top, 3).padding(.bottom, 3)
             }
             }.frame(height: 40)
+            Picker(String(localized: "conversation.navigation", defaultValue: "Sidebar view", bundle: .module), selection: $navigationMode) {
+                Text(String(localized: "conversation.chats", defaultValue: "Chats", bundle: .module)).tag("chats")
+                Text(String(localized: "conversation.workspaces", defaultValue: "Workspaces", bundle: .module)).tag("workspaces")
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 8).padding(.bottom, 5)
+            if navigationMode == "workspaces" {
+                Button {
+                    scopedDispatch.run(ButtonAction(commands: [.cmux(method: "workspace.create", params: ["focus": "true"])]))
+                } label: {
+                    Label(String(localized: "conversation.newWorkspace", defaultValue: "New workspace", bundle: .module), systemImage: "plus")
+                        .font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12).padding(.vertical, 7).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            } else {
             QuietNewRow(provider: newProvider, providers: providers, create: newDraft)
                 .padding(.horizontal, 4).padding(.bottom, 3)
                 .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })
+            }
             if let error = historyStore.error {
                 Text(error).font(.system(size: 11)).foregroundStyle(.secondary).padding(8)
             }
