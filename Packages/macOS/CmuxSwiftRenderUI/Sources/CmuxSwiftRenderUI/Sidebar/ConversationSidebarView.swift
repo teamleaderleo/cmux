@@ -148,7 +148,7 @@ public struct ConversationSidebarView: View {
                     .onHover { searchHovered = $0 }
             }.padding(.leading, 8).padding(.trailing, 6).padding(.top, 3).padding(.bottom, 3)
             }
-            }.frame(height: 40)
+            }.frame(height: 40).padding(.top, 8)
             QuietNewRow(provider: newProvider, providers: providers, create: newDraft)
                 .padding(.horizontal, 4).padding(.bottom, 3)
                 .simultaneousGesture(TapGesture().onEnded { dismissSearchFocus() })

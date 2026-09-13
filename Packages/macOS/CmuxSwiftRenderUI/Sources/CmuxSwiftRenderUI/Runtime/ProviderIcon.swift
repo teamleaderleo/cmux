@@ -17,12 +17,15 @@ public struct ProviderIcon: View {
     @MainActor public static func menuImage(_ provider: String) -> NSImage? {
         guard let image = artwork[provider]?.copy() as? NSImage else { return nil }
         image.size = NSSize(width: 16, height: 16)
+        image.isTemplate = provider != "OpenCode"
         return image
     }
     public var body: some View {
         let name = provider == "Codex" && scheme == .dark ? "Codex-dark" : provider
         if let image = Self.artwork[name] {
-            Image(nsImage: image).resizable().scaledToFit().accessibilityLabel(provider)
+            Image(nsImage: image)
+                .renderingMode(provider == "OpenCode" ? .original : .template)
+                .resizable().scaledToFit().foregroundStyle(.secondary).accessibilityLabel(provider)
         }
     }
 }

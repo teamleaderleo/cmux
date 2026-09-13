@@ -370,6 +370,7 @@ struct WorkspaceContentView: View {
         .onAppear {
             updateAgentHibernationPresentationVisibility()
             syncBonsplitNotificationBadges()
+            syncBonsplitProviderIcons()
             refreshGhosttyAppearanceConfig(reason: "onAppear")
         }
         .onChange(of: isWorkspaceVisible) { _, isVisible in
@@ -385,6 +386,9 @@ struct WorkspaceContentView: View {
         }
         .onDisappear {
             workspace.setAgentHibernationAutoResumePresentationVisible(false)
+        }
+        .onChange(of: providerTabIconAssets) { _, _ in
+            syncBonsplitProviderIcons()
         }
         .onChange(of: notificationStore.notifications) { _, _ in
             syncBonsplitNotificationBadges()
@@ -447,6 +451,29 @@ struct WorkspaceContentView: View {
         // A workspace is a page: accept the parent proposal instead of
         // contributing a hidden child's content-derived ideal to its ZStack.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Uses existing session identity only; no transcript or process lookup.
+    private var providerTabIconAssets: [UUID: String] {
+        workspace.restoredAgentSnapshotsByPanelId.compactMapValues { snapshot in
+            let agent = SessionAgent(rawValue: snapshot.kind.rawValue)
+            return agent == .claude ? "AgentIcons/ClaudeMonochrome" : agent?.assetName
+        }
+    }
+
+    private func syncBonsplitProviderIcons() {
+        let assets = providerTabIconAssets
+        for pane in workspace.bonsplitController.allPaneIds {
+            for tab in workspace.bonsplitController.tabs(inPane: pane) {
+                guard let panelID = workspace.panelIdFromSurfaceId(tab.id),
+                      workspace.terminalPanel(for: panelID) != nil else { continue }
+                let asset = assets[panelID]
+                guard tab.iconAsset != asset else { continue }
+                workspace.bonsplitController.updateTab(tab.id,
+                    icon: .some(asset == nil ? "terminal" : nil),
+                    iconAsset: .some(asset))
+            }
+        }
     }
 
     private func syncBonsplitNotificationBadges() {
