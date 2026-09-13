@@ -16,7 +16,7 @@ function buildLinks(workspaces) {
       const provider = kind.includes('claude') ? 'Claude' : kind.includes('codex') ? 'Codex' : kind.includes('opencode') ? 'OpenCode' : null;
       if (!provider || !panels.has(a.panelId)) continue;
       const id = linkKey(provider, a.id);
-      if (!links[id]) links[id] = {w, panel:a.panelId};
+      if (!links[id]) links[id] = {w, panel:a.surfaceId || (w.tabs || []).find(t => t.id === a.panelId)?.surfaceId || a.panelId};
     }
     if (String(w.description || '').startsWith('tk-history:')) {
       const saved = w.description.slice('tk-history:'.length);

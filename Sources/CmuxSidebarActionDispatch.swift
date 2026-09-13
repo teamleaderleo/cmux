@@ -45,7 +45,12 @@ func makeCmuxSidebarActionDispatch() -> SidebarActionDispatch {
             if let selectGeneration, !sidebarSelectCoalescer.isCurrent(selectGeneration) {
                 return
             }
-            for command in commands {
+            // Resolve immediately before dispatch, against every live window. This
+            // also catches a session opened after the sidebar's last context tick.
+            let resolved = DispatchQueue.main.sync {
+                commands.flatMap(reuseOpenConversation)
+            }
+            for command in resolved {
                 switch command {
                 case let .cmux(method, params):
                     var payload: [String: Any] = ["method": method, "id": UUID().uuidString]
@@ -85,4 +90,59 @@ func makeCmuxSidebarActionDispatch() -> SidebarActionDispatch {
             }
         }
     }
+}
+
+/// Resume actions carry an exact provider/session identity. Reuse its live
+/// terminal across windows before allocating another provider process.
+@MainActor
+private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] {
+    guard case let .cmux(method, params) = command, method == "workspace.create",
+          let description = params["description"], description.hasPrefix("tk-history:"),
+          let app = AppDelegate.shared else { return [command] }
+    let identity = String(description.dropFirst("tk-history:".count))
+    guard let colon = identity.firstIndex(of: ":") else { return [command] }
+    let provider = String(identity[..<colon])
+    let session = String(identity[identity.index(after: colon)...])
+    guard ["Claude", "Codex", "OpenCode"].contains(provider), !session.isEmpty else { return [command] }
+    func sameSession(_ other: String) -> Bool {
+        provider == "OpenCode" ? other == session : other.lowercased() == session.lowercased()
+    }
+    func actions(window: UUID, workspace: UUID, surface: UUID?) -> [ActionCommand] {
+        var result: [ActionCommand] = [.cmux(method: "workspace.select", params: [
+            "window_id": window.uuidString, "workspace_id": workspace.uuidString
+        ])]
+        if let surface {
+            result.append(.cmux(method: "surface.focus", params: [
+                "window_id": window.uuidString, "workspace_id": workspace.uuidString,
+                "surface_id": surface.uuidString
+            ]))
+        }
+        result.append(.cmux(method: "window.focus", params: ["window_id": window.uuidString]))
+        return result
+    }
+    // Prefer an authoritative agent binding over a saved resume marker.
+    var fallback: [ActionCommand]?
+    let contexts = app.mainWindowContexts.values.sorted {
+        ($0.windowId.uuidString == params["window_id"] ? 0 : 1,
+         $0.windowId.uuidString) <
+        ($1.windowId.uuidString == params["window_id"] ? 0 : 1,
+         $1.windowId.uuidString)
+    }
+    for context in contexts where context.window != nil {
+        for workspace in context.tabManager.tabs {
+            let snapshot = workspace.customSidebarWorkspaceSnapshot(
+                index: 0, selectedId: context.tabManager.selectedTabId, unreadCount: 0
+            )
+            for agent in snapshot.agents where agent.kind.lowercased().contains(provider.lowercased()) && sameSession(agent.sessionId) {
+                guard let panel = agent.panelId,
+                      let surface = snapshot.surfaces.first(where: { $0.panelId == panel }) else { continue }
+                return actions(window: context.windowId, workspace: workspace.id,
+                               surface: agent.surfaceId ?? surface.surfaceId)
+            }
+            if fallback == nil, snapshot.customDescription == description, !snapshot.surfaces.isEmpty {
+                fallback = actions(window: context.windowId, workspace: workspace.id, surface: nil)
+            }
+        }
+    }
+    return fallback ?? [command]
 }
