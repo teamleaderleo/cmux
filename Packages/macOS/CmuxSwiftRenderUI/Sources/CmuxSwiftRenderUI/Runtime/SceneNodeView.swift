@@ -493,7 +493,11 @@ private struct SceneBoxStyle: ViewModifier {
             .padding(.leading, CGFloat(node.double("marginLeading") ?? 0))
             .onHover { hovering in
                 guard node.props["hoverBackground"] != nil else { return }
-                withAnimation(.easeOut(duration: 0.12)) {
+                // Pointer feedback should track the row under the cursor immediately.
+                // Suppress inherited transactions as well as an explicit hover fade.
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
                     isHovered = hovering
                 }
             }
