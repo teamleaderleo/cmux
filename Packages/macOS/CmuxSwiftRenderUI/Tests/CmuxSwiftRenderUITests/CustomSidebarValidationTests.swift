@@ -40,6 +40,16 @@ struct CustomSidebarValidationTests {
         #expect(report.entries.first?.kind == .js)
     }
 
+    @Test("accepts the built-in conversation sidebar while rejecting empty scripts")
+    func validatesConversationSidebar() throws {
+        let directory = try temporaryDirectory()
+        let file = directory.appendingPathComponent("conversations.js")
+        try "// cmux:conversation-sidebar\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(validator.validate(fileURL: file).errorMessage == nil)
+        try "// ordinary empty script\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(validator.validate(fileURL: file).errorMessage != nil)
+    }
+
     @Test("reports JS programs that throw")
     func reportsThrowingJSProgram() throws {
         let directory = try temporaryDirectory()
