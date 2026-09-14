@@ -2004,7 +2004,7 @@ extension Workspace {
                 initialInput: restoredStartupInput,
                 startupEnvironment: replayEnvironment,
                 runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
-                    requestedPolicy: .pacedSessionRestore,
+                    requestedPolicy: .pacedSessionRestore.waitingForFirstPresentation(),
                     willRunStartupCommand: restoredAgentWillRunStartupCommand,
                     willRunStartupInput: restoredAgentWillRunStartupInput,
                     awaitsDeferredAgentResume: deferredAgentResumeAdmission

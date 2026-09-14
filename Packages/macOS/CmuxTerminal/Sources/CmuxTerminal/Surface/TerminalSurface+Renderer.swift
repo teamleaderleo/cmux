@@ -147,6 +147,10 @@ extension TerminalSurface {
     func setRendererPortalVisible(_ visible: Bool, presentationReady: Bool) {
         let wasVisible = rendererPortalVisible
         rendererPortalVisible = visible
+        if visible, requiresFirstPresentation, surface == nil,
+           let view = attachedView, view.window != nil {
+            createSurface(for: view, source: .normal)
+        }
         if !visible {
             surfaceCallbackContext?.takeUnretainedValue().cancelRendererPresentationRepair()
         }

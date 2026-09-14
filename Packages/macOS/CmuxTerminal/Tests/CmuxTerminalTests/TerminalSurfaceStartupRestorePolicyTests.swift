@@ -8,6 +8,47 @@ import Testing
 @MainActor
 @Suite
 struct TerminalSurfaceStartupRestorePolicyTests {
+    @Test("Hidden restored panes do not spawn until presented")
+    func restoredPaneWaitsForPresentation() {
+        let view = FakeTerminalSurfaceNativeView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let host = FakeTerminalSurfacePaneHost(surfaceView: view, attachesThroughSurfaceModel: true)
+        let scheduler = RecordingRestoreSpawnScheduler()
+        let surface = makeSurface(
+            policy: .pacedSessionRestore.waitingForFirstPresentation().requiringStartupRestoreAdmission(),
+            scheduler: scheduler, nativeView: view, paneHost: host
+        )
+        surface.agentCommandShimInstallCompleted = true
+        defer { surface.closeHeadlessStartupWindowIfNeeded() }
+        surface.admitStartupRestoreRuntime()
+        surface.scheduleHeadlessRuntimeStartIfNeeded(reason: "hidden-restore")
+        surface.createSurface(for: view, source: .scheduledRestore)
+        #expect(!surface.canCreateRuntimeSurface)
+        #expect(scheduler.scheduledSurfaceIds.isEmpty)
+        #expect(surface.debugRuntimeSurfaceCreateAttemptCountForTesting() == 0)
+
+        surface.setRendererPortalVisible(true)
+        surface.scheduleHeadlessRuntimeStartIfNeeded(reason: "presented-restore")
+        #expect(surface.canCreateRuntimeSurface)
+        #expect(scheduler.scheduledSurfaceIds == [surface.id])
+        scheduler.runScheduledOperation()
+        #expect(surface.debugRuntimeSurfaceCreateAttemptCountForTesting() == 1)
+    }
+
+    @Test("Explicit input may start a hidden restored pane")
+    func explicitInputBypassesPresentationWait() {
+        let view = FakeTerminalSurfaceNativeView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let host = FakeTerminalSurfacePaneHost(surfaceView: view, attachesThroughSurfaceModel: true)
+        let scheduler = RecordingRestoreSpawnScheduler()
+        let surface = makeSurface(
+            policy: .pacedSessionRestore.waitingForFirstPresentation(),
+            scheduler: scheduler, nativeView: view, paneHost: host
+        )
+        surface.agentCommandShimInstallCompleted = true
+        surface.createSurface(for: view, source: .inputDemand)
+        #expect(scheduler.scheduledSurfaceIds.isEmpty)
+        #expect(surface.debugRuntimeSurfaceCreateAttemptCountForTesting() == 1)
+    }
+
     @Test("Restore admission composes with relaunch spawn pacing")
     func admissionPreservesRestorePacing() {
         let nativeView = FakeTerminalSurfaceNativeView(
