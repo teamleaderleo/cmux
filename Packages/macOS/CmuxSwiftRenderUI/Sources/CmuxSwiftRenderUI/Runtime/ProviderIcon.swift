@@ -25,7 +25,7 @@ public struct ProviderIcon: View {
         if let image = Self.artwork[name] {
             Image(nsImage: image)
                 .renderingMode(provider == "OpenCode" ? .original : .template)
-                .resizable().scaledToFit().foregroundStyle(.secondary).accessibilityLabel(provider)
+                .resizable().scaledToFit().foregroundStyle(Color.primary.opacity(0.9)).accessibilityLabel(provider)
         }
     }
 }
