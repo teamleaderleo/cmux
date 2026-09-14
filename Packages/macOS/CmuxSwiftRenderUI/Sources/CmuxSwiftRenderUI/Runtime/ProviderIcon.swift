@@ -9,8 +9,15 @@ public struct ProviderIcon: View {
     @MainActor private static let artwork: [String: NSImage] = {
         var result: [String: NSImage] = [:]
         for name in ["Claude", "Codex", "Codex-dark", "OpenCode"] {
-            if let url = Bundle.module.url(forResource: name, withExtension: "png"),
-               let image = NSImage(contentsOf: url) { result[name] = image }
+            let image = NSImage(size: NSSize(width: 14, height: 14))
+            for suffix in ["", "@2x", "@3x"] {
+                guard let url = Bundle.module.url(forResource: name + suffix, withExtension: "png"),
+                      let data = try? Data(contentsOf: url),
+                      let representation = NSBitmapImageRep(data: data) else { continue }
+                representation.size = image.size
+                image.addRepresentation(representation)
+            }
+            if !image.representations.isEmpty { result[name] = image }
         }
         return result
     }()
