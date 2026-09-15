@@ -1370,7 +1370,7 @@ if [[ "${CMUX_GHOSTTYKIT_PREPROVISIONED:-0}" == "1" ]]; then
   fi
   echo "==> Reusing caller-provisioned GhosttyKit.xcframework"
 else
-  "$PWD/scripts/ensure-ghosttykit.sh"
+  CMUX_GHOSTTYKIT_TARGET="${CMUX_GHOSTTYKIT_TARGET:-native}" "$PWD/scripts/ensure-ghosttykit.sh"
 fi
 
 if should_skip_ghostty_cli_helper_zig_build; then

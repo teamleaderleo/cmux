@@ -81,6 +81,12 @@ GHOSTTYKIT_CRASH_REPORT_SUBDIR="${CMUX_GHOSTTYKIT_CRASH_REPORT_SUBDIR:-cmux/cras
 # native Sentry as well creates a second global crash handler and starts its
 # environment-reading init thread during Ghostty locale mutation.
 GHOSTTYKIT_BUILD_FLAVOR="crashsubdir-$(printf '%s' "$GHOSTTYKIT_CRASH_REPORT_SUBDIR" | tr '/=' '--')-sentry-off-noi18n-v2"
+GHOSTTYKIT_TARGET="${CMUX_GHOSTTYKIT_TARGET:-universal}"
+case "$GHOSTTYKIT_TARGET" in
+  universal) ;;
+  native) GHOSTTYKIT_BUILD_FLAVOR="$GHOSTTYKIT_BUILD_FLAVOR-native" ;;
+  *) echo "error: unsupported GhosttyKit target: $GHOSTTYKIT_TARGET" >&2; exit 1 ;;
+esac
 GHOSTTY_CLEAN_KEY="${GHOSTTY_SHA}-${GHOSTTYKIT_BUILD_FLAVOR}"
 GHOSTTY_KEY="$GHOSTTY_CLEAN_KEY"
 UNTRACKED_FILES="$(git -C ghostty ls-files --others --exclude-standard)"
@@ -237,7 +243,7 @@ else
         -Di18n=false \
         -Demit-macos-app=false \
         -Demit-xcframework=true \
-        -Dxcframework-target=universal \
+        -Dxcframework-target="$GHOSTTYKIT_TARGET" \
         -Doptimize=ReleaseFast
     )
     echo "$GHOSTTY_KEY" > "$LOCAL_KEY_STAMP"

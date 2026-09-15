@@ -103,7 +103,7 @@ jobs:
               }
           }
 
-'''
+          '''
           if anchor not in s:
               raise SystemExit('app test anchor drifted')
           p.write_text(s.replace(anchor, addition + anchor, 1))
@@ -131,7 +131,7 @@ jobs:
               #expect((try? parser.request(fromLine: extensionKey).get()) != nil)
           }
 
-'''
+          '''
           if anchor not in s:
               raise SystemExit('parser test anchor drifted')
           p.write_text(s.replace(anchor, addition + anchor, 1))
