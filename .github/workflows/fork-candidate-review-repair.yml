@@ -1,0 +1,115 @@
+name: Repair ssh-tmux candidate ownership
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fork-candidate-review-repair.yml
+
+permissions:
+  contents: write
+
+env:
+  RED_SHA: 4719143f4a21ab2442397efe70643435c1f604f6
+  PRIOR_GREEN_SHA: a732c5994bb2a698a7330bb0516210411d9ca298
+  CANDIDATE_BRANCH: fix/ssh-tmux-sendkeys-current-main
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout red parent
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+
+      - name: Apply paste slice and ownership repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "teamleaderleo"
+          git config user.email "cheerleaderleo@outlook.com"
+          git checkout "$PRIOR_GREEN_SHA" -- \
+            Packages/macOS/CmuxRemoteSession/Sources/CmuxRemoteSession/RemoteTmux/RemoteTmuxSendKeysBatchBuilder.swift \
+            Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteTmuxSendKeysBatchBuilderTests.swift \
+            Sources/RemoteTmuxControlConnection+Commands.swift \
+            Sources/RemoteTmuxControlConnection.swift \
+            Sources/RemoteTmuxPaneInputForwarder.swift \
+            cmuxTests/RemoteTmuxAuthTests.swift
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          builder = Path("Packages/macOS/CmuxRemoteSession/Sources/CmuxRemoteSession/RemoteTmux/RemoteTmuxSendKeysBatchBuilder.swift")
+          text = builder.read_text()
+          text = text.replace(
+              "public enum RemoteTmuxSendKeysBatchBuilder {\n",
+              "public struct RemoteTmuxSendKeysBatchBuilder: Sendable {\n    public init() {}\n\n",
+              1,
+          )
+          text = text.replace("public static func commands(", "public func commands(", 1)
+          text = text.replace("private static func hexByteArguments(", "private func hexByteArguments(", 1)
+          if "public enum RemoteTmuxSendKeysBatchBuilder" in text or "public static func commands(" in text:
+              raise SystemExit("builder ownership transform failed")
+          builder.write_text(text)
+
+          connection = Path("Sources/RemoteTmuxControlConnection.swift")
+          text = connection.read_text()
+          owner_anchor = "    private let createIfMissing: Bool\n\n"
+          if owner_anchor not in text:
+              raise SystemExit("connection owner anchor drifted")
+          text = text.replace(
+              owner_anchor,
+              "    private let createIfMissing: Bool\n    let sendKeysBatchBuilder: RemoteTmuxSendKeysBatchBuilder\n\n",
+              1,
+          )
+          init_anchor = "        pendingPaneSeedByteLimit: Int = RemoteTmuxControlConnection.maximumPendingPaneSeedBytes\n    ) {"
+          if init_anchor not in text:
+              raise SystemExit("connection init anchor drifted")
+          text = text.replace(
+              init_anchor,
+              "        pendingPaneSeedByteLimit: Int = RemoteTmuxControlConnection.maximumPendingPaneSeedBytes,\n        sendKeysBatchBuilder: RemoteTmuxSendKeysBatchBuilder = RemoteTmuxSendKeysBatchBuilder()\n    ) {",
+              1,
+          )
+          assign_anchor = "        self.createIfMissing = createIfMissing\n        self.pendingPaneSeedByteLimit = max(0, pendingPaneSeedByteLimit)"
+          if assign_anchor not in text:
+              raise SystemExit("connection assignment anchor drifted")
+          text = text.replace(
+              assign_anchor,
+              "        self.createIfMissing = createIfMissing\n        self.pendingPaneSeedByteLimit = max(0, pendingPaneSeedByteLimit)\n        self.sendKeysBatchBuilder = sendKeysBatchBuilder",
+              1,
+          )
+          connection.write_text(text)
+
+          commands = Path("Sources/RemoteTmuxControlConnection+Commands.swift")
+          text = commands.read_text()
+          call = "RemoteTmuxSendKeysBatchBuilder.commands("
+          if text.count(call) != 1:
+              raise SystemExit(f"expected one static builder call, found {text.count(call)}")
+          commands.write_text(text.replace(call, "sendKeysBatchBuilder.commands(", 1))
+
+          tests = Path("Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteTmuxSendKeysBatchBuilderTests.swift")
+          text = tests.read_text()
+          suite_anchor = "@Suite struct RemoteTmuxSendKeysBatchBuilderTests {\n"
+          if suite_anchor not in text:
+              raise SystemExit("package test suite anchor drifted")
+          text = text.replace(
+              suite_anchor,
+              suite_anchor + "    private let builder = RemoteTmuxSendKeysBatchBuilder()\n\n",
+              1,
+          )
+          text = text.replace("RemoteTmuxSendKeysBatchBuilder.commands(", "builder.commands(")
+          tests.write_text(text)
+          PY
+
+          git diff --check
+          git add \
+            Packages/macOS/CmuxRemoteSession/Sources/CmuxRemoteSession/RemoteTmux/RemoteTmuxSendKeysBatchBuilder.swift \
+            Packages/macOS/CmuxRemoteSession/Tests/CmuxRemoteSessionTests/RemoteTmuxSendKeysBatchBuilderTests.swift \
+            Sources/RemoteTmuxControlConnection+Commands.swift \
+            Sources/RemoteTmuxControlConnection.swift \
+            Sources/RemoteTmuxPaneInputForwarder.swift \
+            cmuxTests/RemoteTmuxAuthTests.swift
+          git commit -m "fix: bound ssh-tmux send-key batches"
+          git push --force origin "HEAD:$CANDIDATE_BRANCH"

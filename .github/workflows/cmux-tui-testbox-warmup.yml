@@ -25,7 +25,7 @@ concurrency:
 jobs:
   cmux-tui-rust:
     name: cmux-tui Rust setup
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     environment:
       # Configure this environment with required reviewers, no secrets, and a
       # deployment branch rule of exactly `main`. Approval is evaluated before
@@ -205,7 +205,7 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
           TESTBOX_ID: ${{ inputs.testbox_id }}
-          RUNNER_LABEL: blacksmith-32vcpu-ubuntu-2404
+          RUNNER_LABEL: ubuntu-24.04
         shell: bash
         run: |
           set -euo pipefail

@@ -7,6 +7,7 @@ import CmuxTestSupport
 import CmuxTerminal
 import CmuxFoundation
 import CmuxSettings
+import UniformTypeIdentifiers
 
 /// View for rendering a terminal panel
 struct TerminalPanelView: View {
@@ -20,6 +21,9 @@ struct TerminalPanelView: View {
     @AppStorage(SessionContentWidthSettings.alignmentKey)
     private var storedSessionContentAlignment = SessionContentAlignment.center.rawValue
     @State private var terminalFontSize = GhosttyConfig.loadForCmux(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
+    @State private var clipboardPreview: TerminalClipboardPreview?
+    @State private var clipboardPreviewChangeCount = -1
+    @State private var pathPeek: TerminalPathPeek?
     let paneId: PaneID
     let isFocused: Bool
     let isVisibleInUI: Bool
@@ -152,7 +156,7 @@ struct TerminalPanelView: View {
                         onFocus()
                     },
                     onToggleFocus: {
-                        _ = panel.focusTextBoxInputOrTerminal()
+                        panel.focusTextBoxInputOrTerminal()
                     },
                     onSelectSubmitAction: { actionID in
                         panel.textBoxState.selectSubmitAction(actionID)
@@ -177,12 +181,113 @@ struct TerminalPanelView: View {
                     }
                 )
                 .sessionContentWidth(fillsHeight: false)
+                .overlay(alignment: .bottomLeading) {
+                    if shouldWatchClipboardPreview,
+                       let clipboardPreview {
+                        TerminalClipboardPreviewOverlay(
+                            preview: clipboardPreview,
+                            foregroundColor: appearance.foregroundColor
+                        )
+                        .id(clipboardPreviewChangeCount)
+                        .transition(.opacity)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let pathPeek {
+                        TerminalPathPeekOverlay(
+                            peek: pathPeek,
+                            foregroundColor: appearance.foregroundColor
+                        )
+                        .offset(y: -32)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottomLeading)))
+                    }
+                }
+                .animation(.easeOut(duration: 0.12), value: clipboardPreviewChangeCount)
+                .animation(.easeOut(duration: 0.10), value: pathPeek)
+                .task(id: shouldWatchClipboardPreview) {
+                    if shouldWatchClipboardPreview {
+                        await watchClipboardPreview()
+                    } else {
+                        clipboardPreview = nil
+                    }
+                }
+                .task(id: pathPeekTaskKey) {
+                    await updatePathPeekAfterIdle()
+                }
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: .ghosttyTerminalFontSizeDidChange)) { _ in
             terminalFontSize = GhosttyConfig.loadForCmux(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
+    }
+
+    private var shouldWatchClipboardPreview: Bool {
+        isVisibleInUI
+            && panel.isTextBoxActive
+            && panel.textBoxContent.isEmpty
+            && panel.textBoxAttachments.isEmpty
+    }
+
+    @MainActor
+    private func watchClipboardPreview() async {
+        clipboardPreviewChangeCount = -1
+        refreshClipboardPreviewIfNeeded()
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: NSApp.isActive ? 120_000_000 : 450_000_000)
+            } catch {
+                break
+            }
+            guard !Task.isCancelled else { break }
+            refreshClipboardPreviewIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func refreshClipboardPreviewIfNeeded() {
+        let pasteboard = NSPasteboard.general
+        let changeCount = pasteboard.changeCount
+        guard changeCount != clipboardPreviewChangeCount else { return }
+        clipboardPreviewChangeCount = changeCount
+        clipboardPreview = TerminalClipboardPreview.read(from: pasteboard)
+    }
+
+    private var pathPeekTaskKey: String {
+        [
+            isVisibleInUI ? "1" : "0",
+            panel.isTextBoxActive ? "1" : "0",
+            completionRootDirectory ?? "",
+            panel.textBoxContent
+        ].joined(separator: "\u{1f}")
+    }
+
+    @MainActor
+    private func updatePathPeekAfterIdle() async {
+        pathPeek = nil
+        guard isVisibleInUI,
+              panel.isTextBoxActive,
+              let rootDirectory = completionRootDirectory,
+              let request = TerminalPathPeekRequest.parse(
+                text: panel.textBoxContent,
+                rootDirectory: rootDirectory
+              ) else {
+            return
+        }
+
+        do {
+            try await Task.sleep(nanoseconds: 350_000_000)
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        let result = await Task.detached(priority: .utility) {
+            request.loadPeek()
+        }.value
+        guard !Task.isCancelled else { return }
+        pathPeek = result
     }
 
     private var sessionContentWidthPresentation: SessionContentWidthPresentation {
@@ -247,6 +352,231 @@ struct TerminalPanelView: View {
         } else {
             context += "\n\(marker)"
         }
+    }
+}
+
+private struct TerminalClipboardPreview: Equatable {
+    let label: String
+
+    @MainActor
+    static func read(from pasteboard: NSPasteboard) -> TerminalClipboardPreview? {
+        let types = pasteboard.types ?? []
+
+        if types.contains(.fileURL),
+           let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+           !urls.isEmpty {
+            if urls.count == 1 {
+                let name = urls[0].lastPathComponent.isEmpty ? urls[0].path : urls[0].lastPathComponent
+                return TerminalClipboardPreview(label: "clipboard · \(name)")
+            }
+            return TerminalClipboardPreview(label: "clipboard · \(urls.count) files")
+        }
+
+        if types.contains(where: isImageType) {
+            return TerminalClipboardPreview(label: "clipboard · image")
+        }
+
+        if let rawText = GhosttyApp.terminalPasteboard.fallbackPlainTextContents(from: pasteboard) {
+            let collapsed = rawText
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !collapsed.isEmpty else { return nil }
+            let limit = 84
+            let excerpt = collapsed.count > limit
+                ? String(collapsed.prefix(limit - 1)) + "…"
+                : collapsed
+            return TerminalClipboardPreview(label: "clipboard · “\(excerpt)”")
+        }
+
+        return nil
+    }
+
+    private static func isImageType(_ type: NSPasteboard.PasteboardType) -> Bool {
+        if type == .tiff || type == .png { return true }
+        guard let utType = UTType(type.rawValue) else { return false }
+        return utType.conforms(to: .image)
+    }
+}
+
+private struct TerminalClipboardPreviewOverlay: View {
+    let preview: TerminalClipboardPreview
+    let foregroundColor: NSColor
+
+    var body: some View {
+        Text(preview.label)
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.38))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
+            .padding(.horizontal, 7)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct TerminalPathPeekRequest: Sendable {
+    let directoryPath: String
+    let fragment: String
+    let exactPath: String?
+
+    static func parse(text: String, rootDirectory: String) -> TerminalPathPeekRequest? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard let rawLast = parts.last else { return nil }
+        let token = rawLast.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        guard !token.isEmpty, !token.hasPrefix("-") else { return nil }
+
+        let pathCommands: Set<String> = [
+            "cd", "ls", "ll", "la", "cat", "bat", "less", "open", "head", "tail",
+            "rg", "fd", "find", "vim", "nvim", "micro", "code", "tree", "du", "wc"
+        ]
+        let command = parts.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        let explicitPath = token.hasPrefix("./")
+            || token.hasPrefix("../")
+            || token.hasPrefix("~/")
+            || token.hasPrefix("/")
+            || token.contains("/")
+        guard explicitPath || (parts.count >= 2 && pathCommands.contains(command)) else {
+            return nil
+        }
+
+        let expanded: String
+        if token == "~" {
+            expanded = FileManager.default.homeDirectoryForCurrentUser.path
+        } else if token.hasPrefix("~/") {
+            expanded = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(String(token.dropFirst(2)))
+                .path
+        } else if token.hasPrefix("/") {
+            expanded = token
+        } else {
+            expanded = URL(fileURLWithPath: rootDirectory, isDirectory: true)
+                .appendingPathComponent(token)
+                .path
+        }
+        let standardized = URL(fileURLWithPath: expanded).standardizedFileURL.path
+
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory) {
+            if isDirectory.boolValue {
+                return TerminalPathPeekRequest(
+                    directoryPath: standardized,
+                    fragment: "",
+                    exactPath: standardized
+                )
+            }
+            return TerminalPathPeekRequest(
+                directoryPath: URL(fileURLWithPath: standardized).deletingLastPathComponent().path,
+                fragment: URL(fileURLWithPath: standardized).lastPathComponent,
+                exactPath: standardized
+            )
+        }
+
+        let url = URL(fileURLWithPath: standardized)
+        return TerminalPathPeekRequest(
+            directoryPath: url.deletingLastPathComponent().path,
+            fragment: url.lastPathComponent,
+            exactPath: nil
+        )
+    }
+
+    func loadPeek() -> TerminalPathPeek? {
+        if let exactPath {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: exactPath, isDirectory: &isDirectory),
+               !isDirectory.boolValue {
+                return .file(Self.fileSummary(path: exactPath))
+            }
+        }
+
+        let directoryURL = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+
+        let needle = fragment.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        let matches = children.compactMap { url -> TerminalPathPeek.Entry? in
+            guard !Task.isCancelled else { return nil }
+            let name = url.lastPathComponent
+            let folded = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            guard needle.isEmpty || folded.hasPrefix(needle) || folded.contains(needle) else { return nil }
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+            guard values?.isDirectory == true || values?.isRegularFile == true else { return nil }
+            return TerminalPathPeek.Entry(name: name, isDirectory: values?.isDirectory == true)
+        }
+        .sorted { lhs, rhs in
+            if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory && !rhs.isDirectory }
+            let leftPrefix = lhs.name.lowercased().hasPrefix(needle.lowercased())
+            let rightPrefix = rhs.name.lowercased().hasPrefix(needle.lowercased())
+            if leftPrefix != rightPrefix { return leftPrefix }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+
+        guard !matches.isEmpty else { return nil }
+        let directoryName = directoryURL.lastPathComponent.isEmpty ? directoryURL.path : directoryURL.lastPathComponent + "/"
+        return .directory(name: directoryName, entries: Array(matches.prefix(5)))
+    }
+
+    private static func fileSummary(path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        let values = try? url.resourceValues(forKeys: [.fileSizeKey])
+        let byteCount = values?.fileSize ?? 0
+        let size: String
+        if byteCount >= 1_000_000 {
+            size = String(format: "%.1f MB", Double(byteCount) / 1_000_000)
+        } else if byteCount >= 1_000 {
+            size = String(format: "%.1f KB", Double(byteCount) / 1_000)
+        } else {
+            size = "\(byteCount) B"
+        }
+        let kind = url.pathExtension.isEmpty ? "file" : url.pathExtension.uppercased()
+        return "\(name) · \(kind) · \(size)"
+    }
+}
+
+private enum TerminalPathPeek: Equatable {
+    struct Entry: Equatable, Sendable {
+        let name: String
+        let isDirectory: Bool
+    }
+
+    case directory(name: String, entries: [Entry])
+    case file(String)
+
+    var label: String {
+        switch self {
+        case .file(let summary):
+            return summary
+        case .directory(let name, let entries):
+            let children = entries.map { $0.isDirectory ? $0.name + "/" : $0.name }.joined(separator: "   ")
+            return "\(name) · \(children)"
+        }
+    }
+}
+
+private struct TerminalPathPeekOverlay: View {
+    let peek: TerminalPathPeek
+    let foregroundColor: NSColor
+
+    var body: some View {
+        Text(peek.label)
+            .font(.system(size: 11, weight: .regular, design: .monospaced))
+            .foregroundStyle(Color(nsColor: foregroundColor).opacity(0.46))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 7)
+            .frame(height: 25)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

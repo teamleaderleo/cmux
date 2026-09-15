@@ -1,13 +1,6 @@
 name: Nightly macOS build
 
 on:
-  # Publish every changed main revision, while keeping the scheduled cache warm.
-  push:
-    branches:
-      - main
-  schedule:
-    - cron: "17 */6 * * *"
-    - cron: "47 8 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -51,7 +44,7 @@ env:
 
 jobs:
   decide:
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
       head_sha: ${{ steps.decide.outputs.head_sha }}
@@ -1044,7 +1037,7 @@ jobs:
   publish-nightly:
     needs: [decide, build-sign-notarize-nightly]
     if: needs.decide.outputs.should_build == 'true' && needs.decide.outputs.fast_build != 'true' && needs.decide.outputs.build_only != 'true' && (github.event_name != 'schedule' || github.event.schedule == '47 8 * * *')
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       NIGHTLY_LEGACY_VARIANT: ${{ needs.decide.outputs.legacy_variant }}
@@ -1184,7 +1177,7 @@ jobs:
   report-nightly-failure:
     needs: [decide, build-nightly-ghostty-cli-helper, build-nightly-app, build-sign-notarize-nightly, publish-nightly]
     if: always() && needs.decide.outputs.should_publish == 'true' && contains(needs.*.result, 'failure')
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     permissions:
       contents: read
       issues: write
@@ -1218,7 +1211,7 @@ jobs:
   close-nightly-failure-issue:
     needs: [decide, publish-nightly]
     if: needs.decide.outputs.should_publish == 'true' && needs.publish-nightly.result == 'success'
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     permissions:
       contents: read
       issues: write
