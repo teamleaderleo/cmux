@@ -38,6 +38,16 @@ function fixture(provider) {
   return {actions, set, click, owner, advance: ms => { now += ms; }};
 }
 for (const provider of ['Codex', 'Claude', 'OpenCode']) {
+  test(provider+': another provider with the same session ID cannot own the conversation', () => {
+    const f = fixture(provider);
+    const other = f.owner('other-provider', 'wrong-panel');
+    other.agents[0].kind = provider === 'Codex' ? 'claude' : 'codex';
+    f.set('workspaces', [other]);
+    f.click();
+    assert.equal(f.actions.length, 1);
+    assert.equal(f.actions[0].method, 'workspace.create');
+    assert.equal(f.actions[0].params.description, 'tk-history:'+provider+':session0');
+  });
   test(provider+': history/filter/scroll updates never request launches', () => {
     const f = fixture(provider);
     for (const view of [

@@ -11,16 +11,17 @@ node scripts/test-conversation-sidebar.cjs
 node --test scripts/test-conversation-lifecycle-runtime.cjs
 ```
 
-The first command runs the existing grouping, selection, paging, focus and disposed-handler checks. The second adds 12 tests, using the production sidebar and reactive runtime with a controlled clock and captured host actions, parameterized across Codex, Claude and OpenCode:
+The first command runs the existing grouping, selection, paging, focus and disposed-handler checks. The second adds 15 tests, using the production sidebar and reactive runtime with a controlled clock and captured host actions, parameterized across Codex, Claude and OpenCode:
 
 - Rendering/filtering/paging 30 history entries emits no launch request.
+- Matching session IDs from another provider do not claim this provider’s conversation.
 - Ten repeated clicks emit one create request; a linked session emits exact workspace/panel focus actions, including after a move.
 - Ten close/restore cycles at the same clock time each emit one fresh operation. A stale agent record with no corresponding panel is not a live owner.
 - An unconfirmed launch suppresses retries for the current 15-second timeout.
 
 The last item characterizes a limitation, not a desired latency target: there is no explicit launch-failure acknowledgement in this sidebar flow. Replace timeout-only recovery with authoritative operation completion/error handling in a future runtime change.
 
-CI wiring is pending: GitHub rejected adding the workflow because the current OAuth credential lacks workflow scope. The draft is preserved locally at `/Users/leoli/Projects/recovery/conversation-sidebar-contracts.yml`. Run both commands manually meanwhile; local passage does not claim a remote CI result.
+The `Conversation sidebar contracts` workflow runs both commands on relevant pushes and pull requests using Linux and Node 22. Pushes can use the configured GitHub SSH identity; the HTTPS OAuth credential used initially cannot update workflows. Local passage does not claim a remote CI result.
 
 ## Existing native coverage: present, not rerun in this test-only pass
 
