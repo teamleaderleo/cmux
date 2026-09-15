@@ -26,6 +26,7 @@ function fixture(provider) {
     title: 'Conversation '+i, cwd: '/project', group: '/project', updated: 30-i,
     command: 'fixture resume session'+i}));
   set('history', history); set('workspaces', []);
+  set('launchFailureLabel', 'Could not open. Click to retry.');
   set('historyView', {provider: 'All', query: '', limit: 24});
   vm.runInContext(fs.readFileSync(path.join(resources, 'ConversationSidebar.js'), 'utf8'), host);
   const click = () => {
@@ -35,7 +36,7 @@ function fixture(provider) {
   const owner = (workspace, panel) => ({id: workspace, selected: true,
     agents: [{id: 'session0', kind: provider.toLowerCase(), panelId: panel}],
     tabs: [{id: panel, surfaceId: 'internal-'+panel, title: 'Conversation 0', focused: true}]});
-  return {actions, set, click, owner, advance: ms => { now += ms; }};
+  return {actions, set, click, owner, failed: () => [...nodes.values()].some(n => n.text === 'Could not open. Click to retry.'), advance: ms => { now += ms; }};
 }
 for (const provider of ['Codex', 'Claude', 'OpenCode']) {
   test(provider+': another provider with the same session ID cannot own the conversation', () => {
@@ -52,9 +53,13 @@ for (const provider of ['Codex', 'Claude', 'OpenCode']) {
     const f = fixture(provider); f.click();
     const first = f.actions[0].params.operation_id;
     f.set('actionResult', {operationID: first, accepted: false});
+    assert.equal(f.failed(), true);
     f.click(); assert.equal(f.actions.length, 2);
+    assert.equal(f.failed(), false);
     f.set('actionResult', {operationID: first, accepted: false});
+    assert.equal(f.failed(), true);
     f.click(); assert.equal(f.actions.length, 2);
+    assert.equal(f.failed(), false);
     f.set('actionResult', {operationID: f.actions[1].params.operation_id, accepted: true});
     f.click(); assert.equal(f.actions.length, 2, 'Accepted dispatch is not confirmed ownership');
   });
