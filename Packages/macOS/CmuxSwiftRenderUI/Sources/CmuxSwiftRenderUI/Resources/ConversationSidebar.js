@@ -53,6 +53,17 @@ effect(() => {
   setPending(next);
 });
 
+// A rejected host operation releases only its own pending request. Accepted
+// dispatch still waits for a live binding; it does not mean the provider is ready.
+effect(() => {
+  const result = data.actionResult?.();
+  if (!result || result.accepted !== false) return;
+  const values = pending();
+  const rowKey = Object.keys(values).find(k => values[k].operationID === result.operationID);
+  if (!rowKey) return;
+  const next = {...values}; delete next[rowKey]; setPending(next);
+});
+
 function isSelected(r) {
   const target = linked(r);
   if (!target || !target.w.selected) return false;
@@ -68,11 +79,12 @@ function focus(r) {
 }
 function resume(r) {
   if (linked(r)) return focus(r);
-  if (Date.now() - (pending()[key(r)] || 0) < 15000) return;
-  setPending({...pending(), [key(r)]: Date.now()});
+  if (Date.now() - (pending()[key(r)]?.started || 0) < 15000) return;
+  const operationID = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);});
+  setPending({...pending(), [key(r)]: {started: Date.now(), operationID}});
   cmux('workspace.create', {title: r.title, working_directory: r.cwd,
     description: 'tk-history:' + key(r), initial_command: r.command, conversation_placement: 'tab',
-    operation_id: 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);}), focus: true});
+    operation_id: operationID, focus: true});
 }
 
 function visibleHistory() {

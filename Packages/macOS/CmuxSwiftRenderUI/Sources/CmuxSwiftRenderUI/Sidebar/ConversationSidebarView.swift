@@ -51,6 +51,12 @@ public struct ConversationSidebarView: View {
         let sink = dispatch
         let identifier = ownerWindowID
         let attached = ownerWindowNumber != nil
+        if let perform = sink.perform {
+            return SidebarActionDispatch(perform: { action in
+                guard attached else { return false }
+                return await perform(ConversationWindowRouting.scope(action, identifier: identifier))
+            })
+        }
         return SidebarActionDispatch { action in
             guard attached else { return }
             sink.run(ConversationWindowRouting.scope(action, identifier: identifier))

@@ -5,6 +5,29 @@ import Foundation
 
 @MainActor
 struct SidebarJSRuntimeTests {
+    @Test(arguments: [true, false])
+    func acknowledgedDispatchPublishesExactOperationResult(accepted: Bool) async throws {
+        let runtime = SidebarJSRuntime()
+        let (events, continuation) = AsyncStream<String>.makeStream()
+        defer { continuation.finish() }
+        runtime.dispatch = SidebarActionDispatch(perform: { action in
+            for command in action.commands {
+                if case let .cmux(method, params) = command, method == "test.result" {
+                    continuation.yield(params["value"] ?? "")
+                }
+            }
+            return accepted
+        })
+        #expect(runtime.start(source: """
+        effect(() => { const r = data.actionResult(); if (r) cmux('test.result', {value: r.operationID + ':' + r.accepted}); });
+        sidebar(() => Button('Open', () => cmux('workspace.create', {operation_id:'exact-request'})));
+        """))
+        let button = try #require(runtime.store.rootId)
+        runtime.dispatchEvent(nodeId: button, event: "tap")
+        var iterator = events.makeAsyncIterator()
+        #expect(await iterator.next() == "exact-request:\(accepted)")
+    }
+
     /// Actions dispatch one main-queue turn after the event (paint-before-
     /// command); suspend so the queued dispatch runs before asserting.
     private func pumpActions() async {

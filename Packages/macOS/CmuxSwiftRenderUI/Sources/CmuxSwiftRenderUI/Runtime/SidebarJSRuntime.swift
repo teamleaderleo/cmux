@@ -138,8 +138,19 @@ public final class SidebarJSRuntime {
         // click then feels laggy even though the state already flipped.
         // Ordering between queued actions is preserved.
         let dispatch = self.dispatch
-        DispatchQueue.main.async {
-            dispatch.run(action)
+        let operationID = (object["params"] as? [String: String])?["operation_id"]
+        let originatingContext = context
+        Task { @MainActor [weak self] in
+            if let perform = dispatch.perform {
+                let accepted = await perform(action)
+                // A completed action from an old program must not affect a new one.
+                guard let self, self.context === originatingContext, let operationID else { return }
+                self.updateData(key: "actionResult", value: .object([
+                    "operationID": .string(operationID), "accepted": .bool(accepted)
+                ]))
+            } else {
+                dispatch.run(action)
+            }
         }
     }
 

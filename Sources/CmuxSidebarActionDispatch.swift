@@ -31,7 +31,7 @@ private let sidebarSelectCoalescer = SidebarSelectCoalescer()
 /// socket CLI uses); `log` is a debug-only no-op for now.
 @MainActor
 func makeCmuxSidebarActionDispatch() -> SidebarActionDispatch {
-    SidebarActionDispatch { action in
+    SidebarActionDispatch(perform: { action in
         // Capture the controller on the main actor, then run the whole command
         // sequence on the serial worker queue so the commands keep their authored
         // order. handleSocketLine runs worker-lane methods (browser JS, waits) on
@@ -40,63 +40,80 @@ func makeCmuxSidebarActionDispatch() -> SidebarActionDispatch {
         let controller = TerminalController.shared
         let commands = action.commands
         let selectGeneration = sidebarSelectCoalescer.generation(for: commands)
-        cmuxSidebarWorkerQueue.async {
-            // A newer select is already queued behind this one: skip the heavy
-            // switch, the burst's final click defines the end state.
-            if let selectGeneration, !sidebarSelectCoalescer.isCurrent(selectGeneration) {
-                return
-            }
-            // Resolve immediately before dispatch, against every live window. This
-            // also catches a session opened after the sidebar's last context tick.
-            let resolved = DispatchQueue.main.sync {
-                commands.flatMap(reuseOpenConversation)
-            }
-            for command in resolved {
-                switch command {
-                case let .cmux(method, params):
-                    var payload: [String: Any] = ["method": method, "id": UUID().uuidString]
-                    if !params.isEmpty {
-                        // Params arrive as strings; coerce integer-looking values
-                        // (e.g. a reorder `index`) to numbers so typed v2 params
-                        // like v2Int decode them.
-                        var typed: [String: Any] = [:]
-                        for (key, value) in params {
-                            if let intValue = Int(value) {
-                                typed[key] = intValue
-                            } else if value.hasPrefix("["),
-                                      let data = value.data(using: .utf8),
-                                      let array = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
-                                // Array-typed v2 params (e.g. child_workspace_ids)
-                                // travel as JSON strings through the string-only
-                                // action pipe; inflate them here.
-                                typed[key] = array
-                            } else {
-                                typed[key] = value
-                            }
-                        }
-                        payload["params"] = typed
-                    }
-                    guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                          let line = String(data: data, encoding: .utf8) else { continue }
-                    _ = controller.handleSocketLine(line)
-                case let .openURL(urlString):
-                    // NSWorkspace.open is main-only; run it synchronously to keep the
-                    // command's position in the sequence.
-                    if let url = URL(string: urlString) {
-                        DispatchQueue.main.sync { _ = NSWorkspace.shared.open(url) }
-                    }
-                case .log:
-                    break
+        return await withCheckedContinuation { continuation in
+            // Existing serial lane preserves command order and keeps socket work off the main actor.
+            cmuxSidebarWorkerQueue.async {
+                // A newer select is already queued behind this one: skip the heavy
+                // switch, the burst's final click defines the end state.
+                if let selectGeneration, !sidebarSelectCoalescer.isCurrent(selectGeneration) {
+                    continuation.resume(returning: true)
+                    return
                 }
+                // Resolve immediately before dispatch, against every live window. This
+                // also catches a session opened after the sidebar's last context tick.
+                let resolution = DispatchQueue.main.sync {
+                    Result { try commands.flatMap(reuseOpenConversation) }
+                }
+                guard case let .success(resolved) = resolution else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                var accepted = true
+                for command in resolved {
+                    switch command {
+                    case let .cmux(method, params):
+                        var payload: [String: Any] = ["method": method, "id": UUID().uuidString]
+                        if !params.isEmpty {
+                            // Params arrive as strings; coerce integer-looking values
+                            // (e.g. a reorder `index`) to numbers so typed v2 params
+                            // like v2Int decode them.
+                            var typed: [String: Any] = [:]
+                            for (key, value) in params {
+                                if let intValue = Int(value) {
+                                    typed[key] = intValue
+                                } else if value.hasPrefix("["),
+                                          let data = value.data(using: .utf8),
+                                          let array = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
+                                    // Array-typed v2 params (e.g. child_workspace_ids)
+                                    // travel as JSON strings through the string-only
+                                    // action pipe; inflate them here.
+                                    typed[key] = array
+                                } else {
+                                    typed[key] = value
+                                }
+                            }
+                            payload["params"] = typed
+                        }
+                        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                              let line = String(data: data, encoding: .utf8) else { accepted = false; continue }
+                        let response = controller.handleSocketLine(line)
+                        let object = response.data(using: .utf8).flatMap {
+                            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                        }
+                        // An unreadable response is ambiguous; never release a launch claim on that basis.
+                        if object?["ok"] as? Bool == false { accepted = false }
+                    case let .openURL(urlString):
+                        // NSWorkspace.open is main-only; run it synchronously to keep the
+                        // command's position in the sequence.
+                        if let url = URL(string: urlString) {
+                            DispatchQueue.main.sync { _ = NSWorkspace.shared.open(url) }
+                        }
+                    case .log:
+                        break
+                    }
+                }
+                continuation.resume(returning: accepted)
             }
         }
-    }
+    })
 }
+
+private enum ConversationDispatchError: Error { case rejected }
 
 /// Resume actions carry an exact provider/session identity. Reuse its live
 /// terminal across windows before allocating another provider process.
 @MainActor
-private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] {
+private func reuseOpenConversation(_ command: ActionCommand) throws -> [ActionCommand] {
     guard case let .cmux(method, params) = command, method == "workspace.create",
           let description = params["description"], description.hasPrefix("tk-history:"),
           let app = AppDelegate.shared else { return [command] }
@@ -161,7 +178,9 @@ private func reuseOpenConversation(_ command: ActionCommand) -> [ActionCommand] 
        let pane = workspace.paneId(forPanelId: panelID),
        let entry = ConversationSidebarDragSource.makeEntry(provider: provider, sessionID: session,
            title: params["title"] ?? "", directory: params["working_directory"] ?? "") {
-        _ = workspace.handleSessionDrop(entry: entry, destination: .insert(targetPane: pane, targetIndex: nil))
+        guard workspace.handleSessionDrop(entry: entry, destination: .insert(targetPane: pane, targetIndex: nil)) else {
+            throw ConversationDispatchError.rejected
+        }
         return []
     }
     return [command]
