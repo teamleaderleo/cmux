@@ -2,6 +2,7 @@
 const history = computed(() => data.history() || []);
 const [collapsed, setCollapsed] = signal({});
 const [pending, setPending] = signal({});
+const [failed, setFailed] = signal({});
 // Filter, query and page size arrive atomically so a provider switch cannot
 // briefly mount the previous provider's expanded page count.
 function viewProvider() { return data.historyView?.()?.provider ?? data.providerFilter(); }
@@ -61,6 +62,7 @@ effect(() => {
   const values = pending();
   const rowKey = Object.keys(values).find(k => values[k].operationID === result.operationID);
   if (!rowKey) return;
+  setFailed({...failed(), [rowKey]: true});
   const next = {...values}; delete next[rowKey]; setPending(next);
 });
 
@@ -81,6 +83,7 @@ function resume(r) {
   if (linked(r)) return focus(r);
   if (Date.now() - (pending()[key(r)]?.started || 0) < 15000) return;
   const operationID = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);});
+  const failures = {...failed()}; delete failures[key(r)]; setFailed(failures);
   setPending({...pending(), [key(r)]: {started: Date.now(), operationID}});
   cmux('workspace.create', {title: r.title, working_directory: r.cwd,
     description: 'tk-history:' + key(r), initial_command: r.command, conversation_placement: 'tab',
@@ -146,7 +149,12 @@ function conversationList() { return VStack({spacing:2}, [
       ]).paddingLeading(()=>g().pinned?10:28).paddingTrailing(1).paddingVertical(6).cornerRadius(7)
         .background(()=>isSelected(r()) ? '#80808030' : null)
       ]).conversationProvider(()=>r().provider).conversationID(()=>r().id)
-        .conversationTitle(()=>r().title).conversationDirectory(()=>r().cwd)
+        .conversationTitle(()=>r().title).conversationDirectory(()=>r().cwd),
+      ForEach({items:()=>failed()[key(r())] && !linked(r())?[key(r())]:[],key:n=>n},()=>
+        Button(()=>data.launchFailureLabel(),()=>focus(r()),[
+          Text(()=>data.launchFailureLabel()).font(11).secondary()
+        ]).paddingLeading(()=>g().pinned?10:28).paddingVertical(2)
+      )
     ]))
   ])),
   ForEach({items:()=>groups().length ? [] : [0],key:n=>n},()=>Text('No conversations found').font(12).secondary().padding(10))

@@ -57,7 +57,7 @@ for (const provider of ['Codex', 'Claude', 'OpenCode']) {
     f.click(); assert.equal(f.actions.length, 2);
     assert.equal(f.failed(), false);
     f.set('actionResult', {operationID: first, accepted: false});
-    assert.equal(f.failed(), true);
+    assert.equal(f.failed(), false, 'Stale rejection must not display a new failure');
     f.click(); assert.equal(f.actions.length, 2);
     assert.equal(f.failed(), false);
     f.set('actionResult', {operationID: f.actions[1].params.operation_id, accepted: true});

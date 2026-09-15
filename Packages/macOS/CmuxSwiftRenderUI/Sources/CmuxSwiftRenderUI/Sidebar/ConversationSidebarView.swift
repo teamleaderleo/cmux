@@ -90,6 +90,7 @@ public struct ConversationSidebarView: View {
             "limit": .int(visibleIdentity == providerFilter + ":" + searchQuery ? visibleCount : 24)
         ])
         result["historyLabel"] = .string(String(localized: "conversation.history", defaultValue: "History", bundle: .module))
+        result["launchFailureLabel"] = .string(String(localized: "conversation.launchFailure", defaultValue: "Could not open. Click to retry.", bundle: .module))
         // Resync the retained action handler when its native window attaches.
         result["ownerWindow"] = .string((ownerWindowID ?? "") + ":" + (ownerWindowNumber.map(String.init) ?? ""))
         result["commandHeld"] = .bool(commandHeld)
