@@ -231,7 +231,7 @@ else
       # bundle, skipped by -Demit-macos-app=false). Runtime lookups are
       # comptime-gated to return the msgid, which is what cmux shipped
       # all along.
-      zig build \
+      zig build -j"${CMUX_GHOSTTYKIT_JOBS:-4}" \
         -Dcrash-report-subdir="$GHOSTTYKIT_CRASH_REPORT_SUBDIR" \
         -Dsentry=false \
         -Di18n=false \
