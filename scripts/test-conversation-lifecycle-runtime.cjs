@@ -48,6 +48,16 @@ for (const provider of ['Codex', 'Claude', 'OpenCode']) {
     assert.equal(f.actions[0].method, 'workspace.create');
     assert.equal(f.actions[0].params.description, 'tk-history:'+provider+':session0');
   });
+  test(provider+': rejected launch retries immediately and stale failure cannot release the new request', () => {
+    const f = fixture(provider); f.click();
+    const first = f.actions[0].params.operation_id;
+    f.set('actionResult', {operationID: first, accepted: false});
+    f.click(); assert.equal(f.actions.length, 2);
+    f.set('actionResult', {operationID: first, accepted: false});
+    f.click(); assert.equal(f.actions.length, 2);
+    f.set('actionResult', {operationID: f.actions[1].params.operation_id, accepted: true});
+    f.click(); assert.equal(f.actions.length, 2, 'Accepted dispatch is not confirmed ownership');
+  });
   test(provider+': history/filter/scroll updates never request launches', () => {
     const f = fixture(provider);
     for (const view of [
