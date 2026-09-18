@@ -26,3 +26,7 @@ scripts/verify-remote.sh capacity             # all-purpose slots
 ```
 
 Boot a local simulator only when all-purpose `capacity` reports no free slot, and keep at most 3 local sims booted. Scripted XCUITests go through the hosted `test-e2e.yml` lane when appropriate. The physical-iPhone signing/install leg stays local via the install queue; its archive build may use any healthy fleet slot. Verify leases carry a description and TTL, so a crashed agent frees its slot automatically; see `skills/infra/macfleet/references/verify-remote.md` in cmuxterm-hq for the shared-pool contract and host onboarding.
+
+## Builder macOS versions
+
+AWS M4 Pro builders (`aws-m4pro-1..6`) run macOS 15.7.4. Foundation, SwiftUI, AttributeGraph, and WebKit semantics change between macOS major versions (see Pitfalls in the root notes), so check the slot's macOS before treating a fleet repro as conclusive.

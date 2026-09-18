@@ -1,6 +1,6 @@
 # cmux-tui agent instructions
 
-Do not run `cargo`, `rustc`, or Zig on Lawrence's Mac. Do not use a local build as a fallback. Commit and push the exact branch head, then use the hosted entry point from the repository root:
+Do not run `cargo`, `rustc`, or Zig on the local Mac. Do not use a local build as a fallback. Commit and push the exact branch head, then use the hosted entry point from the repository root:
 
 ```bash
 ./scripts/verify-cmux-tui-hosted.sh --filter <rust-test-name>
