@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import pathlib
+import signal
 import subprocess
 import time
 
@@ -18,10 +19,18 @@ def main() -> int:
     parser.add_argument("--profile", default="unspecified")
     parser.add_argument("--derived-data", type=pathlib.Path)
     parser.add_argument("--keep-running", action="store_true")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=900,
+        help="maximum seconds per reload; timed-out samples are recorded as failures",
+    )
     parser.add_argument("--output", type=pathlib.Path, required=True)
     args = parser.parse_args()
     if args.iterations < 1:
         parser.error("--iterations must be positive")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
 
     command = ["./scripts/reload.sh", "--tag", args.tag]
     if args.derived_data:
@@ -33,16 +42,37 @@ def main() -> int:
     samples: list[dict[str, object]] = []
     for index in range(args.iterations):
         started = time.monotonic()
-        completed = subprocess.run(
-            command, text=True, capture_output=True, check=False, env=environment
+        timed_out = False
+        process = subprocess.Popen(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = process.communicate(timeout=args.timeout)
+            output = stdout + stderr
+            exit_code = process.returncode
+        except subprocess.TimeoutExpired as timeout:
+            timed_out = True
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            stdout, stderr = process.communicate()
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            output = stdout + stderr
+            exit_code = None
         elapsed = time.monotonic() - started
-        combined = (completed.stdout + completed.stderr).splitlines()
+        combined = output.splitlines()
         samples.append(
             {
                 "iteration": index + 1,
                 "elapsed_seconds": round(elapsed, 3),
-                "exit_code": completed.returncode,
+                "exit_code": exit_code,
+                "timed_out": timed_out,
                 "tail": combined[-20:],
             }
         )
@@ -54,6 +84,7 @@ def main() -> int:
         "iterations": args.iterations,
         "command": command,
         "keep_running": args.keep_running,
+        "timeout_seconds": args.timeout,
         "samples": samples,
         "successful_samples": [
             sample["elapsed_seconds"] for sample in samples if sample["exit_code"] == 0

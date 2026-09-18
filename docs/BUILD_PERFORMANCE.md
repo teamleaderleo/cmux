@@ -41,6 +41,8 @@ python3 scripts/bench-reload-build.py \
 
 Run the same command at each arm and change only `--profile`, `--tag`, and the isolated DerivedData path. Keep the tag and DerivedData unique per concurrent run. A failed sample remains in the JSON receipt and makes the harness exit nonzero.
 
+The harness records every sample, including failed builds, in a JSON receipt. Use `--timeout` to bound a cold-cache or package-resolution stall; timed-out samples are failures and retain the captured output tail.
+
 ## Existing evidence
 
 - PR #56 reports three unchanged tagged native builds at 29.11–33.57 seconds, median 31.87 seconds including Glaeda startup/admission. Its separate 46.56-second sample was uncontrolled.
