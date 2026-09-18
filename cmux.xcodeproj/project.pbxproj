@@ -8791,7 +8791,6 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 /* Begin PBXShellScriptBuildPhase section */
 		C0DE47000000000000000003 /* Write Extension Point */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
