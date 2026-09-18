@@ -20,7 +20,7 @@ struct TerminalPanelView: View {
     private var storedSessionContentMaximumWidth = SessionContentWidthSettings.noMaximumWidth
     @AppStorage(SessionContentWidthSettings.alignmentKey)
     private var storedSessionContentAlignment = SessionContentAlignment.center.rawValue
-    @State private var terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
+    @State private var terminalFontSize = GhosttyConfig.loadForCmux(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
     @State private var clipboardPreview: TerminalClipboardPreview?
     @State private var clipboardPreviewChangeCount = -1
     @State private var pathPeek: TerminalPathPeek?
@@ -217,8 +217,8 @@ struct TerminalPanelView: View {
             }
         }
         .background(Color(nsColor: appearance.contentBackgroundColor))
-        .onReceive(NotificationCenter.default.publisher(for: .ghosttyConfigDidReload)) { _ in
-            terminalFontSize = GhosttyConfig.load(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
+        .onReceive(NotificationCenter.default.publisher(for: .ghosttyTerminalFontSizeDidChange)) { _ in
+            terminalFontSize = GhosttyConfig.loadForCmux(globalFontMagnificationPercent: GlobalFontMagnification.storedPercent).fontSize
         }
     }
 
@@ -634,15 +634,14 @@ private struct AgentHibernationPlaceholderView: View {
                     .controlSize(.small)
                     .accessibilityIdentifier("AgentHibernationTerminationRecoveryProgress")
             case .hibernated:
-                CmuxSystemSymbolImage(magnified: "pause.circle", pointSize: 34, weight: .regular)
-                    .foregroundStyle(.secondary)
+                CmuxSystemSymbolImage(magnified: "pause.circle", pointSize: 34, weight: .regular, tint: .secondary)
             case .failed:
                 CmuxSystemSymbolImage(
                     magnified: "exclamationmark.triangle",
                     pointSize: 34,
-                    weight: .regular
+                    weight: .regular,
+                    tint: .secondary
                 )
-                .foregroundStyle(.secondary)
             }
             VStack(spacing: 4) {
                 Text(title)
