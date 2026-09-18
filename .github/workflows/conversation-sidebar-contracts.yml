@@ -1,0 +1,28 @@
+name: Conversation sidebar contracts
+on:
+  pull_request:
+    paths:
+      - 'Packages/macOS/CmuxSwiftRenderUI/Sources/CmuxSwiftRenderUI/Resources/ConversationSidebar.js'
+      - 'Packages/macOS/CmuxSwiftRenderUI/Sources/CmuxSwiftRenderUI/Resources/SidebarRuntime.js'
+      - 'scripts/test-conversation-*.cjs'
+      - '.github/workflows/conversation-sidebar-contracts.yml'
+  push:
+    branches: [main, codex/current-upstream-tact]
+    paths:
+      - 'Packages/macOS/CmuxSwiftRenderUI/Sources/CmuxSwiftRenderUI/Resources/ConversationSidebar.js'
+      - 'Packages/macOS/CmuxSwiftRenderUI/Sources/CmuxSwiftRenderUI/Resources/SidebarRuntime.js'
+      - 'scripts/test-conversation-*.cjs'
+      - '.github/workflows/conversation-sidebar-contracts.yml'
+permissions:
+  contents: read
+jobs:
+  sidebar-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/test-conversation-sidebar.cjs
+      - run: node --test scripts/test-conversation-lifecycle-runtime.cjs

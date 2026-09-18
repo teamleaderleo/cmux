@@ -31,7 +31,7 @@ jobs:
           contains(github.event.comment.body, 'I have read the CLA Document v2.2 and I hereby sign the CLA')
         )
       )
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 10
     # One run at a time per pull request so two signature events cannot write
     # the ledger from different snapshots. Independent pull requests proceed.

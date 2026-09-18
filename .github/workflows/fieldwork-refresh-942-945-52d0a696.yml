@@ -1,0 +1,104 @@
+name: Fieldwork 942 corrected refresh on e9ec596d
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fieldwork-refresh-942-945-52d0a696.yml
+
+permissions:
+  contents: write
+
+env:
+  BASE_SHA: e9ec596d12d854d6569b53b38bb21b62f8126d56
+  RED_SHA: a50f0480cf88e2574c7ed92e8bad7b28b51ccbb9
+
+jobs:
+  issue-942-corrected:
+    runs-on: macos-15
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Verify exact test-first ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git switch -C fieldwork/942-missing-cwd-refresh-e9ec596d "$RED_SHA"
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: RED missing persisted cwd launches inherited payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests/missingPersistedWorkingDirectoryFailsClosed 2>&1 | tee /tmp/942-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'missingPersistedWorkingDirectoryFailsClosed' /tmp/942-red.log
+          echo "942 RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply required-placement repair including retarget stripping
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('Sources/RestorableAgentSession.swift')
+          s = p.read_text()
+          old = '''    static func prefix(_ command: String, workingDirectory: String?) -> String {
+              guard let prefix = optionalChangeDirectoryPrefix(for: workingDirectory) else {
+                  return command
+              }
+              return prefix + command
+          }
+          '''
+          new = '''    static func prefix(_ command: String, workingDirectory: String?) -> String {
+              guard let workingDirectory = normalized(workingDirectory) else { return command }
+              let quoted = TerminalStartupShellQuoting.singleQuoted(workingDirectory)
+              return "cd -- \\(quoted) 2>/dev/null && \\(command)"
+          }
+          '''
+          if old not in s:
+              raise SystemExit('required prefix owner drifted')
+          s = s.replace(old, new, 1)
+          old_prefix = '                "cd -- \\(quoted) 2>/dev/null || [ ! -d \\(quoted) ] && ",\n'
+          new_prefix = old_prefix + '                "cd -- \\(quoted) 2>/dev/null && ",\n'
+          if old_prefix not in s:
+              raise SystemExit('required prefix stripper drifted')
+          p.write_text(s.replace(old_prefix, new_prefix, 1))
+
+          p = Path('CLI/CMUXCLI+SessionsListForkStartupInput.swift')
+          s = p.read_text()
+          old = 'return "cd -- \\(quoted) 2>/dev/null || [ ! -d \\(quoted) ] && \\(command)"'
+          new = 'return "cd -- \\(quoted) 2>/dev/null && \\(command)"'
+          if old not in s:
+              raise SystemExit('CLI cwd owner drifted')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git add Sources/RestorableAgentSession.swift CLI/CMUXCLI+SessionsListForkStartupInput.swift
+          git commit -m 'fix: fail closed for persisted restore working directory'
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: GREEN discriminator retarget optional shell and focused restore controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests 2>&1 | tee /tmp/942-green.log
+          grep -F 'missingPersistedWorkingDirectoryFailsClosed' /tmp/942-green.log
+          grep -F 'requiredPrefixRetargetsWithoutStackingOldDirectory' /tmp/942-green.log
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ShellStartupMatrixTests
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/SessionPersistenceTests
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/AgentSessionAutoResumeSettingsTests
+          echo "942 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push evidence branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/942-missing-cwd-refresh-e9ec596d
