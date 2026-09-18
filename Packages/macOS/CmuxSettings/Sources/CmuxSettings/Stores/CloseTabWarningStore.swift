@@ -30,6 +30,13 @@ public struct CloseTabWarningStore: CloseTabWarningReading {
         keys.hideTabCloseButton.value(in: defaults)
     }
 
+    /// Suppression applies to tab closing only, and only after accepting Close.
+    public func recordCloseConfirmation(confirmed: Bool, suppressFutureWarnings: Bool) {
+        guard confirmed && suppressFutureWarnings else { return }
+        keys.warnBeforeClosingTab.set(false, in: defaults)
+        keys.warnBeforeClosingTabXButton.set(false, in: defaults)
+    }
+
     /// Enables or disables the close-shortcut warning.
     public func setWarnsBeforeClosingTab(_ isEnabled: Bool) {
         keys.warnBeforeClosingTab.set(isEnabled, in: defaults)

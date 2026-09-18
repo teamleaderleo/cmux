@@ -1,5 +1,6 @@
 /// How a terminal surface should enter its native Ghostty runtime.
 public struct TerminalSurfaceRuntimeSpawnPolicy: Equatable, Sendable {
+    var requiresFirstPresentation = false
     let spawnTiming: TerminalSurfaceRuntimeSpawnTiming
     let requiresStartupRestoreAdmission: Bool
     let cancelsStartupRestoreAdmissionOnExplicitInput: Bool
@@ -33,6 +34,7 @@ public struct TerminalSurfaceRuntimeSpawnPolicy: Equatable, Sendable {
     /// - Returns: A policy with the same spawn timing and an admission gate.
     public func requiringStartupRestoreAdmission() -> Self {
         Self(
+            requiresFirstPresentation: requiresFirstPresentation,
             spawnTiming: spawnTiming,
             requiresStartupRestoreAdmission: true,
             cancelsStartupRestoreAdmissionOnExplicitInput:
@@ -48,9 +50,17 @@ public struct TerminalSurfaceRuntimeSpawnPolicy: Equatable, Sendable {
     /// - Returns: A policy with the same spawn timing and a cancellable gate.
     public func requiringDeferredAgentResumeAdmission() -> Self {
         Self(
+            requiresFirstPresentation: requiresFirstPresentation,
             spawnTiming: spawnTiming,
             requiresStartupRestoreAdmission: true,
             cancelsStartupRestoreAdmissionOnExplicitInput: true
         )
     }
+    /// Defers restored runtimes until their pane is shown or explicit input arrives.
+    public func waitingForFirstPresentation() -> Self {
+        var policy = self
+        policy.requiresFirstPresentation = true
+        return policy
+    }
+
 }

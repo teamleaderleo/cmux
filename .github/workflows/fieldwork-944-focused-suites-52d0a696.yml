@@ -1,0 +1,29 @@
+name: Fieldwork 944 focused Computer Use suites
+
+on:
+  push:
+    branches:
+      - fieldwork/944-computer-use-generation-refresh-52d0a696
+
+permissions:
+  contents: read
+
+jobs:
+  focused-computer-use:
+    runs-on: macos-15
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Verify current-base ancestry
+        run: git merge-base --is-ancestor 52d0a69623430c72d7b5db4b4a5d27c692c30a19 HEAD
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: Run cross-generation suite
+        run: ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests
+      - name: Run Computer Use UX suite
+        run: ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseUXTests

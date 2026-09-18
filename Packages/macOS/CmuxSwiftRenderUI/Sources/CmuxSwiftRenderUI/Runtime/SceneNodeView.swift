@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Sends a scene UI event (tap, move) back to the JS runtime.
 struct SceneEventSink {
@@ -78,17 +79,31 @@ private struct SceneNodeContent: View {
     @Environment(\.sceneEventSink) private var sink
     @Environment(\.sceneHovered) private var ancestorHovered
     @State private var lastTapAt: Date?
+    @Environment(\.conversationDragAdapter) private var conversationDragAdapter
 
     var body: some View {
         // A child of type "contextMenu" is the node's right-click menu, not
         // inline content; everything else renders in place.
         if let menuId = contextMenuChildId {
-            styled(content)
+            draggableContent
                 .contextMenu {
                     SceneNodeView(nodeId: menuId)
                 }
         } else {
-            styled(content)
+            draggableContent
+        }
+    }
+
+    private var draggableContent: some View {
+        styled(content).overlay {
+            if let adapter = conversationDragAdapter,
+               let provider = node.string("conversationProvider"),
+               let id = node.string("conversationID") {
+                adapter.overlay(provider, id, node.string("conversationTitle") ?? "",
+                                node.string("conversationDirectory") ?? "") {
+                    sink.send(node.id, "tap", [:])
+                }
+            }
         }
     }
 
@@ -110,7 +125,9 @@ private struct SceneNodeContent: View {
         case "group":
             children
         case "text":
-            if node.props["marquee"] != nil {
+            if node.props["nativeMarquee"] != nil {
+                NativeMarquee(node: node).frame(height: CGFloat(node.double("font") ?? 13) + 4)
+            } else if node.props["marquee"] != nil {
                 SceneMarqueeText(
                     text: node.string("text") ?? "",
                     delay: node.double("marquee") ?? 0.5
@@ -119,7 +136,11 @@ private struct SceneNodeContent: View {
                 Text(node.string("text") ?? "")
             }
         case "image":
-            Image(systemName: node.string("systemName") ?? "questionmark.square.dashed")
+            if let provider = node.string("provider") {
+                ProviderIcon(provider).frame(width: 14, height: 14)
+            } else {
+                Image(systemName: node.string("systemName") ?? "questionmark.square.dashed")
+            }
         case "button":
             if node.children.isEmpty {
                 Button(node.string("text") ?? "", role: node.bool("destructive") ? .destructive : nil) {
@@ -130,6 +151,9 @@ private struct SceneNodeContent: View {
                     sink.send(node.id, "tap", [:])
                 } label: {
                     VStack(alignment: .leading, spacing: 0) { children }
+                        // Native visual-only labels contribute no SwiftUI hit region.
+                        // The entire rendered label must still activate its button.
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -423,6 +447,144 @@ func sceneMaterial(_ token: String?) -> Material? {
 /// modern macOS chrome. `hoverBackground` is a host-side visual: the hover
 /// state never round-trips through the JS runtime, so it is latency-free and
 /// costs nothing when the prop is absent.
+/// Optional visual-only hover feedback. Tracking changes only this view's layer;
+/// no SwiftUI state or descendant environment is invalidated by pointer movement.
+private struct DirectHoverOverlay: NSViewRepresentable {
+    let color: Color
+    let radius: CGFloat
+    let details: String?
+
+    func makeNSView(context: Context) -> DirectHoverView { DirectHoverView() }
+
+    func updateNSView(_ view: DirectHoverView, context: Context) {
+        view.hoverColor = NSColor(color)
+        view.cornerRadius = radius
+        view.details = details
+        view.refreshAppearance()
+    }
+}
+
+final class DirectHoverView: NSView {
+    private static weak var active: DirectHoverView?
+    var hoverColor: NSColor = .clear
+    var cornerRadius: CGFloat = 0
+    private var tracking: NSTrackingArea?
+    private(set) var hovered = false
+    var details: String?
+    private var pending: DispatchWorkItem?
+    private var popover: NSPanel?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    // The overlay observes hover but leaves clicks and scrolling to the row.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        tracking = area
+        setHovered(window.map { visibleRect.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false)
+    }
+
+    override func mouseEntered(with event: NSEvent) { updatePointer(event) }
+    override func mouseMoved(with event: NSEvent) { updatePointer(event) }
+    private func updatePointer(_ event: NSEvent) {
+        guard NSApp.currentEvent?.type != .scrollWheel else { return }
+        setHovered(window?.windowNumber == event.windowNumber &&
+                   visibleRect.contains(convert(event.locationInWindow, from: nil)))
+    }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        if let clip = enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(scrollPositionChanged), name: NSView.boundsDidChangeNotification, object: clip)
+        }
+    }
+    @objc private func scrollPositionChanged() { setHovered(false) }
+
+    private func setHovered(_ value: Bool) {
+        if value {
+            if Self.active !== self { Self.active?.setHovered(false); Self.active = self }
+        }
+        guard value != hovered else { return }
+        hovered = value
+        pending?.cancel()
+        if value {
+            let work = DispatchWorkItem { [weak self] in self?.showDetails() }
+            pending = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        } else {
+            popover?.close()
+            popover = nil
+        }
+        refreshAppearance()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { setHovered(false) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func showDetails() {
+        guard hovered, window?.isKeyWindow == true, let details, !details.isEmpty else { return }
+        guard let parent = window else { return }
+        let lines = details.components(separatedBy: "\n")
+        let content = VStack(alignment: .leading, spacing: 6) {
+            Text(lines.first ?? "").font(.system(size: 12, weight: .semibold)).lineLimit(3)
+            ForEach(Array(lines.dropFirst().enumerated()), id: \.offset) { _, line in
+                Text(line).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .frame(width: 248, alignment: .leading).padding(10)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.12)))
+        let host = NSHostingView(rootView: content)
+        let size = host.fittingSize
+        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = true
+        panel.contentView = host
+        let anchor = parent.convertToScreen(convert(visibleRect, to: nil))
+        let screen = parent.screen?.visibleFrame ?? anchor
+        var x = anchor.maxX + 4
+        if x + size.width > screen.maxX { x = anchor.minX - size.width - 4 }
+        x = max(screen.minX, min(x, screen.maxX - size.width))
+        let y = max(screen.minY, min(anchor.maxY - size.height, screen.maxY - size.height))
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        popover?.close()
+        self.popover = panel
+        parent.addChildWindow(panel, ordered: .above)
+        panel.orderFront(nil)
+    }
+
+    func refreshAppearance() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.cornerRadius = cornerRadius
+        layer?.backgroundColor = hovered ? hoverColor.cgColor : NSColor.clear.cgColor
+        CATransaction.commit()
+    }
+}
+
 private struct SceneBoxStyle: ViewModifier {
     let node: SceneNode
     @State private var isHovered = false
@@ -453,7 +615,9 @@ private struct SceneBoxStyle: ViewModifier {
                 content
             }
         }
-        let padded = rotated.padding(paddingInsets)
+        let padded = rotated
+            .frame(maxWidth: node.bool("directHover") ? .infinity : nil, alignment: .leading)
+            .padding(paddingInsets)
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         let backed = Group {
             if let material = sceneMaterial(backgroundToken) {
@@ -477,6 +641,19 @@ private struct SceneBoxStyle: ViewModifier {
             }
         }
         return bordered
+            .overlay(alignment: .trailing) {
+                if let hint = node.string("shortcutHint"), !hint.isEmpty {
+                    Text(hint).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .frame(width: 30, height: 18)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.trailing, 6).allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if node.bool("directHover"), let color = dslColor(node.string("hoverBackground")) {
+                    DirectHoverOverlay(color: color, radius: cornerRadius, details: node.string("hoverDetails"))
+                }
+            }
             .frame(
                 minWidth: dimension("minWidth"),
                 maxWidth: dimension("maxWidth"),
@@ -492,15 +669,19 @@ private struct SceneBoxStyle: ViewModifier {
             // content INSIDE a full-width box.
             .padding(.leading, CGFloat(node.double("marginLeading") ?? 0))
             .onHover { hovering in
-                guard node.props["hoverBackground"] != nil else { return }
-                withAnimation(.easeOut(duration: 0.12)) {
+                guard node.props["hoverBackground"] != nil, !node.bool("directHover") else { return }
+                // Pointer feedback should track the row under the cursor immediately.
+                // Suppress inherited transactions as well as an explicit hover fade.
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
                     isHovered = hovering
                 }
             }
             .transformEnvironment(\.sceneHovered) { value in
                 // Publish hover to descendants only from tracking nodes, so a
                 // non-tracking child doesn't reset an ancestor's state.
-                if node.props["hoverBackground"] != nil {
+                if node.props["hoverBackground"] != nil, !node.bool("directHover") {
                     value = forcedHover || (isHovered && hoverAllowed)
                 }
             }

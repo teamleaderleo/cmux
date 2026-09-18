@@ -103,13 +103,16 @@ import Testing
             }
         }
 
-        surface.teardownSurface()
+        let ticket = surface.teardownSurface()
+        #expect(ticket != nil)
+        #expect(surface.teardownSurface() == nil)
 
         var probeResultIterator = probeResult.stream.makeAsyncIterator()
         #expect(
             await probeResultIterator.next() == true,
             "explicit teardown did not start native free while keeping the main actor responsive"
         )
+        #expect(await ticket?.wait(timeout: .seconds(2)) == true)
     }
 
     @Test func teardownSurfaceKeepsTeeLeaseUntilNativeFree() async {

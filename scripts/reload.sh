@@ -874,6 +874,7 @@ Options:
                          Sets app name, bundle id, and derived data path unless overridden.
                          After a successful build, terminates any running app with this tag
                          so macOS launches the freshly-built binary on cmd-click or --launch.
+  CMUX_RELOAD_KEEP_RUNNING=1 preserves the running tagged app for build-only work.
   --launch               Launch the app after building. Without this flag, the script
                          builds and prints the app path but does not open it.
   --prod-auth            Point this tagged Debug build at production Stack auth,
@@ -1369,7 +1370,7 @@ if [[ "${CMUX_GHOSTTYKIT_PREPROVISIONED:-0}" == "1" ]]; then
   fi
   echo "==> Reusing caller-provisioned GhosttyKit.xcframework"
 else
-  "$PWD/scripts/ensure-ghosttykit.sh"
+  CMUX_GHOSTTYKIT_TARGET="${CMUX_GHOSTTYKIT_TARGET:-native}" "$PWD/scripts/ensure-ghosttykit.sh"
 fi
 
 if should_skip_ghostty_cli_helper_zig_build; then
@@ -1422,11 +1423,16 @@ if [[ "$SWIFT_FRONTEND_WORKAROUND" -eq 1 || "${CMUX_SWIFT_FRONTEND_WORKAROUND:-}
   XCODEBUILD_ARGS+=(SWIFT_ENABLE_BATCH_MODE=NO)
   XCODEBUILD_ARGS+=(DEBUG_INFORMATION_FORMAT=)
   XCODEBUILD_ARGS+=(GCC_GENERATE_DEBUGGING_SYMBOLS=NO)
-  # shellcheck disable=SC2016 # Xcode expands $(inherited), not this shell.
-  XCODEBUILD_ARGS+=('OTHER_SWIFT_FLAGS=$(inherited) -Xllvm -aarch64-enable-global-isel-at-O=-1')
 else
   SWIFT_FRONTEND_WORKAROUND_EFFECTIVE=0
 fi
+source "$SCRIPT_DIR/native-compiler-options.sh"
+if [[ "$SWIFT_FRONTEND_WORKAROUND_EFFECTIVE" -eq 1 ]]; then
+  cmux_native_compiler_options '-Xllvm -aarch64-enable-global-isel-at-O=-1'
+else
+  cmux_native_compiler_options
+fi
+XCODEBUILD_ARGS+=(${CMUX_NATIVE_XCODE_ARGS[@]+"${CMUX_NATIVE_XCODE_ARGS[@]}"})
 XCODEBUILD_ARGS+=(build)
 
 if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then
@@ -1793,7 +1799,7 @@ fi
 # even without --launch. A stale tagged app pinned to this bundle id would otherwise
 # keep running against freshly-overwritten resources, and macOS would foreground it
 # instead of launching the newly built binary when the user cmd-clicks the .app.
-if [[ -n "$TAG" ]]; then
+if [[ -n "$TAG" && "${CMUX_RELOAD_KEEP_RUNNING:-0}" != "1" ]]; then
   /usr/bin/osascript -e "tell application id \"${BUNDLE_ID}\" to quit" >/dev/null 2>&1 || true
   sleep 0.3
   pkill -f "${APP_NAME}.app/Contents/MacOS/${BASE_APP_NAME}" || true

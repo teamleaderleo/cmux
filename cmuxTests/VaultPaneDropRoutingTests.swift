@@ -109,6 +109,42 @@ struct VaultPaneDropRoutingTests {
         }
     }
 
+    @Test("Dragging an open conversation to a split reuses its terminal")
+    private func openConversationDropMovesExistingTerminal() throws {
+        let fixture = try VaultPaneAppFixture()
+        defer { fixture.tearDown() }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let context = try #require(fixture.appDelegate.mainWindowContexts.values.first { $0.windowId == fixture.windowID })
+        context.window = window
+        defer { window.orderOut(nil) }
+        let workspace = fixture.workspace
+        let targetPanel = try #require(workspace.focusedPanelId)
+        let targetPane = try #require(workspace.paneId(forPanelId: targetPanel))
+        let sessionID = UUID().uuidString
+        let entry = SessionEntry(id: "codex:" + sessionID, agent: .codex,
+            sessionId: sessionID, title: "Existing conversation", cwd: "/tmp",
+            gitBranch: nil, pullRequest: nil, modified: .distantPast, fileURL: nil,
+            specifics: .codex(model: nil, approvalPolicy: nil, sandboxMode: nil, effort: nil))
+        let launch = try #require(entry.resumeLaunch)
+        let existing = try #require(workspace.newTerminalSurface(inPane: targetPane,
+            focus: false, workingDirectory: "/tmp", initialInput: nil,
+            startupRestoreAgent: launch.startupRestoreAgent))
+        workspace.panelShellActivityStates[existing.id] = .commandRunning
+        let originalIDs = Set(workspace.panels.keys)
+        let originalPanes = workspace.bonsplitController.allPaneIds.count
+        let drag = try dropHarness.beginVaultDrag(entry: entry,
+            sessionRegistry: fixture.appDelegate.sessionDragRegistry,
+            tabDragTransferRegistry: fixture.appDelegate.tabDragTransferRegistry)
+        defer { drag.finish() }
+        let request = try dropHarness.dropRequest(for: drag, placement: .right, targetPane: targetPane)
+        let handler = try #require(workspace.bonsplitController.onExternalTabDrop)
+        #expect(handler(request))
+        #expect(Set(workspace.panels.keys) == originalIDs)
+        #expect(workspace.bonsplitController.allPaneIds.count == originalPanes + 1)
+        #expect(workspace.paneId(forPanelId: existing.id) != targetPane)
+    }
+
     @Test("Every Vault row in one folder remains independently draggable when identities repeat")
     private func repeatedFolderRowsRemainDraggable() throws {
         let fixture = try VaultPaneAppFixture()

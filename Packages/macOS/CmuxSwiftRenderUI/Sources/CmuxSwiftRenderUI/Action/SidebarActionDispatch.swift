@@ -17,9 +17,19 @@ public struct SidebarActionDispatch: Sendable {
     /// Runs the action on the main actor when a button or tap fires.
     public let run: @MainActor @Sendable (ButtonAction) -> Void
 
+    /// Optional acknowledgement of host acceptance, not provider readiness.
+    public let perform: (@MainActor @Sendable (ButtonAction) async -> Bool)?
+
     /// Creates a dispatch from a run closure.
     public init(run: @escaping @MainActor @Sendable (ButtonAction) -> Void) {
         self.run = run
+        self.perform = nil
+    }
+
+    /// Creates an acknowledged sink. Legacy callers still use `run`.
+    public init(perform: @escaping @MainActor @Sendable (ButtonAction) async -> Bool) {
+        self.perform = perform
+        self.run = { action in Task { _ = await perform(action) } }
     }
 
     /// A dispatch that ignores actions; the environment default.

@@ -102,6 +102,10 @@ final class SidebarGroupHeaderTableCellView: NSTableCellView {
         contextMenuDidOpen = nil
         contextMenuDidClose = nil
         contextMenuVisible = false
+        // Recycled headers must reacquire hover from the controller instead of
+        // carrying a previously revealed plus button into a new row identity.
+        isPointerHovering = false
+        plusButton.setRevealed(false)
     }
 
     func configurePresentation(model: SidebarGroupHeaderRowModel) {

@@ -1,0 +1,368 @@
+name: Fieldwork refresh 942-945 on upstream 01973f78
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fieldwork-refresh-942-945-01973f78.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fieldwork-refresh-942-945-01973f78
+  cancel-in-progress: false
+
+env:
+  BASE_SHA: 01973f785ae7ea5b85dea212152b003c67528745
+
+jobs:
+  issue-942:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Create exact-base branch and test-only RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C fieldwork/942-missing-cwd-refresh-01973f78 "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          cat > cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests.swift <<'SWIFT'
+          import Foundation
+          import Testing
+          #if canImport(cmux_DEV)
+          @testable import cmux_DEV
+          #elseif canImport(cmux)
+          @testable import cmux
+          #endif
+
+          @Suite("Persisted restore working directory refresh")
+          struct TerminalStartupWorkingDirectoryPrefixRefreshTests {
+              @Test
+              func missingPersistedWorkingDirectoryFailsClosed() throws {
+                  let inherited = FileManager.default.temporaryDirectory
+                      .appendingPathComponent("cmux-fieldwork-inherited-\(UUID().uuidString)", isDirectory: true)
+                  try FileManager.default.createDirectory(at: inherited, withIntermediateDirectories: true)
+                  defer { try? FileManager.default.removeItem(at: inherited) }
+                  let missing = inherited.appendingPathComponent("removed-saved-repository").path
+                  let marker = inherited.appendingPathComponent("payload-ran")
+                  let command = TerminalStartupWorkingDirectoryPrefix.prefix(
+                      "printf payload > \(shellQuote(marker.path))",
+                      workingDirectory: missing
+                  )
+                  let status = try runShell(command, cwd: inherited)
+                  #expect(status != 0)
+                  #expect(!FileManager.default.fileExists(atPath: marker.path))
+                  #expect(!command.contains("{"))
+              }
+
+              @Test
+              func existingPersistedWorkingDirectoryRunsThereWithQuotedPath() throws {
+                  let root = FileManager.default.temporaryDirectory
+                      .appendingPathComponent("cmux-fieldwork-cwd-\(UUID().uuidString)", isDirectory: true)
+                  let saved = root.appendingPathComponent("repo with ' quote", isDirectory: true)
+                  try FileManager.default.createDirectory(at: saved, withIntermediateDirectories: true)
+                  defer { try? FileManager.default.removeItem(at: root) }
+                  let marker = root.appendingPathComponent("pwd")
+                  let command = TerminalStartupWorkingDirectoryPrefix.prefix(
+                      "pwd > \(shellQuote(marker.path))",
+                      workingDirectory: saved.path
+                  )
+                  #expect(try runShell(command, cwd: root) == 0)
+                  let observed = try String(contentsOf: marker, encoding: .utf8)
+                      .trimmingCharacters(in: .whitespacesAndNewlines)
+                  #expect(observed == saved.path)
+              }
+
+              @Test
+              func optionalPlacementRetainsFallbackSemantics() throws {
+                  let inherited = FileManager.default.temporaryDirectory
+                      .appendingPathComponent("cmux-fieldwork-optional-\(UUID().uuidString)", isDirectory: true)
+                  try FileManager.default.createDirectory(at: inherited, withIntermediateDirectories: true)
+                  defer { try? FileManager.default.removeItem(at: inherited) }
+                  let missing = inherited.appendingPathComponent("missing-optional-directory").path
+                  let marker = inherited.appendingPathComponent("optional-pwd")
+                  let prefix = try #require(
+                      TerminalStartupWorkingDirectoryPrefix.optionalChangeDirectoryPrefix(for: missing)
+                  )
+                  let command = prefix + "pwd > \(shellQuote(marker.path))"
+                  #expect(try runShell(command, cwd: inherited) == 0)
+                  let observed = try String(contentsOf: marker, encoding: .utf8)
+                      .trimmingCharacters(in: .whitespacesAndNewlines)
+                  #expect(observed == inherited.path)
+              }
+
+              private func runShell(_ command: String, cwd: URL) throws -> Int32 {
+                  let process = Process()
+                  process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                  process.arguments = ["-c", command]
+                  process.currentDirectoryURL = cwd
+                  try process.run()
+                  process.waitUntilExit()
+                  return process.terminationStatus
+              }
+
+              private func shellQuote(_ value: String) -> String {
+                  "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+              }
+          }
+          SWIFT
+          git add cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests.swift
+          git commit -m 'test: fail closed when persisted restore cwd disappears'
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: Prove current upstream RED executes and fails for payload launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests/missingPersistedWorkingDirectoryFailsClosed 2>&1 | tee /tmp/942-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'missingPersistedWorkingDirectoryFailsClosed' /tmp/942-red.log
+          echo "942 RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply smallest required-placement repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Sources/RestorableAgentSession.swift')
+          s = p.read_text()
+          old = '''    static func prefix(_ command: String, workingDirectory: String?) -> String {
+              guard let prefix = optionalChangeDirectoryPrefix(for: workingDirectory) else { return command }
+              return prefix + command
+          }
+          '''
+          new = '''    static func prefix(_ command: String, workingDirectory: String?) -> String {
+              guard let workingDirectory = normalized(workingDirectory) else { return command }
+              let quoted = TerminalStartupShellQuoting.singleQuoted(workingDirectory)
+              return "cd -- \\(quoted) 2>/dev/null && \\(command)"
+          }
+          '''
+          if old not in s:
+              raise SystemExit('RestorableAgentSession prefix owner drifted')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('CLI/CMUXCLI+SessionsListForkStartupInput.swift')
+          s = p.read_text()
+          old = 'return "cd -- \\(quoted) 2>/dev/null || [ ! -d \\(quoted) ] && \\(command)"'
+          new = 'return "cd -- \\(quoted) 2>/dev/null && \\(command)"'
+          if old not in s:
+              raise SystemExit('CLI cwd owner drifted')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git add Sources/RestorableAgentSession.swift CLI/CMUXCLI+SessionsListForkStartupInput.swift
+          git commit -m 'fix: fail closed for persisted restore working directory'
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: Prove GREEN and focused controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/TerminalStartupWorkingDirectoryPrefixRefreshTests 2>&1 | tee /tmp/942-green.log
+          grep -F 'missingPersistedWorkingDirectoryFailsClosed' /tmp/942-green.log
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/SessionPersistenceTests
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/AgentSessionAutoResumeSettingsTests
+          grep -F 'optionalChangeDirectoryPrefix' Sources/RestorableAgentSession.swift
+          grep -F '2>/dev/null &&' CLI/CMUXCLI+SessionsListForkStartupInput.swift
+          echo "942 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push refresh branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/942-missing-cwd-refresh-01973f78
+
+  issue-943:
+    runs-on: macos-15
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Create exact-base branch and replay RED tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C fieldwork/943-rpc-target-alias-refresh-01973f78 "$BASE_SHA"
+          git cherry-pick 702784686141f453454fea2afcda15c9b9573753
+          git cherry-pick 0f4e0144398cfda3efd096bc68a560f7b9f2e220
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: Prove parser and app-host RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          swift test --package-path Packages/macOS/CmuxControlSocket --filter strictRejectsCamelCaseTargetAlias 2>&1 | tee /tmp/943-parser-red.log
+          parser_status=${PIPESTATUS[0]}
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal 2>&1 | tee /tmp/943-app-red.log
+          app_status=${PIPESTATUS[0]}
+          set -e
+          test "$parser_status" -ne 0
+          test "$app_status" -ne 0
+          grep -F 'strictRejectsCamelCaseTargetAlias' /tmp/943-parser-red.log
+          grep -F 'camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal' /tmp/943-app-red.log
+          echo "943 RED parser=$parser_status app=$app_status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply narrow alias repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cherry-pick a36ffbe0b8c3acedeb7ab82454ae6cec65ec5d06
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: Prove GREEN and protocol controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/macOS/CmuxControlSocket 2>&1 | tee /tmp/943-package-green.log
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/SocketTerminalBindingRegressionTests/camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal 2>&1 | tee /tmp/943-app-green.log
+          grep -F 'camelCaseSurfaceAliasCannotInjectIntoFocusedTerminal' /tmp/943-app-green.log
+          echo "943 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push refresh branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/943-rpc-target-alias-refresh-01973f78
+
+  issue-944:
+    runs-on: macos-15
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Create exact-base branch and native test-only RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C fieldwork/944-computer-use-generation-refresh-01973f78 "$BASE_SHA"
+          git cherry-pick 5fa3df624315dad2e7bc3a31a1df572fe9cafe41
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: Prove native production-branch RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests/delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession 2>&1 | tee /tmp/944-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'Test run started' /tmp/944-red.log
+          grep -F 'Computer Use cross-generation identity' /tmp/944-red.log
+          grep -F 'delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession' /tmp/944-red.log
+          echo "944 RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply ingress-captured physical generation repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cherry-pick ffa4d1ad5ffc620fa0cf04b5a91e54f3e9aa2b7f
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: Prove GREEN and adjacent current-generation control
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests/delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession 2>&1 | tee /tmp/944-green.log
+          grep -F 'Test run started' /tmp/944-green.log
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseUXTests/computerUseHookResolutionAcceptsTheCurrentProcessGenerationWhenAgentIDsDiffer
+          grep -F 'FeedIngressProcessGenerationEvent' Sources/Feed/WorkstreamEvent+FeedIngress.swift
+          echo "944 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push refresh branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/944-computer-use-generation-refresh-01973f78
+
+  issue-945:
+    runs-on: macos-15
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Create exact-base branch and physical stalled-writer RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C fieldwork/945-remote-write-liveness-refresh-01973f78 "$BASE_SHA"
+          git fetch origin fieldwork/nonlinear-resource-collapse:refs/remotes/origin/fieldwork/nonlinear-resource-collapse
+          mkdir -p Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests
+          git show origin/fieldwork/nonlinear-resource-collapse:Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientWriteAdmissionScalingTests.swift > Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientWriteAdmissionScalingTests.swift
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientWriteAdmissionScalingTests.swift')
+          s = p.read_text()
+          s = s.replace('private let fieldworkWriteScalingEnabled =\n    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_SCALING"] == "1"\n', '''private let fieldworkWriteScalingEnabled =\n    ProcessInfo.processInfo.environment["CMUX_FIELDWORK_SCALING"] == "1"\n\nprivate let fieldworkWriteScalingCases: [Int] = {\n    guard let raw = ProcessInfo.processInfo.environment["CMUX_FIELDWORK_SCALING_CASES"],\n          !raw.isEmpty else { return [1, 10, 50, 200] }\n    return raw.split(separator: ",").compactMap { Int($0) }\n}()\n''')
+          s = s.replace('for callers in [1, 10, 50, 200] {', 'for callers in fieldworkWriteScalingCases {')
+          p.write_text(s)
+          PY
+          git add Packages/macOS/CmuxRemoteDaemon/Tests/CmuxRemoteDaemonTests/RemoteDaemonRPCClientWriteAdmissionScalingTests.swift
+          git commit -m 'test(remote): reproduce physical serialized writer stall'
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Prove N=1 physical write-stall RED
+        shell: bash
+        env:
+          CMUX_FIELDWORK_SCALING: '1'
+          CMUX_FIELDWORK_SCALING_CASES: '1'
+        run: |
+          set -euo pipefail
+          set +e
+          swift test --package-path Packages/macOS/CmuxRemoteDaemon --filter physicalWriteStallMustBoundQueuedCallers 2>&1 | tee /tmp/945-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'physical stdio write stall' /tmp/945-red.log
+          grep -F '1 queued RPC callers remained behind one physical write' /tmp/945-red.log
+          echo "945 RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply final historical write-liveness repair as one refresh commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cherry-pick --no-commit 843accd73070a441ae4d24aa88e1a21bbbe02bc7
+          git cherry-pick --no-commit ff826debbdcc0a392aefd7e01a77839a2a865cb7
+          git cherry-pick --no-commit cc558390af891a0d98b0b1f25c8b0ff435bd26b4
+          git commit -m 'fix(remote): bound serialized daemon writes by liveness budget'
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: Prove full request and notification scaling plus responsive control
+        shell: bash
+        env:
+          CMUX_FIELDWORK_SCALING: '1'
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/macOS/CmuxRemoteDaemon --filter RemoteDaemonRPCClientWriteAdmissionScalingTests 2>&1 | tee /tmp/945-scaling-green.log
+          grep -F 'physical stdio write stall' /tmp/945-scaling-green.log
+          grep -F 'notification-only PTY writes' /tmp/945-scaling-green.log
+          grep -F 'responsive stdio transport settles 200 concurrent RPC callers' /tmp/945-scaling-green.log
+      - name: Run focused package regression controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path Packages/macOS/CmuxRemoteDaemon --filter timedOutPTYAttachPreservesHealthyTransportState
+          swift test --package-path Packages/macOS/CmuxRemoteDaemon --filter timedOutPTYAttachBoundsCancellationWrite
+          grep -n 'configuration.transport == .websocket' Packages/macOS/CmuxRemoteDaemon/Sources/CmuxRemoteDaemon/Client/RemoteDaemonRPCClient+RPC.swift
+          echo "945 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push refresh branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/945-remote-write-liveness-refresh-01973f78

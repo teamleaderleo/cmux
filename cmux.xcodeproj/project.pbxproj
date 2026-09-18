@@ -14974,10 +14974,12 @@ B8B056D80000000000000002 /* MobileHostIdentityTests.swift */ = {isa = PBXFileRef
 				OTHER_SWIFT_FLAGS = (
 					"-Xllvm",
 					"-global-isel=0",
+					"$(CMUX_APP_BATCH_FLAGS)",
 				);
 				SPARKLE_PUBLIC_KEY = "avjcgKibf1FTvhIjLBxhd+0HSpsXU4D0IGlVk8cgqRc=";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_ENABLE_BATCH_MODE = NO;
+				CMUX_APP_BATCH_MODE = NO;
+				SWIFT_ENABLE_BATCH_MODE = "$(CMUX_APP_BATCH_MODE)";
 				SWIFT_OBJC_BRIDGING_HEADER = "cmux-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 			};

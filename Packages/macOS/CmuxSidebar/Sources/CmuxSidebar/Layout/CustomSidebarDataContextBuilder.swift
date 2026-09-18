@@ -205,8 +205,8 @@ public struct CustomSidebarDataContextBuilder {
             "pinned": .bool(surface.isPinned),
         ]
         if let surfaceId = surface.surfaceId {
-            // The id surface.* verbs accept (surface.focus etc.); `id` above
-            // is the panel behind the tab.
+            // Internal Bonsplit tab identity. Control surface.focus accepts
+            // the panel identity in `id` above.
             surfaceFields["surfaceId"] = .string(surfaceId.uuidString)
         }
         if let directory = surface.directory, !directory.isEmpty {

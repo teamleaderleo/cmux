@@ -1,0 +1,74 @@
+name: Fieldwork 944 native refresh on 52d0a696
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fieldwork-944-refresh-52d0a696.yml
+
+permissions:
+  contents: write
+
+env:
+  BASE_SHA: 52d0a69623430c72d7b5db4b4a5d27c692c30a19
+
+jobs:
+  issue-944-native:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Create exact-base test-first branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name fieldwork-bot
+          git config user.email fieldwork-bot@users.noreply.github.com
+          git switch -C fieldwork/944-computer-use-generation-refresh-52d0a696 "$BASE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git cherry-pick 5fa3df624315dad2e7bc3a31a1df572fe9cafe41
+          echo "RED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Select Xcode and GhosttyKit
+        run: |
+          ./scripts/select-ci-xcode.sh
+          ./scripts/download-prebuilt-ghosttykit.sh
+      - name: RED executes production generation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests/delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession 2>&1 | tee /tmp/944-red.log
+          status=${PIPESTATUS[0]}
+          set -e
+          test "$status" -ne 0
+          grep -F 'Test run started' /tmp/944-red.log
+          grep -F 'delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession' /tmp/944-red.log
+          echo "944 RED exit=$status red_sha=$RED_SHA base=$BASE_SHA"
+      - name: Apply ingress-captured physical generation repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cherry-pick ffa4d1ad5ffc620fa0cf04b5a91e54f3e9aa2b7f
+          echo "GREEN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          git diff --check "$BASE_SHA" HEAD
+      - name: GREEN exact discriminator
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests/delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession 2>&1 | tee /tmp/944-green.log
+          grep -F 'Test run started' /tmp/944-green.log
+          grep -F 'delayedGenerationACompletionCannotResolveGenerationBWithSameLogicalSession' /tmp/944-green.log
+      - name: GREEN full cross-generation and Computer Use UX suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseCrossGenerationIdentityTests
+          ./scripts/test-unit.sh test -only-testing:cmuxTests/ComputerUseUXTests
+          grep -F 'FeedIngressProcessGenerationEvent' Sources/Feed/WorkstreamEvent+FeedIngress.swift
+          echo "944 GREEN green_sha=$GREEN_SHA base=$BASE_SHA"
+      - name: Push evidence branch
+        run: git push --force origin HEAD:refs/heads/fieldwork/944-computer-use-generation-refresh-52d0a696

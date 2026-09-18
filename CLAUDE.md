@@ -1,5 +1,9 @@
 # cmux agent notes
 
+## Local experimental fork verification
+
+For this user-owned experimental fork, test and dogfood locally in the isolated tagged app. The upstream Mac-fleet sections below describe the maintainers' infrastructure; this fork has no Mac fleet and does not require one. The user explicitly authorized local UI verification and tagged-app restarts. Preserve the regular app and unrelated sessions.
+
 ## Setup
 
 `./scripts/setup.sh` initializes submodules, builds GhosttyKit, and installs the pbxproj normalization pre-commit hook.

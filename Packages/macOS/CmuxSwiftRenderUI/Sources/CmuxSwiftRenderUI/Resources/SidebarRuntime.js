@@ -190,7 +190,7 @@
     "paddingLeading", "paddingTrailing", "paddingTop", "paddingBottom",
     "fixed", "block", "layoutPriority", "marginLeading",
     "showOnHover", "hideOnHover", "dragBackground", "dragSet", "rotation",
-    "fade", "marquee",
+    "fade", "marquee", "nativeMarquee", "conversationProvider", "conversationID", "conversationTitle", "conversationDirectory",
   ];
 
   function makeHandle(id) {
@@ -436,6 +436,7 @@
   // Reads inside any function-valued prop subscribe it; writes re-run exactly
   // the bindings that read it.
   g.signal = (initial) => createSignal(initial);
+  g.effect = (fn) => { createEffect(fn); };
   g.computed = (fn) => {
     const [read, write] = createSignal(undefined);
     createEffect(() => write(fn()));

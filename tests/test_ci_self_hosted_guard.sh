@@ -1120,29 +1120,19 @@ check_tmux_terminal_nightly_isolation() {
   echo "PASS: tmux corpus terminal-nightly uses isolated DerivedData, noninteractive xcodebuild, and expected-failure handling"
 }
 
-check_no_bare_github_hosted_runners() {
-  # Every product CI job must route its runner through a repo variable (LINUX_RUNNER,
-  # MACOS_RUNNER_*) so the Blacksmith<->Warp / Blacksmith<->macos-26 overflow
-  # switch is a single repo-variable flip with no PR. A bare GitHub-hosted
-  # label (ubuntu-*, macos-NN) cannot be redirected, so it is forbidden.
-  # The CLA policy guard is a separate immutable control-plane job and is
-  # intentionally exempted below because it must never honor a repository
-  # variable or self-hosted runner override.
-  # Bare paid-provider labels (blacksmith-*, warp-*, depot-*) stay allowed for
-  # deliberate single-runner pins such as the testmanagerd-wedged
-  # `app-host-unit-tests` job.
+check_fork_linux_runner_policy() {
+  # This is a personal fork. Ordinary Linux CI must work on GitHub-hosted
+  # runners without access to the upstream organization's paid runner fleet.
+  # LINUX_RUNNER remains an optional override, but stale paid Linux provider
+  # labels are forbidden because they queue forever when the provider is absent.
   local hits
-  # cla-policy-guard.yml and web-complexity-trusted.yml are control-plane
-  # workflows. They deliberately run on GitHub-hosted ephemeral runners so
-  # untrusted policy/source bytes cannot redirect execution to a persistent
-  # or contributor-controlled machine. Exempt both files here instead.
-  hits="$(grep -rnE "runs-on:[[:space:]]*(ubuntu-[a-z0-9.]+|macos-[a-z0-9]+)([[:space:]]*$|[[:space:]]+#)" "$ROOT_DIR/.github/workflows" | grep -v "github-hosted-required" | grep -v "/cla-policy-guard.yml:" | grep -v "/web-complexity-trusted.yml:" || true)"
+  hits="$(grep -rnE 'runs-on:.*(blacksmith-[0-9]+vcpu-ubuntu-|warp-ubuntu-)' "$ROOT_DIR/.github/workflows" || true)"
   if [[ -n "$hits" ]]; then
-    echo "FAIL: these jobs use a bare GitHub-hosted runner; route them through vars.LINUX_RUNNER / vars.MACOS_RUNNER_IOS so Blacksmith<->overflow stays a repo-variable flip:"
+    echo "FAIL: workflow still references an unavailable paid Linux runner in this fork:"
     echo "$hits"
     exit 1
   fi
-  echo "PASS: no workflow pins a bare GitHub-hosted runner; all route through runner repo variables"
+  echo "PASS: fork Linux CI defaults to GitHub-hosted runners; no stale paid Linux provider labels remain"
 }
 
 check_no_self_hosted_fleet_runners() {
@@ -1233,6 +1223,12 @@ check_no_self_hosted_fleet_runners() {
   # never match the bare `cmux` label.
   while IFS= read -r line; do
     content="${line#*:*:}"
+    # Explicit owner-triggered local verification on this personal fork.
+    # Keep the exemption limited to this exact workflow and runner set.
+    if [[ "$line" == "$ROOT_DIR/.github/workflows/cmux-tui-local-mac.yml:"* ]] &&
+       [[ "$content" == '    runs-on: [self-hosted, macOS, cmux-local-mac]' ]]; then
+      continue
+    fi
     content_without_allowed="$(printf '%s\n' "$content" | sed -E "s/($allowed)//g")"
     printf '%s\n' "$content_without_allowed" | grep -Eq "($forbidden)" || continue
     if [[ -n "$e2e_tart_option_line" ]] && [[ "$line" == "$E2E_FILE:$e2e_tart_option_line:"* ]]; then
@@ -1262,7 +1258,7 @@ check_no_self_hosted_fleet_runners() {
 check_cla_guard_runner
 
 # ci.yml jobs
-check_no_bare_github_hosted_runners
+check_fork_linux_runner_policy
 check_no_self_hosted_fleet_runners
 check_macos_runner "$CI_FILE" "app-host-unit-tests"
 check_macos_runner "$CI_FILE" "tests-build-and-lag"

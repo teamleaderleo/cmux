@@ -41,6 +41,7 @@ extension DockSplitStore {
                 )
         }
         panel.close()
+        AgentResumeLaunchGuard.shared.releaseResumeLaunches(ownedBy: panelId)
         return panel
     }
 }

@@ -330,6 +330,7 @@ public final class TerminalSurface: Identifiable, ObservableObject {
         RuntimeSurfaceCreationSource?
     weak var configurationReloadDeferredRuntimeSurfaceView:
         (any TerminalSurfaceNativeViewing)?
+    var requiresFirstPresentation = false
     var requiresRestoreSpawnPacing = false
     var startupRestoreAdmissionPhase = TerminalSurfaceStartupRestoreAdmissionPhase.unrestricted
     var cancelsStartupRestoreAdmissionOnExplicitInput = false
@@ -609,6 +610,7 @@ public final class TerminalSurface: Identifiable, ObservableObject {
         self.runtimeFilesystem = dependencies.runtimeFilesystem
         self.agentCommandShimInstallDeadline = dependencies.agentCommandShimInstallDeadline
         self.agentCommandShimInstallDeadlineClock = dependencies.agentCommandShimInstallDeadlineClock
+        self.requiresFirstPresentation = runtimeSpawnPolicy.requiresFirstPresentation
         self.requiresRestoreSpawnPacing = runtimeSpawnPolicy.spawnTiming == .pacedSessionRestore
         self.cancelsStartupRestoreAdmissionOnExplicitInput =
             runtimeSpawnPolicy.cancelsStartupRestoreAdmissionOnExplicitInput

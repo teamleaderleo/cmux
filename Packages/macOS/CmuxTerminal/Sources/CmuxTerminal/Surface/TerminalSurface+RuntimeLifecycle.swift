@@ -23,6 +23,7 @@ extension TerminalSurface {
         source: RuntimeSurfaceCreationSource
     ) {
         guard allowsRuntimeSurfaceCreation() else { return }
+        guard !requiresFirstPresentation || rendererPortalVisible || source == .inputDemand else { return }
         guard surface == nil else { return }
         ensureHeadlessStartupWindowIfNeeded(reason: reason)
         // Production pane hosts synchronously call attachToView; carry the requested creation source through that callback.
@@ -237,7 +238,7 @@ extension TerminalSurface {
     /// Background priming uses this to skip surfaces whose spawn can never
     /// complete instead of retaining a hidden mount slot for them forever.
     public var canCreateRuntimeSurface: Bool {
-        allowsRuntimeSurfaceCreation()
+        allowsRuntimeSurfaceCreation() && (!requiresFirstPresentation || rendererPortalVisible)
     }
 
     private var hasDeferredStartupWork: Bool {
@@ -293,8 +294,10 @@ extension TerminalSurface {
     /// Explicitly retire this model and free its Ghostty runtime surface.
     /// Idempotent — safe to call before deinit; deinit will skip the work if
     /// already torn down.
+    /// - Returns: A completion ticket, or `nil` when no native runtime remains.
+    @discardableResult
     @MainActor
-    public func teardownSurface() {
+    public func teardownSurface() -> TerminalSurfaceRuntimeTeardownTicket? {
         recordTeardownRequest(reason: "surface.teardown")
         markPortalLifecycleClosed(reason: "teardown")
         retireSurfaceRegistryRegistrationIfNeeded()
@@ -319,7 +322,7 @@ extension TerminalSurface {
             callbackContext?.release()
             manualIOContext?.release()
             teeLease?.release()
-            return
+            return nil
         }
 
 #if DEBUG
@@ -328,7 +331,7 @@ extension TerminalSurface {
             callbackContext?.release()
             manualIOContext?.release()
             teeLease?.release()
-            return
+            return nil
         }
 #endif
 #if DEBUG
@@ -336,7 +339,7 @@ extension TerminalSurface {
             // Transport manualIOContext and teeLease through the request too:
             // the coordinator releases all callback userdata only after the
             // native free, which is what joins ghostty's IO threads.
-            runtimeTeardown.enqueueRuntimeTeardown(
+            return runtimeTeardown.enqueueRuntimeTeardown(
                 id: id,
                 workspaceId: tabId,
                 reason: "teardown",
@@ -349,11 +352,10 @@ extension TerminalSurface {
                 },
                 freeSurface: freeSurface
             )
-            return
         }
 #endif
 
-        runtimeTeardown.enqueueRuntimeTeardown(
+        return runtimeTeardown.enqueueRuntimeTeardown(
             id: id,
             workspaceId: tabId,
             reason: "teardown",
@@ -719,6 +721,7 @@ extension TerminalSurface {
 
     @MainActor
     func createSurface(for view: any TerminalSurfaceNativeViewing, source: RuntimeSurfaceCreationSource) {
+        guard !requiresFirstPresentation || rendererPortalVisible || source == .inputDemand else { return }
         guard allowsRuntimeSurfaceCreation() else {
 #if DEBUG
             logDebugEvent(
@@ -802,6 +805,7 @@ extension TerminalSurface {
             return
         }
         guard let createdSurface = surface else { return }
+        requiresFirstPresentation = false
         guard let surfaceCallbackContext else {
             preconditionFailure(
                 "A native terminal surface requires callback userdata"

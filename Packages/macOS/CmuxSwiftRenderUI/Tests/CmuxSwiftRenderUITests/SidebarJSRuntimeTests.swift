@@ -1,13 +1,66 @@
 import CmuxSwiftRender
 @testable import CmuxSwiftRenderUI
 import Testing
+import Foundation
 
 @MainActor
 struct SidebarJSRuntimeTests {
+    @Test(arguments: [true, false])
+    func acknowledgedDispatchPublishesExactOperationResult(accepted: Bool) async throws {
+        let runtime = SidebarJSRuntime()
+        let (events, continuation) = AsyncStream<String>.makeStream()
+        defer { continuation.finish() }
+        runtime.dispatch = SidebarActionDispatch(perform: { action in
+            for command in action.commands {
+                if case let .cmux(method, params) = command, method == "test.result" {
+                    continuation.yield(params["value"] ?? "")
+                }
+            }
+            return accepted
+        })
+        #expect(runtime.start(source: """
+        effect(() => { const r = data.actionResult(); if (r) cmux('test.result', {value: r.operationID + ':' + r.accepted}); });
+        sidebar(() => Button('Open', () => cmux('workspace.create', {operation_id:'exact-request'})));
+        """))
+        let button = try #require(runtime.store.rootId)
+        runtime.dispatchEvent(nodeId: button, event: "tap")
+        var iterator = events.makeAsyncIterator()
+        #expect(await iterator.next() == "exact-request:\(accepted)")
+    }
+
     /// Actions dispatch one main-queue turn after the event (paint-before-
     /// command); suspend so the queued dispatch runs before asserting.
     private func pumpActions() async {
         for _ in 0..<5 { await Task.yield() }
+    }
+
+    @Test func conversationRowsHighlightAndOpenOnFirstClick() async throws {
+        let runtime = SidebarJSRuntime()
+        var captured: [ActionCommand] = []
+        runtime.dispatch = SidebarActionDispatch { captured.append(contentsOf: $0.commands) }
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CmuxSwiftRenderUI/Resources/ConversationSidebar.js")
+        #expect(runtime.start(source: try String(contentsOf: sourceURL, encoding: .utf8)))
+        runtime.updateData(key: "providerFilter", value: .string("All"))
+        let history = try ConversationHistoryReader.decode(Data(#"[{"provider":"OpenCode","id":"ses_fixture","cwd":"/fixture","group":"Fixture","title":"Fixture conversation","command":"opencode --session ses_fixture","updated":1}]"#.utf8)).get()
+        runtime.updateData(key: "history", value: history)
+        func descendants(_ id: String) -> [String] {
+            [id] + (runtime.store.node(id)?.children ?? []).flatMap { descendants($0) }
+        }
+        let ids = descendants(try #require(runtime.store.rootId))
+        let hover = try #require(ids.compactMap { runtime.store.node($0) }.first { $0.bool("directHover") })
+        #expect(hover.string("hoverBackground") != nil)
+        let button = try #require(ids.first { runtime.store.node($0)?.type == "button" && runtime.store.node($0)?.string("text") == "Fixture conversation" })
+        runtime.dispatchEvent(nodeId: button, event: "tap")
+        runtime.dispatchEvent(nodeId: button, event: "tap")
+        await pumpActions()
+        #expect(captured.count == 1)
+        guard case let .cmux(method, params) = try #require(captured.first) else {
+            Issue.record("A chat click must open its conversation"); return
+        }
+        #expect(method == "workspace.create")
+        #expect(params["initial_command"] == "opencode --session ses_fixture")
     }
 
     @Test func buildsRetainedScene() {

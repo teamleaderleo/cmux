@@ -6,6 +6,7 @@ import CmuxFoundation
 import Bonsplit
 import CmuxWorkspaces
 import CmuxTerminal
+import CmuxSwiftRenderUI
 
 private enum WorkspaceTitlebarInteractionMetrics {
     // Keep in sync with the minimal-mode titlebar strip so the monitor only
@@ -62,6 +63,17 @@ private struct WorkspacePanelContentHostView: View {
     let onTriggerFlash: () -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            if isVisibleInUI && (workspace.deferredAgentResumeRestoresByPanelId[panel.id] != nil ||
+                workspace.restoredAgentResumeStatesByPanelId[panel.id] == .awaitingAutoResumeCommand) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(String(localized: "conversation.restoring", defaultValue: "Restoring conversation…"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                }.padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Color(nsColor: appearance.contentBackgroundColor))
+            }
         PanelContentView(
             panel: panel,
             workspaceId: workspace.id,
@@ -97,6 +109,7 @@ private struct WorkspacePanelContentHostView: View {
                 workspace.requestDeferredBrowserMaterialization(panelId: panel.id, isVisibleInUI: isVisibleInUI)
             }
         )
+        }
     }
 }
 
@@ -358,6 +371,7 @@ struct WorkspaceContentView: View {
         .onAppear {
             updateAgentHibernationPresentationVisibility()
             syncBonsplitNotificationBadges()
+            syncBonsplitProviderIcons()
             refreshGhosttyAppearanceConfig(reason: "onAppear")
         }
         .onChange(of: isWorkspaceVisible) { _, isVisible in
@@ -373,6 +387,9 @@ struct WorkspaceContentView: View {
         }
         .onDisappear {
             workspace.setAgentHibernationAutoResumePresentationVisible(false)
+        }
+        .onChange(of: providerTabIconAssets) { _, _ in
+            syncBonsplitProviderIcons()
         }
         .onChange(of: notificationStore.notifications) { _, _ in
             syncBonsplitNotificationBadges()
@@ -418,6 +435,7 @@ struct WorkspaceContentView: View {
             )
         }
 
+        HStack(spacing: 0) {
         Group {
             if workspace.layoutMode == .canvas {
                 WorkspaceCanvasHostView(
@@ -432,9 +450,74 @@ struct WorkspaceContentView: View {
             }
         }
         .modifier(WorkspaceContentMinimalModeSafeAreaModifier(isFullScreen: isFullScreen))
+        if workspace.layoutMode != .canvas {
+            Divider()
+            tileNavigator
+        }
+        }
         // A workspace is a page: accept the parent proposal instead of
         // contributing a hidden child's content-derived ideal to its ZStack.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Uses existing session identity only; no transcript or process lookup.
+    private var providerTabIconAssets: [UUID: String] {
+        workspace.restoredAgentSnapshotsByPanelId.compactMapValues { snapshot in
+            let agent = SessionAgent(rawValue: snapshot.kind.rawValue)
+            return agent == .claude ? "AgentIcons/ClaudeMonochrome" : agent?.assetName
+        }
+    }
+
+    private func syncBonsplitProviderIcons() {
+        let assets = providerTabIconAssets
+        for pane in workspace.bonsplitController.allPaneIds {
+            for tab in workspace.bonsplitController.tabs(inPane: pane) {
+                guard let panelID = workspace.panelIdFromSurfaceId(tab.id),
+                      workspace.terminalPanel(for: panelID) != nil else { continue }
+                let asset = assets[panelID]
+                guard tab.iconAsset != asset else { continue }
+                workspace.bonsplitController.updateTab(tab.id,
+                    icon: .some(asset == nil ? "terminal" : nil),
+                    iconAsset: .some(asset))
+            }
+        }
+    }
+
+    private var tileNavigator: some View {
+        let manager = workspace.owningTabManager
+        let spaces = (manager?.tabs ?? [workspace]).map { TileNavigator.Space(id: $0.id, title: $0.customTitle ?? $0.title) }
+        let tiles = workspace.bonsplitController.allPaneIds.map { pane in
+            TileNavigator.Tile(id: pane.id, items: workspace.bonsplitController.tabs(inPane: pane).compactMap { tab in
+                guard let panelID = workspace.panelIdFromSurfaceId(tab.id) else { return nil }
+                return TileNavigator.Item(id: panelID, title: tab.title, icon: tab.icon ?? "rectangle",
+                    asset: tab.iconAsset, selected: workspace.focusedPanelId == panelID)
+            })
+        }
+        return TileNavigator(spaces: spaces, selectedSpace: workspace.id, tiles: tiles) { action in
+            guard isWorkspaceInputActive else { return }
+            switch action {
+            case .selectSpace(let id):
+                if let target = manager?.tabs.first(where: { $0.id == id }) { manager?.selectTab(target) }
+            case .newSpace: _ = manager?.addTab()
+            case .focus(let id):
+                if workspace.panels[id] != nil { workspace.focusPanel(id) }
+            case .close(let id): _ = workspace.closePanel(id)
+            case .move(let id, let destination):
+                if let pane = workspace.bonsplitController.allPaneIds.first(where: { $0.id == destination }) {
+                    _ = workspace.moveSurface(panelId: id, toPane: pane)
+                }
+            case .terminal: _ = workspace.newTerminalSurfaceInFocusedPane()
+            case .browser:
+                if let pane = workspace.bonsplitController.focusedPaneId { _ = workspace.newBrowserSurface(inPane: pane) }
+            case .splitRight, .splitDown:
+                if let panel = workspace.focusedPanelId {
+                    _ = workspace.newTerminalSplit(from: panel, orientation: {
+                        if case .splitRight = action { return .horizontal }
+                        return .vertical
+                    }())
+                }
+            }
+        }
     }
 
     private func syncBonsplitNotificationBadges() {

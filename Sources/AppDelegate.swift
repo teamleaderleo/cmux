@@ -1,3 +1,4 @@
+import CmuxSwiftRenderUI
 import AppKit
 import CmuxAppKitSupportUI
 import CmuxAuthRuntime
@@ -1236,6 +1237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     private var terminateCleanupPhase: TerminateCleanupPhase?
     private var terminateOwnedCleanupTask: Task<Void, Never>?
+    private var terminalQuitTeardownTickets: [TerminalSurfaceRuntimeTeardownTicket] = []
     private var terminateCleanupWatchdogTask: Task<Void, Never>?
     /// Force-exits if AppKit's terminate gauntlet wedges (#6758).
     private let terminationWatchdog = TerminationWatchdog()
@@ -2149,13 +2151,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func deferTerminateForOwnedCleanupAndFreshSnapshot(reason: String) -> Bool {
         let markedForKill = remoteTmuxController.windowsMarkedForKillOnClose()
         let simulatorCleanupTasks = SimulatorPanel.beginApplicationTerminationCleanup()
+        let terminalPanels = mainWindowContexts.values.flatMap { $0.tabManager.tabs }
+            .flatMap { $0.panels.values }.compactMap { $0 as? TerminalPanel }
+            .filter { $0.surface.surface != nil }
+        // Ghostty allows session-end hooks 12 seconds plus 3 seconds to reap.
+        // Preserve its bounded queue while budgeting for all queued terminals.
+        let terminalCount = terminalPanels.count + terminalQuitTeardownTickets.count
+        let terminalConcurrency = TerminalSurfaceRuntimeTeardownCoordinator.maximumConcurrentCloseTeardownCount
+        let terminalBatches = (terminalCount + terminalConcurrency - 1) / terminalConcurrency
+        let terminalCleanupSeconds = max(30, terminalBatches * 15 + 5)
         let hasSudoApprovalRuntime = sudoApprovalCoordinator?.requiresShutdown == true
         let hasOwnedRuntimeCleanup = !markedForKill.isEmpty
             || !simulatorCleanupTasks.isEmpty
             || hasSudoApprovalRuntime
+            || !terminalPanels.isEmpty || !terminalQuitTeardownTickets.isEmpty
         guard !markedForKill.isEmpty
                 || !simulatorCleanupTasks.isEmpty
-                || hasSudoApprovalRuntime else {
+                || hasSudoApprovalRuntime
+                || !terminalPanels.isEmpty || !terminalQuitTeardownTickets.isEmpty else {
             return false
         }
         if !isAwaitingTerminateCleanup {
@@ -2190,6 +2203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     self.cancelTerminationAfterSimulatorCleanupFailure()
                     return
                 }
+                if self.terminalQuitTeardownTickets.isEmpty {
                 self.terminateCleanupPhase = .freshSnapshot
                 let ttyDeviceBindings = self.currentSurfaceTTYDeviceBindings()
                 let resumeIndexes = await ProcessDetectedResumeIndexes.loadFresh(
@@ -2205,6 +2219,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     surfaceResumeBindingIndex: resumeIndexes.surfaceResumeBindingIndex
                 )
                 ClosedItemHistoryStore.shared.flushPendingSaves()
+                }
+                // Persist before retiring terminals: the saved layout must retain
+                // resume identities and scrollback. Join native cleanup before exit
+                // so foreground jobs cannot survive with revoked PTYs.
+                self.terminateCleanupPhase = .ownedRuntimeCleanup
+                self.terminalQuitTeardownTickets += terminalPanels.compactMap { $0.surface.teardownSurface() }
+                let tickets = self.terminalQuitTeardownTickets
+                let cleaned = await withTaskGroup(of: Bool.self) { group in
+                    for ticket in tickets { group.addTask { await ticket.wait(timeout: .seconds(terminalCleanupSeconds)) } }
+                    var succeeded = true
+                    for await result in group { succeeded = succeeded && result }
+                    return succeeded
+                }
+                guard cleaned, !Task.isCancelled else {
+                    self.isTerminatingApp = false
+                    self.replyToTerminateOnce(false)
+                    return
+                }
+                self.terminalQuitTeardownTickets.removeAll()
                 self.terminationWatchdog.arm()
                 self.replyToTerminateOnce(true)
             }
@@ -2223,19 +2256,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 cleanupDeadline = .seconds(155)
             } else if !markedForKill.isEmpty {
                 cleanupDeadline = .milliseconds(8_500)
+            } else if !terminalPanels.isEmpty || !terminalQuitTeardownTickets.isEmpty {
+                cleanupDeadline = .seconds(terminalCleanupSeconds + 10)
             } else {
                 cleanupDeadline = .seconds(5)
             }
+            let effectiveCleanupDeadline = terminalCount > 0
+                ? max(cleanupDeadline, .seconds(terminalCleanupSeconds + 10)) : cleanupDeadline
             terminateCleanupWatchdogTask?.cancel()
             terminateCleanupWatchdogTask = Task { @MainActor in
-                try? await ContinuousClock().sleep(for: cleanupDeadline)
+                try? await ContinuousClock().sleep(for: effectiveCleanupDeadline)
                 guard !Task.isCancelled else { return }
                 cleanupTask.cancel()
                 let disposition = Self.terminateCleanupDeadlineDisposition(
                     phase: self.terminateCleanupPhase,
                     hasOwnedRuntimeCleanup: hasOwnedRuntimeCleanup
                 )
-                guard disposition == .cancelTerminationAfterRuntimeCleanupFailure else {
+                guard disposition == .cancelTerminationAfterRuntimeCleanupFailure
+                    || !terminalPanels.isEmpty || !self.terminalQuitTeardownTickets.isEmpty else {
                     _ = self.saveSessionSnapshotUsingCachedProcessDetectedIndexes(
                         includeScrollback: true,
                         removeWhenEmpty: false
@@ -10302,6 +10340,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             .environmentObject(sidebarSelectionState)
             .environmentObject(fileExplorerState)
             .environmentObject(cmuxConfigStore)
+            .environment(\.conversationDragAdapter, ConversationDragAdapter { provider, id, title, directory, activate in
+                AnyView(ConversationSidebarDragSource(provider: provider, sessionID: id,
+                    title: title, directory: directory, activate: activate))
+            })
             .environment(\.sessionDragRegistry, sessionDragRegistry)
             .environment(\.tabDragTransferRegistry, tabDragTransferRegistry)
             // AppKit hosts this ContentView in its own NSHostingView, which does

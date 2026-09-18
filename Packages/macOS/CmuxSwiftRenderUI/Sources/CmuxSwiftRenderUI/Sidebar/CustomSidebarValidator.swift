@@ -3,6 +3,10 @@ import Foundation
 
 /// Validates custom sidebar files using the same JSON schema and Swift interpreter as rendering.
 public struct CustomSidebarValidator {
+    static func isConversationSidebar(_ source: String) -> Bool {
+        source.trimmingCharacters(in: .whitespacesAndNewlines) == "// cmux:conversation-sidebar"
+    }
+
     private let fileManager: FileManager
     private let fallbackDataContext: [String: SwiftValue]
 
@@ -104,7 +108,8 @@ public struct CustomSidebarValidator {
                 _ = try JSONDecoder().decode(DSLDocument.self, from: data)
             case .js:
                 let source = try String(contentsOf: fileURL, encoding: .utf8)
-                if let message = SidebarJSRuntime.validate(source: source, state: dataContext ?? fallbackDataContext) {
+                if !Self.isConversationSidebar(source),
+                   let message = SidebarJSRuntime.validate(source: source, state: dataContext ?? fallbackDataContext) {
                     return CustomSidebarValidationEntry(
                         name: name,
                         fileURL: fileURL,

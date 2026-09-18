@@ -11,6 +11,18 @@ struct SessionEntryResumeLaunch: Sendable {
         case legacyCommand
     }
 
+    /// A direct login-shell command avoids the kernel echo before shell readiness.
+    /// Keep legacy registrations on their existing typed-input compatibility path.
+    func makeTerminalStartup() -> (command: String?, input: String?) {
+        guard strategy == .restoreVerb,
+              let command = OneShotTerminalLauncherStore().writeStartupCommand(
+                command: initialInput,
+                workingDirectory: workingDirectory,
+                execution: .resumeLoginShell
+              ) else { return (nil, initialInput) }
+        return (command, nil)
+    }
+
     /// The selected structured or compatibility launch strategy.
     let strategy: Strategy
     /// Input queued into the new terminal, including its trailing return.

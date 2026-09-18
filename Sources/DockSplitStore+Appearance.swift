@@ -30,7 +30,7 @@ extension DockSplitStore {
         let config = GhosttyConfig.loadForCmux()
         return BonsplitConfiguration(
             allowSplits: true,
-            allowCloseTabs: !CloseTabWarningStore(defaults: .standard).hidesTabCloseButton,
+            showsTabCloseButton: !CloseTabWarningStore(defaults: .standard).hidesTabCloseButton,
             allowCloseLastPane: false,
             allowTabReordering: true,
             allowCrossPaneTabMove: true,

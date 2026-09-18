@@ -63,9 +63,7 @@ extension Workspace {
     /// their stored workspace id matches, because that stored id goes stale
     /// across relaunches while the panel binding stays authoritative.
     private func customSidebarAgentSnapshots() -> [CustomSidebarAgentSnapshot] {
-        guard let service = TerminalController.shared.agentChatTranscriptService else { return [] }
-        let records = service.sessionRecords(workspaceID: nil)
-        guard !records.isEmpty else { return [] }
+        let records = TerminalController.shared.agentChatTranscriptService?.sessionRecords(workspaceID: nil) ?? []
         var surfaceIdByPanelId: [UUID: UUID] = [:]
         for paneId in bonsplitController.allPaneIds {
             for tab in bonsplitController.tabs(inPane: paneId) {
@@ -124,6 +122,20 @@ extension Workspace {
                 )
             )
             if agents.count >= Self.customSidebarAgentLimit { break }
+        }
+        // A restore owns its panel before the provider emits hooks. Reuse that
+        // exact identity immediately; this reads only already-open panel state.
+        let hookedPanels = Set(agents.compactMap(\.panelId))
+        for (panelID, snapshot) in restoredAgentSnapshotsByPanelId {
+            guard !hookedPanels.contains(panelID),
+                  let surfaceID = surfaceIdByPanelId[panelID],
+                  restoredAgentResumeStatesByPanelId[panelID] != .completedAgentExit else { continue }
+            agents.append(CustomSidebarAgentSnapshot(
+                sessionId: snapshot.sessionId, kind: snapshot.kind.rawValue,
+                name: snapshot.kind.rawValue, status: "starting", stateSince: nil,
+                lastActivityAt: .distantPast, title: panelTitles[panelID], panelId: panelID,
+                surfaceId: surfaceID, workingDirectory: panelDirectories[panelID],
+                transcriptPath: nil, pid: nil))
         }
         return agents
     }

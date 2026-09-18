@@ -168,6 +168,7 @@ def assert_session_entrypoint_is_instrumented(
         restore_token=restore_token,
     )
     expect(code == 0, f"{label}: wrapper exited {code}: {stderr}", failures)
+    expect(stderr == "", f"{label}: unexpected wrapper diagnostic: {stderr}", failures)
     expect(real_argv[:3] == ["--enable", "hooks", "--dangerously-bypass-hook-trust"],
            f"{label}: missing injected hook prefix: {real_argv}", failures)
     expect(any(arg.startswith("hooks.SessionStart=") for arg in real_argv),
@@ -180,7 +181,7 @@ def assert_session_entrypoint_is_instrumented(
            f"{label}: wrapper never requested local hook args: {cmux_log}", failures)
     expect(not any("ping" in line for line in cmux_log),
            f"{label}: transient socket health must not decide session instrumentation: {cmux_log}", failures)
-    expect(not any("hooks codex session-start" in line for line in cmux_log),
+    expect(not any("hooks codex session-start" in line or "hooks enqueue codex session-start" in line for line in cmux_log),
            f"{label}: wrapper must not synthesize SessionStart from argv: {cmux_log}", failures)
     expect(observed_env.get("CMUX_CODEX_PID") not in {None, "", "__UNSET__"},
            f"{label}: missing Codex process identity: {observed_env}", failures)

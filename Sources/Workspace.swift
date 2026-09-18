@@ -2004,7 +2004,7 @@ extension Workspace {
                 initialInput: restoredStartupInput,
                 startupEnvironment: replayEnvironment,
                 runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
-                    requestedPolicy: .pacedSessionRestore,
+                    requestedPolicy: .pacedSessionRestore.waitingForFirstPresentation(),
                     willRunStartupCommand: restoredAgentWillRunStartupCommand,
                     willRunStartupInput: restoredAgentWillRunStartupInput,
                     awaitsDeferredAgentResume: deferredAgentResumeAdmission
@@ -4016,7 +4016,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         )
         let config = BonsplitConfiguration(
             allowSplits: true,
-            allowCloseTabs: !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton,
+            showsTabCloseButton: !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton,
             allowCloseLastPane: false,
             allowTabReordering: true,
             allowCrossPaneTabMove: true,
@@ -4152,7 +4152,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             // Create initial tab in bonsplit and store the mapping
             if let tabId = bonsplitController.createTab(
                 title: title,
-                icon: "terminal.fill",
+                icon: "terminal",
                 kind: SurfaceKind.terminal.rawValue,
                 isDirty: false,
                 isPinned: false
@@ -4334,10 +4334,10 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
     }
 
     func refreshTabCloseButtonVisibility() {
-        let allowCloseTabs = !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton
+        let showsTabCloseButton = !CloseTabWarningStore(defaults: closeTabWarningDefaults).hidesTabCloseButton
         var configuration = bonsplitController.configuration
-        guard configuration.allowCloseTabs != allowCloseTabs else { return }
-        configuration.allowCloseTabs = allowCloseTabs
+        guard configuration.showsTabCloseButton != showsTabCloseButton else { return }
+        configuration.showsTabCloseButton = showsTabCloseButton
         bonsplitController.configuration = configuration
     }
 
@@ -9261,7 +9261,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             additionalEnvironment: effectiveStartupEnvironment,
             runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
                 requestedPolicy: runtimeSpawnPolicy,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: startupRestoreAgent != nil && initialInput != nil
             )
         )
@@ -9304,7 +9304,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 panel: newPanel,
                 snapshot: startupRestoreAgent,
                 manualResumeAvailable: true,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: initialInput != nil,
                 resumeWorkingDirectory: startupRestoreAgent.workingDirectory
             )
@@ -12702,14 +12702,29 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         entry: SessionEntry,
         destination: BonsplitController.ExternalTabDropRequest.Destination
     ) -> Bool {
+        // A history row is another handle on an existing session. Resolve at drop
+        // time across windows, then use the same move path as a live tab drag.
+        if let app = AppDelegate.shared {
+            for context in app.mainWindowContexts.values where context.window != nil {
+                guard let target = SessionEntryResumeCoordinator.activeTarget(for: entry, tabManager: context.tabManager),
+                      let source = context.tabManager.tabs.first(where: { $0.id == target.workspaceID }),
+                      let tab = source.surfaceIdFromPanelId(target.surfaceID),
+                      let pane = source.paneId(forPanelId: target.surfaceID) else { continue }
+                return handleExternalTabDrop(BonsplitController.ExternalTabDropRequest(
+                    tabId: tab, sourcePaneId: pane, destination: destination
+                ))
+            }
+        }
         guard let launch = entry.resumeLaunch else { return false }
+        let startup = launch.makeTerminalStartup()
         switch destination {
         case .insert(let paneId, _):
             let panel = newTerminalSurface(
                 inPane: paneId,
                 focus: true,
                 workingDirectory: launch.workingDirectory,
-                initialInput: launch.initialInput,
+                initialCommand: startup.command,
+                initialInput: startup.input,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
             return panel != nil
@@ -12719,7 +12734,8 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 orientation: orientation,
                 insertFirst: insertFirst,
                 workingDirectory: launch.workingDirectory,
-                initialInput: launch.initialInput,
+                initialInput: startup.input,
+                initialCommand: startup.command,
                 startupRestoreAgent: launch.startupRestoreAgent
             )
             return panel != nil
@@ -12845,16 +12861,18 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
         insertFirst: Bool,
         workingDirectory: String?,
         initialInput: String?,
+        initialCommand: String? = nil,
         startupRestoreAgent: SessionRestorableAgentSnapshot? = nil,
         remoteStartupCommand: String? = nil
     ) -> TerminalPanel? {
         guard !isRetiredFromOwningTabManager else { return nil }
         var inheritedConfig = inheritedTerminalConfig(inPane: paneId)
         let requestedRemoteStartupCommand = remoteStartupCommand?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let startupCommand = requestedRemoteStartupCommand?.isEmpty == false ? requestedRemoteStartupCommand : nil
+        let remoteCommand = requestedRemoteStartupCommand?.isEmpty == false ? requestedRemoteStartupCommand : nil
+        let startupCommand = initialCommand ?? remoteCommand
         let effectiveStartupEnvironment = terminalStartupEnvironment(
             base: startupEnvironmentMergingWorkspaceEnvironment([:]),
-            remoteStartupCommand: startupCommand
+            remoteStartupCommand: remoteCommand
         )
         if startupCommand != nil {
             var template = inheritedConfig ?? CmuxSurfaceConfigTemplate()
@@ -12873,14 +12891,14 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             additionalEnvironment: effectiveStartupEnvironment,
             runtimeSpawnPolicy: terminalStartupRestoreCoordinator.runtimeSpawnPolicy(
                 requestedPolicy: .immediate,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: startupRestoreAgent != nil && initialInput != nil
             )
         )
         configureNewTerminalPanel(newPanel)
         panels[newPanel.id] = newPanel
         panelTitles[newPanel.id] = newPanel.displayTitle
-        if startupCommand != nil {
+        if remoteCommand != nil {
             trackRemoteTerminalSurface(newPanel.id)
         }
 
@@ -12899,7 +12917,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
             panels.removeValue(forKey: newPanel.id)
             panelTitles.removeValue(forKey: newPanel.id)
             removeSurfaceMapping(forSurfaceId: newTab.id)
-            if startupCommand != nil {
+            if remoteCommand != nil {
                 untrackRemoteTerminalSurface(newPanel.id)
             }
             return nil
@@ -12909,7 +12927,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
                 panel: newPanel,
                 snapshot: startupRestoreAgent,
                 manualResumeAvailable: true,
-                willRunStartupCommand: false,
+                willRunStartupCommand: startupRestoreAgent != nil && startupCommand != nil,
                 willRunStartupInput: initialInput != nil,
                 resumeWorkingDirectory: startupRestoreAgent.workingDirectory
             )
@@ -13257,6 +13275,14 @@ extension Workspace: BonsplitDelegate {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .warning
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = String(localized: "dialog.closeTab.dontWarnAgain", defaultValue: "Don’t warn again when closing tabs")
+        let warningStore = CloseTabWarningStore(defaults: closeTabWarningDefaults)
+        func accepted(_ response: NSApplication.ModalResponse) -> Bool {
+            let confirmed = response == .alertFirstButtonReturn
+            warningStore.recordCloseConfirmation(confirmed: confirmed, suppressFutureWarnings: alert.suppressionButton?.state == .on)
+            return confirmed
+        }
         alert.addButton(withTitle: String(localized: "dialog.closeTab.close", defaultValue: "Close"))
         alert.addButton(withTitle: String(localized: "dialog.closeTab.cancel", defaultValue: "Cancel"))
 
@@ -13277,13 +13303,13 @@ extension Workspace: BonsplitDelegate {
             content.apply(to: alert, presentingWindow: window)
             return await withCheckedContinuation { continuation in
                 alert.beginSheetModal(for: window) { response in
-                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                    continuation.resume(returning: accepted(response))
                 }
             }
         }
 
         content.apply(to: alert, presentingWindow: nil)
-        return alert.runModal() == .alertFirstButtonReturn
+        return accepted(alert.runModal())
     }
 
     /// Apply the side-effects of selecting a tab (unfocus others, focus this panel, update state).

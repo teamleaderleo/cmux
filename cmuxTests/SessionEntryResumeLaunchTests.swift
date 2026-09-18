@@ -39,6 +39,9 @@ struct SessionEntryResumeLaunchTests {
                 == " \(AgentRestoreLaunch.cliStartupExecutableToken) restore codex vault-session\n"
         )
         #expect(launch.workingDirectory == "/tmp/vault-project")
+        let startup = launch.makeTerminalStartup()
+        #expect(startup.command != nil)
+        #expect(startup.input == nil)
         #expect(!launch.initialInput.contains("cd --"))
         #expect(!launch.initialInput.contains("codex resume"))
 
