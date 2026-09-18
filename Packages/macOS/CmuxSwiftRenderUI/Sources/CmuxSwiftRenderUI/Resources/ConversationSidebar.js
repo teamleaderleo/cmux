@@ -72,6 +72,27 @@ function isSelected(r) {
   if (!target.panel) return (target.w.tabs || []).length === 1 && !!target.w.tabs[0].focused;
   return (target.w.tabs || []).some(t => t.id === target.panel && t.focused);
 }
+function newOperationID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);});
+}
+function providerCommand(provider) {
+  return provider === 'Claude' ? 'claude' : provider === 'OpenCode' ? 'opencode' : 'codex';
+}
+// A group header's folder is a real directory, so a new chat can start there
+// instead of inheriting whatever workspace happens to be selected.
+function groupDirectory(g) {
+  if (g.pinned) return null;
+  if (g.name && g.name.startsWith('/')) return g.name;
+  return g.rows.length ? g.rows[0].cwd || null : null;
+}
+function newChatInGroup(g) {
+  const directory = groupDirectory(g);
+  if (!directory) return;
+  const provider = g.rows.length ? g.rows[0].provider : 'Codex';
+  cmux('workspace.create', {title: 'New ' + provider + ' chat', working_directory: directory,
+    initial_command: providerCommand(provider), conversation_placement: 'tab',
+    operation_id: newOperationID(), focus: true});
+}
 function focus(r) {
   const target = linked(r);
   if (target) {
@@ -82,7 +103,7 @@ function focus(r) {
 function resume(r) {
   if (linked(r)) return focus(r);
   if (Date.now() - (pending()[key(r)]?.started || 0) < 15000) return;
-  const operationID = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return (c==='x'?n:(n&3)|8).toString(16);});
+  const operationID = newOperationID();
   const failures = {...failed()}; delete failures[key(r)]; setFailed(failures);
   setPending({...pending(), [key(r)]: {started: Date.now(), operationID}});
   cmux('workspace.create', {title: r.title, working_directory: r.cwd,
@@ -136,10 +157,16 @@ const groups = computed(() => pageGroups(allGroups(), viewLimit(), collapsed(), 
 function conversationList() { return VStack({spacing:2}, [
   ForEach({items:groups,key:g=>g.id},g=>VStack({spacing:2},[
     HStack({spacing:5},[
-      ForEach({items:()=>g().pinned?[]:[g().id],key:n=>n},n=>Image('folder').font(12).secondary()),
-      Text(()=>g().name.startsWith('/')?g().name.split('/').filter(Boolean).pop():g().name)
-        .font(()=>g().pinned?11:12).weight('regular').color(()=>g().pinned?'secondary':'primary').lineLimit(1), Spacer()
-    ]).paddingLeading(10).paddingVertical(4).onTap(()=>setCollapsed({...collapsed(),[g().id]:!collapsed()[g().id]})),
+      HStack({spacing:5},[
+        ForEach({items:()=>g().pinned?[]:[g().id],key:n=>n},n=>Image('folder').font(12).secondary()),
+        Text(()=>g().name.startsWith('/')?g().name.split('/').filter(Boolean).pop():g().name)
+          .font(()=>g().pinned?11:12).weight('regular').color(()=>g().pinned?'secondary':'primary').lineLimit(1), Spacer()
+      ]).paddingLeading(10).paddingVertical(4).onTap(()=>setCollapsed({...collapsed(),[g().id]:!collapsed()[g().id]})),
+      ForEach({items:()=>groupDirectory(g())?[g().id]:[],key:n=>n},n=>
+        Button(()=>'New chat in '+(g().name.startsWith('/')?g().name.split('/').filter(Boolean).pop():g().name),
+          ()=>newChatInGroup(g()),
+          [Image('plus').font(11).secondary().paddingHorizontal(6).paddingVertical(4)]))
+    ]).paddingTrailing(4),
     ForEach({items:()=>collapsed()[g().id] && !viewQuery().trim() ? [] : g().rows,key:key},r=>VStack({spacing:3},[
       Button(()=>r().title,()=>focus(r()),[HStack({spacing:7,directHover:true,hoverBackground:'#ffffff12',
         shortcutHint:()=>data.commandHeld()&&pinNumber(r())>0?'⌘'+pinNumber(r()):'',
