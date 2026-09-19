@@ -17,6 +17,7 @@ not been measured under the controlled protocol in `BUILD_PERFORMANCE.md`.
 | Glaeda prior-art comment-only build | cache-retaining | 1 | 30.737s; zero SwiftCompile tasks | Context from Glaeda issue #1048; not a cmux build measurement. |
 | Local cmux fresh DerivedData probe | fresh DerivedData, reused SwiftPM source cache | 1 | 9m04s, still compiling `cmux`; terminated after no progress | GhosttyKit was provisioned. This is a cold-ish full graph, not comparable to the warm tagged sample. |
 | Local cmux resumed probe | same DerivedData, 300s bound | 1 | timed out at 300s while still compiling `cmux` | Confirms the full graph is too expensive to repeat locally for the matrix. |
+| Hosted `reload-build` smoke | GitHub-hosted `macos-14`, baseline | 1 | cancelled after >10m in GhosttyKit provisioning | Run [35407671237](https://github.com/teamleaderleo/cmux/actions/runs/35407671237); this older workflow did not reach `xcodebuild`, so it is setup evidence only. |
 
 ## Interpretation
 
