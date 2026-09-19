@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/mobile-attach.sh"
 # shellcheck source=scripts/lib/dev-secrets.sh
 source "$SCRIPT_DIR/lib/dev-secrets.sh"
+# shellcheck source=scripts/lib/dev-build-hygiene.sh
+source "$SCRIPT_DIR/lib/dev-build-hygiene.sh"
 
 APP_NAME="cmux DEV"
 BUNDLE_ID="com.cmuxterm.app.debug"
@@ -921,6 +923,12 @@ Options:
   --swift-disable-global-isel
                          Alias for --swift-frontend-workaround.
   -h, --help             Show this help.
+
+Environment:
+  CMUX_RELOAD_MIN_FREE_GB
+                         Free disk required before building (default: 15 for a
+                         cold tag, 4 for an incremental one; 0 disables). Run
+                         ./scripts/prune-dev-builds.sh to reclaim space.
 EOF
 }
 
@@ -1102,6 +1110,7 @@ print_tag_cleanup_reminder() {
       echo "  rm -f \"$HOME/Library/Application Support/cmux/cmuxd-dev-${tag}.sock\""
     done
   fi
+  echo "Or remove every orphaned/idle tag build at once: ./scripts/prune-dev-builds.sh --apply"
   echo "After you verify current tag, cleanup command:"
   echo "  pkill -f \"cmux DEV ${current_slug}.app/Contents/MacOS/cmux DEV\""
   echo "  rm -rf \"$(tagged_derived_data_path "$current_slug")\" \"/tmp/cmux-${current_slug}\" \"/tmp/cmux-debug-${current_slug}.sock\""
@@ -1473,6 +1482,12 @@ else
   SWIFT_FRONTEND_WORKAROUND_EFFECTIVE=0
 fi
 XCODEBUILD_ARGS+=(build)
+
+if [[ -n "$DERIVED_DATA" ]]; then
+  # Check before anything is created, so a refused build leaves no directory.
+  cmux_dev_build_disk_guard "$DERIVED_DATA" || exit 1
+  cmux_dev_build_write_lease "$DERIVED_DATA" "${TAG_SLUG:-}" "$PWD"
+fi
 
 if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then
   mkdir -p "$BUILD_PRODUCTS_DEBUG_DIR"
