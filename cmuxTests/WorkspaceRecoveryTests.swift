@@ -189,7 +189,10 @@ struct WorkspaceRecoveryTests {
             workspaceTerminalFontSizeArbiter:
                 appDelegate.workspaceTerminalFontSizeArbiter
         )
-        appDelegate.mainWindowContexts[ObjectIdentifier(sourceContext)] = sourceContext
+        appDelegate.insertMainWindowContextForTesting(
+            sourceContext,
+            key: ObjectIdentifier(sourceContext)
+        )
         appDelegate.tabManager = sourceManager
 
         let destinationManager = TabManager(autoWelcomeIfNeeded: false)

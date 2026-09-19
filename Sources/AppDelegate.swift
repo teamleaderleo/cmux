@@ -4828,6 +4828,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NotificationCenter.default.post(name: .mainWindowContextsDidChange, object: self)
     }
 
+#if DEBUG
+    /// Inserts a windowless test context without exposing the registry storage.
+    func insertMainWindowContextForTesting(_ context: MainWindowContext, key: ObjectIdentifier) {
+        mainWindowRegistry.insert(context, for: key)
+    }
+#endif
+
     func ensureMobileWorkspaceListObserver(for tabManager: TabManager) {
         let id = ObjectIdentifier(tabManager)
         let configStore = mainWindowContext(for: tabManager)?.cmuxConfigStore
