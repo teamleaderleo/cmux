@@ -27,3 +27,7 @@ The helper refuses to run without `CMUX_TAG`, targets `/tmp/cmux-debug-<tag>.soc
 ## Cleanup
 
 Before launching a new tagged run, quit older tagged apps you started this session and remove their stale `/tmp` sockets. Remove derived data only when no active task needs it.
+
+Each tag owns a DerivedData directory of several GB, so reuse one tag per task instead of minting a new tag per experiment. `./scripts/prune-dev-builds.sh` lists every tagged build with its size and whether it is running, active, idle, or orphaned (its worktree is gone); `--apply` removes only the idle and orphaned ones. `reload.sh` refuses to start when the disk cannot hold the build (15 GB free for a cold tag, 4 GB for an incremental one; `CMUX_RELOAD_MIN_FREE_GB` overrides) and points at the prune command.
+
+For a new line of work, prefer `./scripts/new-worktree.sh <branch>` over a fresh clone: it shares git objects with the current checkout and runs `setup.sh`, so the worktree builds immediately.
