@@ -131,6 +131,10 @@ struct ConversationSidebarView: View {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let canShowMoreHistory = projected.hasMoreLoadedHistory
             || (trimmedSearch.isEmpty && canLoadMoreHistory)
+        let showsHistorySection = projection.shouldShowHistorySection(
+            hasVisibleHistory: !visibleHistoryRows.isEmpty,
+            canShowMoreHistory: canShowMoreHistory
+        )
 
         VStack(spacing: 0) {
             searchField
@@ -148,7 +152,7 @@ struct ConversationSidebarView: View {
                         }
                     }
 
-                    if !visibleHistoryRows.isEmpty {
+                    if showsHistorySection {
                         sectionLabel(
                             String(localized: "menu.history.title", defaultValue: "History")
                         )
@@ -221,7 +225,7 @@ struct ConversationSidebarView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 10)
-                    } else if rows.isEmpty {
+                    } else if rows.isEmpty, !showsHistorySection {
                         Text(
                             trimmedSearch.isEmpty
                                 ? String(localized: "sessionIndex.empty.title", defaultValue: "Vault is empty")
@@ -388,7 +392,7 @@ struct ConversationSidebarView: View {
         }
 
         let configuredAgentsByID = projection.presentationAgentsByID(
-            livePresentationAgents + store.agentOrder
+            store.entries.map(\.agent) + livePresentationAgents + store.agentOrder
         )
         let workspaceByPanelID = projection.workspacesByPanelID(tabManager.tabs)
 

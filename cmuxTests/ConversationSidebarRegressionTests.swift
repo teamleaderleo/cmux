@@ -109,6 +109,27 @@ struct ConversationSidebarRegressionTests {
     }
 
     @Test
+    func historySectionRemainsReachableWhenInitialHistoryIsAllOpen() {
+        let open = sessionEntry(id: "open", title: "open", modified: 20)
+        let visible = projection.visibleHistoryEntries(
+            source: [open],
+            excludingOpenIDs: [VaultLiveSessionKeys.key(for: open)],
+            limit: 24
+        )
+
+        #expect(visible.entries.isEmpty)
+        #expect(!visible.hasMore)
+        #expect(projection.shouldShowHistorySection(
+            hasVisibleHistory: false,
+            canShowMoreHistory: true
+        ))
+        #expect(!projection.shouldShowHistorySection(
+            hasVisibleHistory: false,
+            canShowMoreHistory: false
+        ))
+    }
+
+    @Test
     func recordChangesPublishSidebarRefreshNotification() async {
         let service = AgentChatTranscriptService(
             registry: AgentChatSessionRegistry(),

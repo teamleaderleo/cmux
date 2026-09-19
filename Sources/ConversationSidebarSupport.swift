@@ -119,6 +119,10 @@ struct ConversationSidebarProjection {
         return (entries, false)
     }
 
+    func shouldShowHistorySection(hasVisibleHistory: Bool, canShowMoreHistory: Bool) -> Bool {
+        hasVisibleHistory || canShowMoreHistory
+    }
+
     func nextHistoryPerAgentLimit(current: Int) -> Int {
         min(current + historyPagePerAgent, SessionIndexStore.searchMaxFiles)
     }
