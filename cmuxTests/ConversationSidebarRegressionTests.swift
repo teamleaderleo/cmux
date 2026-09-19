@@ -89,35 +89,22 @@ struct ConversationSidebarRegressionTests {
     }
 
     @Test
-    func deeperHistoryFetchStartsAtLoadedBoundary() {
-        #expect(
-            !projection.shouldFetchMoreHistory(
-                visibleHistoryCount: 24,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: true,
-                canLoadMoreHistory: true
-            )
+    func visibleHistoryProjectionStopsAfterOneSentinel() {
+        let first = sessionEntry(id: "first", title: "first", modified: 30)
+        let open = sessionEntry(id: "open", title: "open", modified: 20)
+        let second = sessionEntry(id: "second", title: "second", modified: 10)
+        let result = projection.visibleHistoryEntries(
+            source: [first, open, second],
+            excludingOpenIDs: [VaultLiveSessionKeys.key(for: open)],
+            limit: 1
         )
-        #expect(
-            projection.shouldFetchMoreHistory(
-                visibleHistoryCount: 48,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: true,
-                canLoadMoreHistory: true
-            )
-        )
+
+        #expect(result.entries.map(\.id) == ["first"])
+        #expect(result.hasMore)
         #expect(
             projection.nextHistoryPerAgentLimit(
                 current: SessionIndexStore.perAgentLimit
             ) == SessionIndexStore.perAgentLimit + projection.historyPagePerAgent
-        )
-        #expect(
-            !projection.shouldFetchMoreHistory(
-                visibleHistoryCount: 48,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: false,
-                canLoadMoreHistory: true
-            )
         )
     }
 

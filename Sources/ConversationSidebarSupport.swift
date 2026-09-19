@@ -100,15 +100,23 @@ struct ConversationSidebarProjection {
         return terms.allSatisfy { haystack.contains($0) }
     }
 
-    func shouldFetchMoreHistory(
-        visibleHistoryCount: Int,
-        loadedHistoryCount: Int,
-        searchIsEmpty: Bool,
-        canLoadMoreHistory: Bool
-    ) -> Bool {
-        searchIsEmpty
-            && canLoadMoreHistory
-            && visibleHistoryCount >= loadedHistoryCount
+    func visibleHistoryEntries(
+        source: [SessionEntry],
+        excludingOpenIDs openIDs: Set<String>,
+        limit: Int
+    ) -> (entries: [SessionEntry], hasMore: Bool) {
+        guard limit > 0 else {
+            return ([], source.contains { !openIDs.contains(VaultLiveSessionKeys.key(for: $0)) })
+        }
+        var entries: [SessionEntry] = []
+        entries.reserveCapacity(min(limit, source.count))
+        for entry in source where !openIDs.contains(VaultLiveSessionKeys.key(for: entry)) {
+            if entries.count == limit {
+                return (entries, true)
+            }
+            entries.append(entry)
+        }
+        return (entries, false)
     }
 
     func nextHistoryPerAgentLimit(current: Int) -> Int {

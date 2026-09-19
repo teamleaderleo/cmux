@@ -123,13 +123,13 @@ struct ConversationSidebarView: View {
     }
 
     var body: some View {
-        let rows = projectedRows(liveSessionRevision: liveSessionRevision)
+        let projected = projectedRows(liveSessionRevision: liveSessionRevision)
+        let rows = projected.rows
         let openRows = rows.filter(\.isOpen)
-        let historyRows = rows.filter { !$0.isOpen }
-        let visibleHistoryRows = Array(historyRows.prefix(visibleHistoryCount))
+        let visibleHistoryRows = rows.filter { !$0.isOpen }
         let manager = tabManager
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canShowMoreHistory = historyRows.count > visibleHistoryRows.count
+        let canShowMoreHistory = projected.hasMoreLoadedHistory
             || (trimmedSearch.isEmpty && canLoadMoreHistory)
 
         VStack(spacing: 0) {
@@ -161,12 +161,7 @@ struct ConversationSidebarView: View {
                         if canShowMoreHistory {
                             Button {
                                 visibleHistoryCount += Self.pageSize
-                                if projection.shouldFetchMoreHistory(
-                                    visibleHistoryCount: visibleHistoryCount,
-                                    loadedHistoryCount: historyRows.count,
-                                    searchIsEmpty: trimmedSearch.isEmpty,
-                                    canLoadMoreHistory: canLoadMoreHistory
-                                ) {
+                                if trimmedSearch.isEmpty, canLoadMoreHistory {
                                     Task { await loadMoreHistory() }
                                 }
                             } label: {
@@ -303,7 +298,9 @@ struct ConversationSidebarView: View {
             .padding(.bottom, 3)
     }
 
-    private func projectedRows(liveSessionRevision: UInt64) -> [Row] {
+    private func projectedRows(
+        liveSessionRevision: UInt64
+    ) -> (rows: [Row], hasMoreLoadedHistory: Bool) {
         _ = liveSessionRevision
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let matchedKeys = Set(searchResults.map(VaultLiveSessionKeys.key(for:)))
@@ -364,22 +361,25 @@ struct ConversationSidebarView: View {
                 return lhs.id < rhs.id
             }
 
-        let history = historySource
-            .filter { !openIDs.contains(VaultLiveSessionKeys.key(for: $0)) }
-            .map { entry in
-                Row(
-                    id: VaultLiveSessionKeys.key(for: entry),
-                    title: displayTitle(for: entry),
-                    agent: entry.agent,
-                    directory: entry.cwd,
-                    modified: entry.modified,
-                    isOpen: false,
-                    isFocused: false,
-                    destination: .indexed(entry)
-                )
-            }
+        let visibleHistory = projection.visibleHistoryEntries(
+            source: historySource,
+            excludingOpenIDs: openIDs,
+            limit: visibleHistoryCount
+        )
+        let history = visibleHistory.entries.map { entry in
+            Row(
+                id: VaultLiveSessionKeys.key(for: entry),
+                title: displayTitle(for: entry),
+                agent: entry.agent,
+                directory: entry.cwd,
+                modified: entry.modified,
+                isOpen: false,
+                isFocused: false,
+                destination: .indexed(entry)
+            )
+        }
 
-        return visibleOpen + history
+        return (visibleOpen + history, visibleHistory.hasMore)
     }
 
     private func authoritativeLiveRows() -> [Row] {
@@ -388,11 +388,7 @@ struct ConversationSidebarView: View {
         }
 
         let configuredAgentsByID = projection.presentationAgentsByID(
-            livePresentationAgents
-                + store.agentOrder
-                + store.entries.map(\.agent)
-                + expandedHistory.map(\.agent)
-                + searchResults.map(\.agent)
+            livePresentationAgents + store.agentOrder
         )
         let workspaceByPanelID = projection.workspacesByPanelID(tabManager.tabs)
 
