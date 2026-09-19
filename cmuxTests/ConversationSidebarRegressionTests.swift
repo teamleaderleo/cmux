@@ -62,11 +62,37 @@ struct ConversationSidebarRegressionTests {
         let resolved = try #require(
             projection.presentationAgent(
                 for: record,
-                configuredAgentsByID: agentsByID
+                configuredAgentsByDirectory: ["": agentsByID],
+                fallbackAgentsByID: [:]
             )
         )
         #expect(resolved == .registered(registered))
         #expect(resolved.displayName == "Pi")
+        #expect(resolved.assetName == "AgentIcons/Pi")
+    }
+
+    @Test
+    func projectLocalAgentPresentationWinsForItsLiveDirectory() throws {
+        let global = RegisteredSessionAgent(id: "custom", name: "Global Custom")
+        let local = RegisteredSessionAgent(
+            id: "custom", name: "Project Custom", iconAssetName: "AgentIcons/Pi"
+        )
+        let record = AgentChatSessionRecord(
+            sessionID: "custom-session", agentKind: .other("custom"),
+            workspaceID: nil, surfaceID: nil, workingDirectory: "/repo/project",
+            transcriptPath: nil, state: .idle, lastActivityAt: Date.distantPast,
+            title: nil, pid: nil
+        )
+        let resolved = try #require(projection.presentationAgent(
+            for: record,
+            configuredAgentsByDirectory: [
+                "": projection.presentationAgentsByID([.registered(global)]),
+                "/repo/project": projection.presentationAgentsByID([.registered(local)]),
+            ],
+            fallbackAgentsByID: [:]
+        ))
+        #expect(resolved == .registered(local))
+        #expect(resolved.displayName == "Project Custom")
         #expect(resolved.assetName == "AgentIcons/Pi")
     }
 

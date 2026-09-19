@@ -26,7 +26,7 @@ struct ConversationSidebarView: View {
     @State private var historyPerAgentLimit = SessionIndexStore.perAgentLimit
     @State private var visibleHistoryCount = 24
     @State private var liveSessionRevision: UInt64 = 0
-    @State private var livePresentationAgents: [SessionAgent] = []
+    @State private var livePresentationAgentsByDirectory: [String: [String: SessionAgent]] = [:]
 
     private static let pageSize = 24
     private let projection = ConversationSidebarProjection()
@@ -256,7 +256,7 @@ struct ConversationSidebarView: View {
         .modifier(
             ConversationSidebarLiveRefreshModifier(
                 revision: $liveSessionRevision,
-                presentationAgents: $livePresentationAgents
+                presentationAgentsByDirectory: $livePresentationAgentsByDirectory
             )
         )
         .onChange(of: searchText) { _, newValue in
@@ -391,8 +391,8 @@ struct ConversationSidebarView: View {
             return []
         }
 
-        let configuredAgentsByID = projection.presentationAgentsByID(
-            store.entries.map(\.agent) + livePresentationAgents + store.agentOrder
+        let fallbackAgentsByID = projection.presentationAgentsByID(
+            store.entries.map(\.agent) + store.agentOrder
         )
         let workspaceByPanelID = projection.workspacesByPanelID(tabManager.tabs)
 
@@ -404,7 +404,8 @@ struct ConversationSidebarView: View {
                   let workspace = workspaceByPanelID[panelID],
                   let agent = projection.presentationAgent(
                     for: record,
-                    configuredAgentsByID: configuredAgentsByID
+                    configuredAgentsByDirectory: livePresentationAgentsByDirectory,
+                    fallbackAgentsByID: fallbackAgentsByID
                   ) else {
                 return nil
             }

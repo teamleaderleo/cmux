@@ -21,13 +21,24 @@ struct ConversationSidebarProjection {
         return result
     }
 
+    func presentationDirectoryKey(_ workingDirectory: String?) -> String {
+        guard let directory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !directory.isEmpty else { return "" }
+        return directory
+    }
+
     func presentationAgent(
         for record: AgentChatSessionRecord,
-        configuredAgentsByID: [String: SessionAgent]
+        configuredAgentsByDirectory: [String: [String: SessionAgent]],
+        fallbackAgentsByID: [String: SessionAgent]
     ) -> SessionAgent? {
+        let directoryKey = presentationDirectoryKey(record.workingDirectory)
+        let configuredAgentsByID = configuredAgentsByDirectory[directoryKey]
+            ?? configuredAgentsByDirectory[""]
+            ?? fallbackAgentsByID
         // This fallback is presentation-only. Session identity and routing
         // continue to come from the authoritative agent-chat record.
-        configuredAgentsByID[record.agentKind.sourceName]
+        return configuredAgentsByID[record.agentKind.sourceName]
             ?? SessionAgent(rawValue: record.agentKind.sourceName)
     }
 
@@ -138,22 +149,42 @@ struct ConversationSidebarProjection {
 @MainActor
 struct ConversationSidebarLiveRefreshModifier: ViewModifier {
     @Binding var revision: UInt64
-    @Binding var presentationAgents: [SessionAgent]
+    @Binding var presentationAgentsByDirectory: [String: [String: SessionAgent]]
+    @State private var loadedDirectoryKeys: Set<String> = []
+    private let projection = ConversationSidebarProjection()
 
     func body(content: Content) -> some View {
-        content
-            .task {
-                let loaded = await SessionIndexStore.defaultAgentOrder(workingDirectory: nil)
+        content.task {
+            await refreshPresentationAgents()
+            for await _ in NotificationCenter.default.notifications(
+                named: .agentChatSessionRecordsDidChange
+            ) {
                 guard !Task.isCancelled else { return }
-                presentationAgents = loaded.agents
+                revision &+= 1
+                await refreshPresentationAgents()
             }
-            .task {
-                for await _ in NotificationCenter.default.notifications(
-                    named: .agentChatSessionRecordsDidChange
-                ) {
-                    guard !Task.isCancelled else { return }
-                    revision &+= 1
-                }
-            }
+        }
+    }
+
+    private func refreshPresentationAgents() async {
+        let records = TerminalController.shared.agentChatTranscriptService?
+            .sessionRecords(workspaceID: nil) ?? []
+        var requiredDirectoryKeys = Set(
+            records.map { projection.presentationDirectoryKey($0.workingDirectory) }
+        )
+        requiredDirectoryKeys.insert("")
+        let missingDirectoryKeys = requiredDirectoryKeys.subtracting(loadedDirectoryKeys)
+        guard !missingDirectoryKeys.isEmpty else { return }
+
+        var next = presentationAgentsByDirectory
+        for directoryKey in missingDirectoryKeys.sorted() {
+            let loaded = await SessionIndexStore.defaultAgentOrder(
+                workingDirectory: directoryKey.isEmpty ? nil : directoryKey
+            )
+            guard !Task.isCancelled else { return }
+            next[directoryKey] = projection.presentationAgentsByID(loaded.agents)
+        }
+        presentationAgentsByDirectory = next
+        loadedDirectoryKeys.formUnion(missingDirectoryKeys)
     }
 }
