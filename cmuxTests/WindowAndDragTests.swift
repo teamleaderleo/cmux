@@ -388,6 +388,56 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
         XCTAssertTrue(managerB.tabs.contains(where: { $0.id == createdWorkspaceId }))
     }
 
+    func testAddWorkspaceCanSelectInExplicitWindowWithoutChangingActiveWindow() {
+        _ = NSApplication.shared
+        let app = AppDelegate()
+
+        let windowAId = UUID()
+        let windowBId = UUID()
+        let windowA = makeMainWindow(id: windowAId)
+        let windowB = makeMainWindow(id: windowBId)
+        defer {
+            windowA.orderOut(nil)
+            windowB.orderOut(nil)
+        }
+
+        let managerA = TabManager()
+        let managerB = TabManager()
+        app.registerMainWindow(
+            windowA,
+            windowId: windowAId,
+            tabManager: managerA,
+            sidebarState: SidebarState(),
+            sidebarSelectionState: SidebarSelectionState(),
+            fileExplorerState: FileExplorerState()
+        )
+        app.registerMainWindow(
+            windowB,
+            windowId: windowBId,
+            tabManager: managerB,
+            sidebarState: SidebarState(),
+            sidebarSelectionState: SidebarSelectionState(),
+            fileExplorerState: FileExplorerState()
+        )
+
+        windowA.makeKeyAndOrderFront(nil)
+        _ = app.synchronizeActiveMainWindowContext(preferredWindow: windowA)
+        let originalSelectedA = managerA.selectedTabId
+
+        let createdWorkspaceId = app.addWorkspace(
+            windowId: windowBId,
+            bringToFront: false,
+            select: true,
+            placementOverride: .end
+        )
+
+        XCTAssertNotNil(createdWorkspaceId)
+        XCTAssertTrue(app.tabManager === managerA)
+        XCTAssertEqual(managerA.selectedTabId, originalSelectedA)
+        XCTAssertEqual(managerB.selectedTabId, createdWorkspaceId)
+        XCTAssertEqual(managerB.tabs.last?.id, createdWorkspaceId)
+    }
+
     func testApplicationOpenURLsAddsWorkspaceForDroppedFolderURL() throws {
         _ = NSApplication.shared
         let app = AppDelegate()
