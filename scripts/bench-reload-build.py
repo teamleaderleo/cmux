@@ -20,6 +20,11 @@ def main() -> int:
     parser.add_argument("--derived-data", type=pathlib.Path)
     parser.add_argument("--keep-running", action="store_true")
     parser.add_argument(
+        "--prod-auth",
+        action="store_true",
+        help="use reload.sh production-auth build settings without the private dev backend",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=900,
@@ -33,6 +38,8 @@ def main() -> int:
         parser.error("--timeout must be positive")
 
     command = ["./scripts/reload.sh", "--tag", args.tag]
+    if args.prod_auth:
+        command.append("--prod-auth")
     if args.derived_data:
         command += ["--derived-data", str(args.derived_data)]
     environment = os.environ.copy()
@@ -84,6 +91,7 @@ def main() -> int:
         "iterations": args.iterations,
         "command": command,
         "keep_running": args.keep_running,
+        "prod_auth": args.prod_auth,
         "timeout_seconds": args.timeout,
         "samples": samples,
         "successful_samples": [

@@ -119,6 +119,7 @@ jobs:
             --profile "${{ matrix.arm }}"
             --iterations "${{ inputs.iterations || '5' }}"
             --timeout 1800
+            --prod-auth
             --derived-data "$RUNNER_TEMP/cmux-derived-${{ matrix.arm }}"
             --output "perf-results/${{ matrix.arm }}.json"
           )

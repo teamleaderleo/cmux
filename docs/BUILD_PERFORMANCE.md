@@ -43,6 +43,10 @@ Run the same command at each arm and change only `--profile`, `--tag`, and the i
 
 The harness records every sample, including failed builds, in a JSON receipt. Use `--timeout` to bound a cold-cache or package-resolution stall; timed-out samples are failures and retain the captured output tail.
 
+The manual CI workflow passes `--prod-auth` so a hosted or leased runner can
+measure the build without starting the private GCP/Tailscale development
+backend. This changes runtime endpoint configuration, not the Xcode build graph.
+
 For a controlled multi-arm run, dispatch `.github/workflows/build-performance.yml` on a macOS runner. It runs baseline, the exact #56/#60/#61 commits, and a composed cherry-pick with the same workflow and receipt format. The workflow is manual-only so ordinary pull requests do not consume five macOS build slots.
 
 The workflow pins Ghostty to the same revision and verified GhosttyKit checksum
