@@ -75,6 +75,16 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+          # Keep the native dependency identical across arms. Older candidate
+          # refs predate the current prebuilt GhosttyKit checksum entry, so use
+          # the pinned current Ghostty revision and checksum manifest for every
+          # arm; the cmux source changes remain the only matrix variable.
+          bench_ghostty_sha=abd40f6e472d57f2d4bb182004bb5f3fac8df961
+          git -C ghostty fetch --no-tags origin "$bench_ghostty_sha"
+          git -C ghostty checkout --detach "$bench_ghostty_sha"
+          git show a74418ae3fb4d680f00be28dbd8b9f23d7ae47b1:scripts/ghosttykit-checksums.txt \
+            > scripts/ghosttykit-checksums.txt
+
       - name: Install Rust
         run: ./scripts/install-rust-ci.sh
 
