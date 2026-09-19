@@ -24,9 +24,10 @@ import CmuxSidebarProviderKit
 @MainActor
 @Suite(.serialized)
 struct SidebarProviderMenuRegressionTests {
-    /// Stable ids of the seven built-in sidebar views, in menu order.
+    /// Stable ids of the built-in sidebar views, in menu order.
     private static let builtInViewIDs: [String] = [
         "cmux.sidebar.default",
+        "cmux.sidebar.conversations",
         "com.example.cmux.sidebar.project-worktrees",
         "com.example.cmux.sidebar.attention-queue",
         "com.example.cmux.sidebar.dev-servers",
