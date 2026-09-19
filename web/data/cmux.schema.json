@@ -1071,6 +1071,18 @@
           "additionalProperties": false,
           "description": "Experimental sidebar features.",
           "properties": {
+            "conversations": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Offers Conversations in the sidebar view picker when the beta is available.",
+                  "descriptionKey": "schemaDescriptions.sidebar.conversationsEnabled"
+                }
+              }
+            },
             "workspaceTodos": {
               "type": "object",
               "additionalProperties": false,

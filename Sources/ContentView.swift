@@ -2563,7 +2563,7 @@ struct ContentView: View {
             extensionsEnabled: leftSidebarExtensionsExperimentalEnabled,
             customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled,
             conversationSidebarEnabled: CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
-                && CmuxFeatureFlags.shared.isConversationSidebarAvailable
+                && featureFlags.isConversationSidebarAvailable
         )
     }
 
@@ -10931,6 +10931,7 @@ enum CmuxExtensionSidebarSelection {
     /// extension entry belongs to the experimental Extensions feature, so it is
     /// only offered while that beta is enabled; the built-in views are always
     /// offered.
+    @MainActor
     static var descriptors: [CmuxSidebarProviderDescriptor] {
         var result = builtInDescriptors
         if conversationSidebarSettingEnabled && CmuxFeatureFlags.shared.isConversationSidebarAvailable {
@@ -10988,6 +10989,7 @@ enum CmuxExtensionSidebarSelection {
         )
     }
 
+    @MainActor
     static func descriptor(for providerId: String) -> CmuxSidebarProviderDescriptor {
         descriptors.first { $0.id == providerId } ?? .defaultWorkspaces
     }
@@ -11043,15 +11045,12 @@ enum CmuxExtensionSidebarSelection {
         _ persistedProviderId: String,
         extensionsEnabled: Bool,
         customSidebarsEnabled: Bool,
-        conversationSidebarEnabled: Bool = true
+        conversationSidebarEnabled: Bool = false
     ) -> String {
         if persistedProviderId.hasPrefix(customSidebarProviderPrefix), !customSidebarsEnabled {
             return defaultProviderId
         }
         if persistedProviderId == conversationSidebarProviderId, !conversationSidebarEnabled {
-            return defaultProviderId
-        }
-        if !conversationSidebarEnabled, isConversationSidebarProvider(persistedProviderId) {
             return defaultProviderId
         }
         return effectiveProviderId(
@@ -11381,7 +11380,7 @@ struct VerticalTabsSidebar: View, Equatable {
             extensionsEnabled: extensionsExperimentalEnabled,
             customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled,
             conversationSidebarEnabled: CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
-                && CmuxFeatureFlags.shared.isConversationSidebarAvailable
+                && featureFlags.isConversationSidebarAvailable
         )
     }
 
@@ -11422,7 +11421,15 @@ struct VerticalTabsSidebar: View, Equatable {
             totalUnreadCount: unreadSnapshot.totalUnreadCount,
             now: now
         )
-        return CustomSidebarDataContextBuilder().dataContext(for: snapshot)
+        var context = CustomSidebarDataContextBuilder().dataContext(for: snapshot)
+        // Host-owned capability: legacy marker files opened as custom sidebars
+        // obey the same opt-in and remote kill switch as the built-in view.
+        _ = conversationSidebarExperimentalEnabled
+        context["conversationSidebarEnabled"] = .bool(
+            CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
+                && featureFlags.isConversationSidebarAvailable
+        )
+        return context
     }
 
     @AppStorage("sidebarMatchTerminalBackground")
@@ -12798,13 +12805,24 @@ struct VerticalTabsSidebar: View, Equatable {
     @ViewBuilder
     private func extensionSidebarScrollAreaContent(renderContext: WorkspaceListRenderContext) -> some View {
         if effectiveExtensionSidebarProviderId == CmuxExtensionSidebarSelection.conversationSidebarProviderId {
-            ConversationSidebarView(
-                dataContext: customSidebarDataContext(
-                    now: Date(),
-                    unreadSnapshot: sidebarUnread.snapshot
-                ),
-                dispatch: makeCmuxSidebarActionDispatch()
-            )
+            let _ = extensionSidebarUpdateToken
+            SidebarUnreadSnapshotReader(source: sidebarUnread) { unreadSnapshot in
+                // Focus and provider bindings do not all publish through the
+                // workspace metadata stream yet. Match custom sidebars' bounded
+                // snapshot cadence so external pane moves/focus cannot go stale.
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    ConversationSidebarView(
+                        dataContext: customSidebarDataContext(now: timeline.date, unreadSnapshot: unreadSnapshot),
+                        dispatch: makeCmuxSidebarActionDispatch()
+                    )
+                }
+            }
+            .onReceive(extensionSidebarImmediateObservationPublisher) { _ in
+                refreshExtensionSidebarSnapshot()
+            }
+            .onReceive(extensionSidebarDebouncedObservationPublisher) { _ in
+                refreshExtensionSidebarSnapshot()
+            }
             .padding(.top, SidebarWorkspaceScrollInsets.workspaceList.top)
             .padding(.bottom, SidebarWorkspaceScrollInsets.workspaceList.bottom)
         } else if effectiveExtensionSidebarProviderId == CmuxExtensionSidebarSelection.hostedExtensionsProviderId {

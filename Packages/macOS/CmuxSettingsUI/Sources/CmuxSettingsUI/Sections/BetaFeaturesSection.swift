@@ -92,10 +92,10 @@ public struct BetaFeaturesSection: View {
     private var conversationSidebarRow: some View {
         SettingsCardRow(
             configurationReview: .json("sidebar.beta.conversations.enabled"),
-            searchAnchorID: "setting:betaFeatures:conversationSidebar",
+            searchAnchorID: "setting:betaFeatures:conversation-sidebar",
             String(localized: "settings.betaFeatures.conversationSidebar", defaultValue: "Conversation Sidebar"),
             subtitle: conversationSidebar.current
-                ? String(localized: "settings.betaFeatures.conversationSidebar.subtitleOn", defaultValue: "Shows multi-provider conversation history in the sidebar.")
+                ? String(localized: "settings.betaFeatures.conversationSidebar.subtitleOn", defaultValue: "Offers Conversations in the sidebar view picker when the beta is available.")
                 : String(localized: "settings.betaFeatures.conversationSidebar.subtitleOff", defaultValue: "Hides conversation history while preserving open sessions.")
         ) {
             Toggle("", isOn: Binding(get: { conversationSidebar.current }, set: { conversationSidebar.set($0) }))

@@ -83,11 +83,21 @@ extension CmuxSettingsFileStore {
         }
     }
 
-    func parseSidebarWorkspaceTodosBeta(
+    func parseSidebarBeta(
         _ beta: [String: Any],
         sourcePath: String,
         snapshot: inout ResolvedSettingsSnapshot
     ) {
+        let conversationKey = BetaFeaturesCatalogSection().conversationSidebar
+        if let conversations = beta["conversations"] as? [String: Any] {
+            if let enabled = jsonBool(conversations["enabled"]) {
+                snapshot.managedUserDefaults[conversationKey.userDefaultsKey] = .bool(enabled)
+            } else if conversations.keys.contains("enabled") {
+                logInvalid(conversationKey.id, sourcePath: sourcePath)
+            }
+        } else if beta.keys.contains("conversations") {
+            logInvalid("sidebar.beta.conversations", sourcePath: sourcePath)
+        }
         if let rawTodos = beta["workspaceTodos"], let todos = rawTodos as? [String: Any] {
             let betaKeys = BetaFeaturesCatalogSection()
             if let controls = todos["controls"] as? [String: Any] {

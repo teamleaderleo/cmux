@@ -314695,55 +314695,55 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Shows multi-provider conversation history in the sidebar."
+            "value": "Offers Conversations in the sidebar view picker when the beta is available."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "サイドバーに複数プロバイダーの会話履歴を表示します。"
+            "value": "ベータ版が利用可能な場合、サイドバーの表示選択メニューに「会話」を追加します。"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "在侧边栏中显示多提供商对话历史记录。"
+            "value": "当测试版可用时，在侧边栏视图选择器中提供“对话”。"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zeigt den Konversationsverlauf mehrerer Anbieter in der Seitenleiste an."
+            "value": "Bietet Konversationen in der Seitenleistenansichtsauswahl an, wenn die Beta verfügbar ist."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Affiche l’historique des conversations de plusieurs fournisseurs dans la barre latérale."
+            "value": "Propose les conversations dans le sélecteur de vue de la barre latérale lorsque la bêta est disponible."
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "يعرض سجل المحادثات من موفرين متعددين في الشريط الجانبي."
+            "value": "يتيح المحادثات في منتقي عرض الشريط الجانبي عندما تتوفر النسخة التجريبية."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Muestra el historial de conversaciones de varios proveedores en la barra lateral."
+            "value": "Ofrece Conversaciones en el selector de vista de la barra lateral cuando la beta está disponible."
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "在側邊欄中顯示多個提供者的對話記錄。"
+            "value": "當測試版可用時，在側邊欄檢視選取器中提供「對話」。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "사이드바에 여러 제공업체의 대화 기록을 표시합니다."
+            "value": "베타를 사용할 수 있을 때 사이드바 보기 선택기에 대화를 제공합니다."
           }
         }
       }
@@ -520827,52 +520827,10 @@
     "sidebar.provider.conversations.title": {
       "extractionState": "manual",
       "localizations": {
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "امتدادات CMUX"
-          }
-        },
-        "bs": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CMUX ekstenzije"
-          }
-        },
-        "da": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CMUX-udvidelser"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CMUX-Erweiterungen"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Conversations"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extensiones de CMUX"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extensions CMUX"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estensioni CMUX"
           }
         },
         "ja": {
@@ -520881,70 +520839,46 @@
             "value": "会話"
           }
         },
-        "km": {
+        "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "ផ្នែកបន្ថែម CMUX"
+            "value": "Konversationen"
           }
         },
-        "ko": {
+        "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "CMUX 확장 기능"
+            "value": "Discussions"
           }
         },
-        "nb": {
+        "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "CMUX-utvidelser"
+            "value": "المحادثات"
           }
         },
-        "pl": {
+        "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Rozszerzenia CMUX"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extensões do CMUX"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расширения CMUX"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ส่วนขยาย CMUX"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CMUX uzantıları"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Розширення CMUX"
+            "value": "Conversaciones"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "CMUX 扩展"
+            "value": "对话"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "CMUX 擴充功能"
+            "value": "對話"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화"
           }
         }
       }
@@ -520952,124 +520886,58 @@
     "sidebar.provider.conversations.subtitle": {
       "extractionState": "manual",
       "localizations": {
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "bs": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "da": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Multi-provider agent history"
           }
         },
-        "es": {
+        "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ExtensionKit"
+            "value": "複数プロバイダーのエージェント履歴"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agentenverlauf mehrerer Anbieter"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "ExtensionKit"
+            "value": "Historique des agents de plusieurs fournisseurs"
           }
         },
-        "it": {
+        "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "ExtensionKit"
+            "value": "سجل وكلاء متعددَي الموفرين"
           }
         },
-        "ja": {
+        "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "会話"
-          }
-        },
-        "km": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "nb": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ExtensionKit"
+            "value": "Historial de agentes de varios proveedores"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "ExtensionKit"
+            "value": "多提供商代理历史记录"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "ExtensionKit"
+            "value": "多個提供者的代理記錄"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여러 제공업체 에이전트 기록"
           }
         }
       }

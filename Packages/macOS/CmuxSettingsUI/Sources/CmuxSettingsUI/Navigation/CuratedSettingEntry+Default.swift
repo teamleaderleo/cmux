@@ -340,7 +340,7 @@ extension Array where Element == CuratedSettingEntry {
                 id: "conversation-sidebar",
                 title: String(localized: "settings.betaFeatures.conversationSidebar", defaultValue: "Conversation Sidebar"),
                 detailText: [
-                    String(localized: "settings.betaFeatures.conversationSidebar.subtitleOn", defaultValue: "Shows multi-provider conversation history in the sidebar."),
+                    String(localized: "settings.betaFeatures.conversationSidebar.subtitleOn", defaultValue: "Offers Conversations in the sidebar view picker when the beta is available."),
                     String(localized: "settings.betaFeatures.conversationSidebar.subtitleOff", defaultValue: "Hides conversation history while preserving open sessions."),
                 ].joined(separator: " "),
                 paths: ["sidebar.beta.conversations.enabled"],

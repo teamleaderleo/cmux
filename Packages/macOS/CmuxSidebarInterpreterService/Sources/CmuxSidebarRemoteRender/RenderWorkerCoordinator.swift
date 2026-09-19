@@ -269,7 +269,11 @@ final class RenderWorkerCoordinator {
                 hasRenderedSwift: hasRendered,
                 dispatch: dispatch,
                 contentInsets: insets,
-                dataContext: dataState
+                // The native conversation view requires an originating app
+                // window and async dispatch acknowledgements. The offscreen
+                // worker provides neither; keep this beta in-process until
+                // the remote protocol carries both capabilities.
+                dataContext: dataState.merging(["conversationSidebarEnabled": .bool(false)]) { _, value in value }
             ),
             onTapTargetsChange: { [weak self] targets in
                 self?.tapTargets = targets

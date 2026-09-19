@@ -94,9 +94,19 @@ public struct CustomSidebarContentView: View {
             // per-key diffs, and rows keep stable identity (so the
             // Reorderable drag survives live data updates).
             if CustomSidebarValidator.isConversationSidebar(source) {
-                ConversationSidebarView(dataContext: dataContext, dispatch: dispatch)
-                    .padding(.top, contentInsets.top)
-                    .padding(.bottom, contentInsets.bottom)
+                // The host supplies the resolved rollout + opt-in value. Default
+                // deny also covers remote workers that have not received it yet.
+                if dataContext["conversationSidebarEnabled"] == .bool(true) {
+                    ConversationSidebarView(dataContext: dataContext, dispatch: dispatch)
+                        .padding(.top, contentInsets.top)
+                        .padding(.bottom, contentInsets.bottom)
+                } else {
+                    scrollWrap(
+                        Text(String(localized: "conversation.disabled", defaultValue: "Conversation Sidebar is not enabled.", bundle: .module))
+                            .cmuxFont(.caption)
+                            .foregroundStyle(.secondary)
+                    )
+                }
             } else {
                 scrollWrap(JSSidebarHostView(source: source, dataContext: dataContext, dispatch: dispatch))
             }
