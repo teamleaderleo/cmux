@@ -1065,7 +1065,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self?.restartSocketListenerIfEnabled(source: source)
             },
             recordStage: { [weak self] stage in
-                self?.uiTestDiagnosticsWriter.write(stage: stage)
+                self?.recordUITestSocketSanityStage(stage)
             }
         )
     )
@@ -1074,12 +1074,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.isRunningUnderXCTest(environment) ?? false
         },
         socketDiagnostics: { [weak self] environment in
-            self?.uiTestSocketSanityCoordinator.diagnostics(environment: environment) ?? [:]
+            self?.uiTestSocketSanityDiagnostics(environment: environment) ?? [:]
         },
         renderDiagnostics: { [weak self] in
             self?.currentUITestRenderDiagnosticsForWriter()
         }
     )
+
+    private func uiTestSocketSanityDiagnostics(environment: [String: String]) -> [String: String] {
+        uiTestSocketSanityCoordinator.diagnostics(environment: environment)
+    }
+
+    private func recordUITestSocketSanityStage(_ stage: String) {
+        uiTestDiagnosticsWriter.write(stage: stage)
+    }
     var debugCloseMainWindowConfirmationHandler: ((NSWindow) -> Bool)?
     /// Test seam: when set, ``openDiffViewerForFocusedWorkspace(for:)`` invokes this
     /// instead of spawning the bundled `cmux diff` CLI, so shortcut-dispatch tests can
