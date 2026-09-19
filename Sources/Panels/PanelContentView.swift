@@ -1,4 +1,5 @@
 import CmuxFoundation
+import CmuxMarkdownUI
 import CmuxNotifications
 import SwiftUI
 import Foundation
@@ -102,8 +103,7 @@ struct PanelContentView: View {
             }
         case .markdown:
             if let markdownPanel = panel as? MarkdownPanel {
-                MarkdownPanelView(
-                    panel: markdownPanel,
+                markdownPanel.cmuxMarkdownView(
                     isFocused: isFocused,
                     isVisibleInUI: isVisibleInUI,
                     portalPriority: portalPriority,

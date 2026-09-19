@@ -1,5 +1,5 @@
-import CoreGraphics
-import Foundation
+public import CoreGraphics
+public import Foundation
 
 /// Persistent + per-panel font size for the markdown viewer.
 ///
@@ -10,24 +10,24 @@ import Foundation
 /// sizing to the runtime WebKit viewport-scaling behavior. Keep
 /// `baseRenderPointSize` in sync with the `.markdown-body { font-size: ... }`
 /// rule in `Resources/markdown-viewer/shell.html`.
-enum MarkdownFontSizeSettings {
+public enum MarkdownFontSizeSettings {
     /// UserDefaults / cmux.json key (`markdown.fontSize`).
-    static let key = "markdown.fontSize"
-    static let defaultPointSize: Double = 15
-    static let minimumPointSize: Double = 8
-    static let maximumPointSize: Double = 96
-    static let stepPointSize: Double = 1
+    public static let key = "markdown.fontSize"
+    public static let defaultPointSize: Double = 15
+    public static let minimumPointSize: Double = 8
+    public static let maximumPointSize: Double = 96
+    public static let stepPointSize: Double = 1
     /// Intrinsic `.markdown-body` font size baked into shell.html, in CSS px.
-    static let baseRenderPointSize: Double = 15
+    public static let baseRenderPointSize: Double = 15
 
     /// Clamps a requested point size into the supported range.
-    static func clamp(_ value: Double) -> Double {
+    public static func clamp(_ value: Double) -> Double {
         min(max(value, minimumPointSize), maximumPointSize)
     }
 
     /// The persistent default point size, honoring `markdown.fontSize` from
     /// UserDefaults / cmux.json and falling back to ``defaultPointSize``.
-    static func resolvedDefault(defaults: UserDefaults = .standard) -> Double {
+    public static func resolvedDefault(defaults: UserDefaults = .standard) -> Double {
         guard let raw = defaults.object(forKey: key) as? NSNumber else {
             return defaultPointSize
         }
@@ -37,12 +37,12 @@ enum MarkdownFontSizeSettings {
     /// Persists `points` (clamped, rounded to integer points) as the default
     /// `markdown.fontSize` so new viewers start at this size. The Settings UI
     /// stepper and runtime both read the same key.
-    static func setDefault(_ points: Double, defaults: UserDefaults = .standard) {
+    public static func setDefault(_ points: Double, defaults: UserDefaults = .standard) {
         defaults.set(Int(clamp(points).rounded()), forKey: key)
     }
 
     /// The WKWebView `pageZoom` factor that renders the body at `pointSize`.
-    static func pageZoom(forPointSize pointSize: Double) -> CGFloat {
+    public static func pageZoom(forPointSize pointSize: Double) -> CGFloat {
         CGFloat(clamp(pointSize) / baseRenderPointSize)
     }
 }

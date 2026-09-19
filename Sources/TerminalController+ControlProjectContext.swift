@@ -1,3 +1,4 @@
+import CmuxMarkdownUI
 import AppKit
 import Bonsplit
 import CmuxControlSocket
