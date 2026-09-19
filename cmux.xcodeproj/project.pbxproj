@@ -2257,6 +2257,9 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		B8835A000000000000000003 /* TerminalClipboardInputSequencerTests+Replay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8835A000000000000000004 /* TerminalClipboardInputSequencerTests+Replay.swift */; };
 		B8835700000000000000000D /* TerminalClipboardInputSequencerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8835700000000000000000E /* TerminalClipboardInputSequencerTests.swift */; };
 		B88357000000000000000013 /* TerminalClipboardRequestSurfaceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88357000000000000000014 /* TerminalClipboardRequestSurfaceIdentity.swift */; };
+		E7C100000000000000000003 /* TerminalCmdClickUITestConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C100000000000000000004 /* TerminalCmdClickUITestConfiguration.swift */; };
+		E7C100000000000000000001 /* TerminalCmdClickUITestCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C100000000000000000002 /* TerminalCmdClickUITestCoordinator.swift */; };
+		E7C100000000000000000005 /* TerminalCmdClickUITestManifestWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C100000000000000000006 /* TerminalCmdClickUITestManifestWriter.swift */; };
 		C2577000A1B2C3D4E5F60718 /* TerminalCmdClickUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2577001A1B2C3D4E5F60718 /* TerminalCmdClickUITests.swift */; };
 		F87910190000000000000001 /* TerminalConfigurationReloadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87910190000000000000002 /* TerminalConfigurationReloadCoordinator.swift */; };
 		F87930000000000000000001 /* TerminalConfigurationReloadEnqueueResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87930000000000000000002 /* TerminalConfigurationReloadEnqueueResult.swift */; };
@@ -5020,6 +5023,9 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		B8835A000000000000000004 /* TerminalClipboardInputSequencerTests+Replay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalClipboardInputSequencerTests+Replay.swift"; sourceTree = "<group>"; };
 		B8835700000000000000000E /* TerminalClipboardInputSequencerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalClipboardInputSequencerTests.swift; sourceTree = "<group>"; };
 		B88357000000000000000014 /* TerminalClipboardRequestSurfaceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalClipboardRequestSurfaceIdentity.swift; sourceTree = "<group>"; };
+		E7C100000000000000000004 /* TerminalCmdClickUITestConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Debug/UITests/TerminalCmdClickUITestConfiguration.swift"; sourceTree = "<group>"; };
+		E7C100000000000000000002 /* TerminalCmdClickUITestCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Debug/UITests/TerminalCmdClickUITestCoordinator.swift"; sourceTree = "<group>"; };
+		E7C100000000000000000006 /* TerminalCmdClickUITestManifestWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Debug/UITests/TerminalCmdClickUITestManifestWriter.swift"; sourceTree = "<group>"; };
 		C2577001A1B2C3D4E5F60718 /* TerminalCmdClickUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalCmdClickUITests.swift; sourceTree = "<group>"; };
 		F87910190000000000000002 /* TerminalConfigurationReloadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConfigurationReloadCoordinator.swift; sourceTree = "<group>"; };
 		F87930000000000000000002 /* TerminalConfigurationReloadEnqueueResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalConfigurationReloadEnqueueResult.swift; sourceTree = "<group>"; };
@@ -6865,6 +6871,9 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				A5001090 /* AppDelegate.swift */,
 				D9E700000000000000000002 /* SessionSnapshotPersistenceWriter.swift */,
 				FEE012340000000000000002 /* FeedSidebarUITestCoordinator.swift */,
+			E7C100000000000000000002 /* TerminalCmdClickUITestCoordinator.swift */,
+			E7C100000000000000000004 /* TerminalCmdClickUITestConfiguration.swift */,
+			E7C100000000000000000006 /* TerminalCmdClickUITestManifestWriter.swift */,
 				FEE012340000000000000004 /* FeedSidebarUITestPushClient.swift */,
 				FEE012340000000000000006 /* FeedSidebarUITestRecorder.swift */,
 				D9A1B2C3D4E5000000000002 /* UITestDiagnosticsWriter.swift */,
@@ -10324,6 +10333,9 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				B8835A000000000000000001 /* TerminalClipboardInputSequencer+State.swift in Sources */,
 				B88357000000000000000005 /* TerminalClipboardInputSequencer.swift in Sources */,
 				B88357000000000000000013 /* TerminalClipboardRequestSurfaceIdentity.swift in Sources */,
+			E7C100000000000000000003 /* TerminalCmdClickUITestConfiguration.swift in Sources */,
+			E7C100000000000000000001 /* TerminalCmdClickUITestCoordinator.swift in Sources */,
+			E7C100000000000000000005 /* TerminalCmdClickUITestManifestWriter.swift in Sources */,
 				F87910190000000000000001 /* TerminalConfigurationReloadCoordinator.swift in Sources */,
 				F87930000000000000000001 /* TerminalConfigurationReloadEnqueueResult.swift in Sources */,
 				F87920000000000000000005 /* TerminalConfigurationReloadPhase.swift in Sources */,
