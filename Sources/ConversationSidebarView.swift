@@ -309,6 +309,7 @@ struct ConversationSidebarView: View {
         let matchedKeys = Set(searchResults.map(VaultLiveSessionKeys.key(for:)))
         let live = authoritativeLiveRows()
         var openIDs = Set(live.map(\.id))
+        let workspaceByID = projection.workspacesByID(tabManager.tabs)
 
         // The live chat registry is authoritative for new sessions. Retained
         // restore snapshots/live-process observations provide a fallback for a
@@ -326,7 +327,7 @@ struct ConversationSidebarView: View {
                   ) else {
                 continue
             }
-            let workspace = tabManager.tabs.first { $0.id == target.workspaceID }
+            let workspace = workspaceByID[target.workspaceID]
             fallbackOpen.append(
                 Row(
                     id: key,
@@ -365,10 +366,6 @@ struct ConversationSidebarView: View {
 
         let history = historySource
             .filter { !openIDs.contains(VaultLiveSessionKeys.key(for: $0)) }
-            .sorted { lhs, rhs in
-                if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
-                return lhs.id < rhs.id
-            }
             .map { entry in
                 Row(
                     id: VaultLiveSessionKeys.key(for: entry),
@@ -390,21 +387,24 @@ struct ConversationSidebarView: View {
             return []
         }
 
-        let configuredAgents = livePresentationAgents
-            + store.agentOrder
-            + store.entries.map(\.agent)
-            + expandedHistory.map(\.agent)
-            + searchResults.map(\.agent)
+        let configuredAgentsByID = projection.presentationAgentsByID(
+            livePresentationAgents
+                + store.agentOrder
+                + store.entries.map(\.agent)
+                + expandedHistory.map(\.agent)
+                + searchResults.map(\.agent)
+        )
+        let workspaceByPanelID = projection.workspacesByPanelID(tabManager.tabs)
 
         return service.sessionRecords(workspaceID: nil).compactMap { record in
             if case .ended = record.state {
                 return nil
             }
             guard let panelID = record.surfaceID.flatMap(UUID.init(uuidString:)),
-                  let workspace = tabManager.tabs.first(where: { $0.panels[panelID] != nil }),
+                  let workspace = workspaceByPanelID[panelID],
                   let agent = projection.presentationAgent(
                     for: record,
-                    configuredAgents: configuredAgents
+                    configuredAgentsByID: configuredAgentsByID
                   ) else {
                 return nil
             }

@@ -58,10 +58,11 @@ struct ConversationSidebarRegressionTests {
             pid: nil
         )
 
+        let agentsByID = projection.presentationAgentsByID([.registered(registered)])
         let resolved = try #require(
             projection.presentationAgent(
                 for: record,
-                configuredAgents: [.registered(registered)]
+                configuredAgentsByID: agentsByID
             )
         )
         #expect(resolved == .registered(registered))
@@ -78,10 +79,11 @@ struct ConversationSidebarRegressionTests {
 
         let merged = projection.recentHistory(
             initial: [refreshed],
-            expanded: [old, stale, olderDuplicate]
+            expanded: [stale, old, olderDuplicate]
         )
         let byID = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
 
+        #expect(merged.map(\.id) == ["same", "old"])
         #expect(Set(byID.keys) == ["old", "same"])
         #expect(byID["same"]?.title == "new metadata")
     }
