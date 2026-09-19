@@ -1,0 +1,138 @@
+name: Build performance matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Benchmark harness ref (normally this branch)
+        required: false
+        default: ""
+        type: string
+      runner:
+        description: macOS runner label
+        required: false
+        default: macos-14
+        type: string
+      iterations:
+        description: Warm repetitions per arm
+        required: false
+        default: "5"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.arm }}
+    runs-on: ${{ inputs.runner || 'macos-14' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: baseline
+            ref: main
+            keep_running: "false"
+          - arm: glaeda-native
+            ref: ad49fb98211b763afe464da1787237c2d034bc51
+            keep_running: "false"
+          - arm: keep-running
+            ref: a74418ae3fb4d680f00be28dbd8b9f23d7ae47b1
+            keep_running: "true"
+          - arm: sidecar-incremental
+            ref: e372adbd7f0af32af8a3c5121fe94e1c7ad98a2a
+            keep_running: "false"
+          - arm: composed
+            ref: main
+            keep_running: "true"
+            composed: "true"
+
+    steps:
+      - name: Checkout benchmark harness
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Preserve harness and select arm revision
+        env:
+          ARM_REF: ${{ matrix.ref }}
+          COMPOSED: ${{ matrix.composed || 'false' }}
+        run: |
+          set -euo pipefail
+          cp scripts/bench-reload-build.py "$RUNNER_TEMP/bench-reload-build.py"
+          git fetch --no-tags origin main "$ARM_REF"
+          git checkout --detach "$ARM_REF"
+          if [ "$COMPOSED" = true ]; then
+            git cherry-pick \
+              ad49fb98211b763afe464da1787237c2d034bc51 \
+              a74418ae3fb4d680f00be28dbd8b9f23d7ae47b1 \
+              e372adbd7f0af32af8a3c5121fe94e1c7ad98a2a
+          fi
+          cp "$RUNNER_TEMP/bench-reload-build.py" scripts/bench-reload-build.py
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+          # Keep the native dependency identical across arms. Older candidate
+          # refs predate the current prebuilt GhosttyKit checksum entry, so use
+          # the pinned current Ghostty revision and checksum manifest for every
+          # arm; the cmux source changes remain the only matrix variable.
+          bench_ghostty_sha=abd40f6e472d57f2d4bb182004bb5f3fac8df961
+          git -C ghostty fetch --no-tags origin "$bench_ghostty_sha"
+          git -C ghostty checkout --detach "$bench_ghostty_sha"
+          git show a74418ae3fb4d680f00be28dbd8b9f23d7ae47b1:scripts/ghosttykit-checksums.txt \
+            > scripts/ghosttykit-checksums.txt
+
+      - name: Install Rust
+        run: ./scripts/install-rust-ci.sh
+
+      - name: Download GhosttyKit
+        run: ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Cache Swift package sources
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .ci-source-packages
+          key: build-performance-spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cmux.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+
+      - name: Resolve Swift packages
+        env:
+          CMUX_SOURCE_PACKAGES_DIR: ${{ github.workspace }}/.ci-source-packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$CMUX_SOURCE_PACKAGES_DIR"
+          xcodebuild -project cmux.xcodeproj -scheme cmux -configuration Debug \
+            -clonedSourcePackagesDirPath "$CMUX_SOURCE_PACKAGES_DIR" \
+            -resolvePackageDependencies
+
+      - name: Run build benchmark
+        env:
+          CMUX_SKIP_ZIG_BUILD: "1"
+          CMUX_SOURCE_PACKAGES_DIR: ${{ github.workspace }}/.ci-source-packages
+          CMUX_DISABLE_AUTOMATIC_PACKAGE_RESOLUTION: "1"
+        run: |
+          set -euo pipefail
+          args=(
+            --tag "build-bench-${{ matrix.arm }}-${{ github.run_id }}"
+            --profile "${{ matrix.arm }}"
+            --iterations "${{ inputs.iterations || '5' }}"
+            --timeout 1800
+            --prod-auth
+            --derived-data "$RUNNER_TEMP/cmux-derived-${{ matrix.arm }}"
+            --output "perf-results/${{ matrix.arm }}.json"
+          )
+          if [ "${{ matrix.keep_running }}" = true ]; then
+            args+=(--keep-running)
+          fi
+          mkdir -p perf-results
+          python3 scripts/bench-reload-build.py "${args[@]}"
+
+      - name: Upload benchmark receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-performance-${{ matrix.arm }}-${{ github.run_id }}
+          path: perf-results/${{ matrix.arm }}.json
+          if-no-files-found: warn
