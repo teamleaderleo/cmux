@@ -1,0 +1,46 @@
+name: Fieldwork cloud fork identity
+
+on:
+  pull_request:
+    branches:
+      - fieldwork/cloud-fork-verifier-base-8ef183f1
+    paths:
+      - "cmux-tui/crates/cmux-tui/tests/cloud_fork_identity_route.rs"
+      - ".github/workflows/fieldwork-cloud-fork-identity.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  discriminator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: false
+
+      - name: Require exact PR head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
+
+      - name: Init Ghostty submodule
+        run: git submodule update --init --depth 1 ghostty
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev pkg-config
+
+      - name: Install Zig
+        run: ./scripts/install-zig-ci.sh
+
+      - name: Set up pinned Rust
+        uses: ./.github/actions/setup-cmux-tui-rust
+
+      - name: Run fork identity discriminator
+        working-directory: cmux-tui
+        run: cargo test -p cmux-tui --test cloud_fork_identity_route --locked -- --nocapture

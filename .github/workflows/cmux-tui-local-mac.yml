@@ -1,0 +1,152 @@
+name: cmux-tui local Mac
+run-name: cmux-tui local Mac ${{ github.actor }} @ ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Exact 40-character commit SHA from a branch in teamleaderleo/cmux"
+        required: true
+        type: string
+      mode:
+        description: "Focused Rust test or broader local macOS pass"
+        required: true
+        type: choice
+        options:
+          - focused
+          - full
+      test_filter:
+        description: "Rust test-name substring for focused mode"
+        required: false
+        default: ""
+        type: string
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: cmux-tui-local-mac
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # This is a self-hosted runner on a public fork. Never schedule it for
+    # arbitrary commenters or arbitrary repositories.
+    if: >-
+      github.repository == 'teamleaderleo/cmux' &&
+      github.actor == 'teamleaderleo' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        startsWith(github.event.comment.body, '/cmux-tui-local ')
+      )
+    runs-on: [self-hosted, macOS, cmux-local-mac]
+    timeout-minutes: 120
+
+    steps:
+      - name: Resolve and validate request
+        id: request
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_FILTER: ${{ inputs.test_filter }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            commit="$INPUT_COMMIT"
+            mode="$INPUT_MODE"
+            test_filter="$INPUT_FILTER"
+          else
+            read -r command commit mode test_filter extra <<< "$COMMENT_BODY"
+            if [[ "$command" != "/cmux-tui-local" ]]; then
+              echo "error: unsupported comment command" >&2
+              exit 2
+            fi
+            if [[ -n "${extra:-}" ]]; then
+              echo "error: too many command arguments" >&2
+              exit 2
+            fi
+          fi
+
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "error: commit must be an exact lowercase 40-character SHA" >&2
+            exit 2
+          fi
+
+          case "$mode" in
+            focused)
+              if [[ ! "$test_filter" =~ ^[A-Za-z0-9_][A-Za-z0-9_:.-]{0,199}$ ]]; then
+                echo "error: focused mode needs one safe Rust test-name substring" >&2
+                exit 2
+              fi
+              ;;
+            full)
+              if [[ -n "${test_filter:-}" ]]; then
+                echo "error: full mode does not accept a test filter" >&2
+                exit 2
+              fi
+              ;;
+            *)
+              echo "error: mode must be focused or full" >&2
+              exit 2
+              ;;
+          esac
+
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "test_filter=${test_filter:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out trusted control scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: teamleaderleo/cmux
+          ref: main
+          path: control
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+
+      - name: Check out requested fork commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: teamleaderleo/cmux
+          ref: ${{ steps.request.outputs.commit }}
+          path: work
+          persist-credentials: false
+          fetch-depth: 0
+          submodules: false
+
+      - name: Require commit to belong to a branch in this fork
+        working-directory: work
+        shell: bash
+        env:
+          TARGET_COMMIT: ${{ steps.request.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          if ! git branch -r --contains "$TARGET_COMMIT" | grep -Eq '^[* ]+origin/'; then
+            echo "error: requested commit is not contained in a branch of teamleaderleo/cmux" >&2
+            exit 1
+          fi
+
+      - name: Run on the local Mac
+        shell: bash
+        env:
+          CMUX_TUI_REPO_ROOT: ${{ github.workspace }}/work
+          MODE: ${{ steps.request.outputs.mode }}
+          TEST_FILTER: ${{ steps.request.outputs.test_filter }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == "focused" ]]; then
+            "$GITHUB_WORKSPACE/control/scripts/verify-cmux-tui-local.sh" --filter "$TEST_FILTER"
+          else
+            "$GITHUB_WORKSPACE/control/scripts/verify-cmux-tui-local.sh" --full
+          fi
