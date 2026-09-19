@@ -207,7 +207,6 @@ extension Array where Element == CuratedSettingEntry {
                 title: String(localized: "settings.terminal.sessionContentAlignment", defaultValue: "Session Content Alignment"),
                 synonyms: String(localized: "settings.search.alias.setting.terminal.session-content-alignment", defaultValue: "terminal.sessionContentAlignment terminal agent chat left center right alignment position")
             ),
-
             // TextBox
             .init(section: .textBox, id: "show-textbox-new-terminals", title: String(localized: "settings.textBox.showOnNewTerminals", defaultValue: "Show TextBox on New Terminals"), synonyms: "Show TextBox on New Terminals terminal.showTextBoxOnNewTerminals show textbox text box rich input prompt default new terminal workspace split tab beta"),
             .init(section: .textBox, id: "focus-textbox-new-terminals", title: String(localized: "settings.textBox.focusOnNewTerminals", defaultValue: "Focus TextBox on New Terminals"), synonyms: "Focus TextBox on New Terminals terminal.focusTextBoxOnNewTerminals focus textbox text box rich input prompt default new terminal workspace split tab beta"),

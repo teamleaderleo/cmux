@@ -2691,6 +2691,7 @@
 		5E2701040000000000000003 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5E2701040000000000000001 /* Sentry */; };
 		A5001601 /* SentryHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001600 /* SentryHelper.swift */; };
 		C0A0B0020000000000000001 /* ConversationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0010000000000000001 /* ConversationSidebarView.swift */; };
+		C0A0B0040000000000000001 /* CmuxExtensionSidebarSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */; };
 		FE003106 /* SessionAgentPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE003006 /* SessionAgentPresentation.swift */; };
 		A9F200000000000000000008 /* SessionAgentSessionPanelSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F100000000000000000008 /* SessionAgentSessionPanelSnapshot.swift */; };
 		A74770010000000000000005 /* SessionConfigFrameEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A74770010000000000000006 /* SessionConfigFrameEntry.swift */; };
@@ -6553,6 +6554,7 @@
 		C0DEF0C20000000000000002 /* SemanticVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticVersion.swift; sourceTree = "<group>"; };
 		A5001600 /* SentryHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryHelper.swift; sourceTree = "<group>"; };
 		C0A0B0010000000000000001 /* ConversationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebarView.swift; sourceTree = "<group>"; };
+		C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxExtensionSidebarSelection.swift; sourceTree = "<group>"; };
 		FE003006 /* SessionAgentPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAgentPresentation.swift; sourceTree = "<group>"; };
 		A9F100000000000000000008 /* SessionAgentSessionPanelSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAgentSessionPanelSnapshot.swift; sourceTree = "<group>"; };
 		A74770010000000000000006 /* SessionConfigFrameEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigFrameEntry.swift; sourceTree = "<group>"; };
@@ -10392,6 +10394,7 @@
 				FE003005 /* RovoDevIndex.swift */,
 				F5320001A1B2C3D4E5F60718 /* HermesAgentIndex.swift */,
 				C0A0B0010000000000000001 /* ConversationSidebarView.swift */,
+				C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */,
 				FE003006 /* SessionAgentPresentation.swift */,
 				D4476F030000000000000002 /* SessionIndexAgentIconImage.swift */,
 				D4476F020000000000000002 /* SessionIndexIconImage.swift */,
@@ -13995,6 +13998,7 @@
 				C0DEF0C20000000000000001 /* SemanticVersion.swift in Sources */,
 				A5001601 /* SentryHelper.swift in Sources */,
 				C0A0B0020000000000000001 /* ConversationSidebarView.swift in Sources */,
+				C0A0B0040000000000000001 /* CmuxExtensionSidebarSelection.swift in Sources */,
 				FE003106 /* SessionAgentPresentation.swift in Sources */,
 				A9F200000000000000000008 /* SessionAgentSessionPanelSnapshot.swift in Sources */,
 				A74770010000000000000005 /* SessionConfigFrameEntry.swift in Sources */,

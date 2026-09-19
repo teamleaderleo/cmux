@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CmuxSidebarProviderKit
+import CmuxSettings
 
 #if canImport(cmux_DEV)
 @testable import cmux_DEV
@@ -115,6 +116,56 @@ struct SidebarProviderMenuRegressionTests {
                 ) == CmuxExtensionSidebarSelection.conversationSidebarProviderId
             )
         }
+    }
+
+    @Test
+    func settingsFileParsesConversationSidebarBetaSetting() throws {
+        let defaults = UserDefaults.standard
+        let managedKey = SettingCatalog().betaFeatures.conversationSidebar.userDefaultsKey
+        let backupsKey = "cmux.settingsFile.backups.v1"
+        let previousValue = defaults.object(forKey: managedKey)
+        let previousBackups = defaults.data(forKey: backupsKey)
+        defer {
+            if let previousValue {
+                defaults.set(previousValue, forKey: managedKey)
+            } else {
+                defaults.removeObject(forKey: managedKey)
+            }
+            if let previousBackups {
+                defaults.set(previousBackups, forKey: backupsKey)
+            } else {
+                defaults.removeObject(forKey: backupsKey)
+            }
+        }
+
+        defaults.removeObject(forKey: managedKey)
+        defaults.removeObject(forKey: backupsKey)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("conversation-sidebar-settings-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let file = directory.appendingPathComponent("cmux.json", isDirectory: false)
+        try """
+        {
+          "sidebar": {
+            "beta": {
+              "conversations": {
+                "enabled": true
+              }
+            }
+          }
+        }
+        """.write(to: file, atomically: true, encoding: .utf8)
+
+        _ = KeyboardShortcutSettingsFileStore(
+            primaryPath: file.path,
+            fallbackPath: nil,
+            startWatching: false
+        )
+
+        #expect(defaults.object(forKey: managedKey) as? Bool == true)
     }
 
     /// Persisting a built-in view as the selection drives the menu's active-view
