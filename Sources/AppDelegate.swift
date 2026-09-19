@@ -665,13 +665,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated static let persistedWindowGeometrySchemaVersion = 2
-    private nonisolated static let persistedWindowGeometryDefaultsKey = "cmux.session.lastWindowGeometry.v2"
+    private nonisolated static let persistedWindowGeometryDefaultsKey = SessionSnapshotPersistenceWriter.persistedWindowGeometryDefaultsKey
 #if DEBUG
     nonisolated static var debugPersistedWindowGeometryDefaultsKey: String { persistedWindowGeometryDefaultsKey }
 #endif
-    private nonisolated static let legacyPersistedWindowGeometryDefaultsKeys = [
-        "cmux.session.lastWindowGeometry.v1"
-    ]
 
     weak var tabManager: TabManager?
     weak var notificationStore: TerminalNotificationStore?
@@ -1100,6 +1097,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     nonisolated let sessionSnapshotStore: any SessionSnapshotStoring<AppSessionSnapshot> = SessionSnapshotRepository(
         schemaVersion: SessionSnapshotSchema.currentVersion,
         bundleIdentifier: Bundle.main.bundleIdentifier
+    )
+    private lazy var sessionSnapshotPersistenceWriter = SessionSnapshotPersistenceWriter(
+        store: sessionSnapshotStore,
+        queue: sessionPersistenceQueue
     )
     /// Accessibility window-hierarchy cache (CmuxWindowing); composition-root
     /// owned. The `NSApplication` AX swizzle forwards to it behind
@@ -3540,7 +3541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private nonisolated static func removeLegacyPersistedWindowGeometry(
         defaults: UserDefaults = .standard
     ) {
-        legacyPersistedWindowGeometryDefaultsKeys.forEach { defaults.removeObject(forKey: $0) }
+        SessionSnapshotPersistenceWriter.removeLegacyPersistedWindowGeometry(defaults: defaults)
     }
 
     private func persistWindowGeometry(from window: NSWindow?) {
@@ -4684,34 +4685,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         synchronously: Bool,
         preserveManualRestoreBackupOnMissingPrimary: Bool = false
     ) {
-        guard snapshot != nil || removeWhenEmpty || persistedGeometryData != nil else { return }
-
-        let writeBlock = {
-            Self.removeLegacyPersistedWindowGeometry()
-            if let persistedGeometryData {
-                UserDefaults.standard.set(
-                    persistedGeometryData,
-                    forKey: Self.persistedWindowGeometryDefaultsKey
-                )
-            }
-            if let snapshot {
-                Self.clearCrashOnlyPrimarySnapshotRemovalMarker()
-                _ = self.sessionSnapshotStore.save(snapshot, fileURL: nil)
-            } else if removeWhenEmpty {
-                if preserveManualRestoreBackupOnMissingPrimary {
-                    Self.markCrashOnlyPrimarySnapshotRemoval()
-                } else {
-                    Self.clearCrashOnlyPrimarySnapshotRemovalMarker()
-                }
-                self.sessionSnapshotStore.removeSnapshot(fileURL: nil)
-            }
-        }
-
-        if synchronously {
-            writeBlock()
-        } else {
-            sessionPersistenceQueue.async(execute: writeBlock)
-        }
+        sessionSnapshotPersistenceWriter.persist(
+            snapshot,
+            removeWhenEmpty: removeWhenEmpty,
+            persistedGeometryData: persistedGeometryData,
+            synchronously: synchronously,
+            preserveManualRestoreBackupOnMissingPrimary: preserveManualRestoreBackupOnMissingPrimary
+        )
     }
 
     func sortedMainWindowContextsForSessionSnapshot() -> [MainWindowContext] {
