@@ -37,6 +37,36 @@ struct SidebarProviderMenuRegressionTests {
 
     private static let extensionsBetaKey = "extensions.beta.enabled"
 
+    @Test(arguments: [false, true], [false, true])
+    func conversationSelectionFallsBackWithoutChangingSavedChoice(
+        extensionsEnabled: Bool,
+        customSidebarsEnabled: Bool
+    ) throws {
+        let suite = "conversation-sidebar-selection-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let conversation = CmuxExtensionSidebarSelection.conversationSidebarProviderId
+        CmuxExtensionSidebarSelection.setProviderId(conversation, defaults: defaults)
+        let saved = try #require(defaults.string(forKey: CmuxExtensionSidebarSelection.defaultsKey))
+        for enabled in [true, false, true] {
+            let effective = CmuxExtensionSidebarSelection.effectiveProviderId(
+                saved,
+                extensionsEnabled: extensionsEnabled,
+                customSidebarsEnabled: customSidebarsEnabled,
+                conversationSidebarEnabled: enabled
+            )
+            #expect(effective == (enabled ? conversation : CmuxExtensionSidebarSelection.defaultProviderId))
+            #expect(CmuxExtensionSidebarSelection.resolvesToDefaultSidebar(effectiveProviderId: effective) == !enabled)
+            #expect(defaults.string(forKey: CmuxExtensionSidebarSelection.defaultsKey) == conversation)
+        }
+        // Omitting capability information must not opt a caller into the beta.
+        #expect(CmuxExtensionSidebarSelection.effectiveProviderId(
+            saved,
+            extensionsEnabled: extensionsEnabled,
+            customSidebarsEnabled: customSidebarsEnabled
+        ) == CmuxExtensionSidebarSelection.defaultProviderId)
+    }
+
     private func withExtensionsBeta(_ enabled: Bool, _ body: () -> Void) {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: Self.extensionsBetaKey)
