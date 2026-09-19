@@ -1898,6 +1898,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		806600000000000000000002 /* SessionRestorableAgentSnapshotPermissionModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 806600000000000000000001 /* SessionRestorableAgentSnapshotPermissionModeTests.swift */; };
 		C54860090000000000000001 /* SessionRestoreIdentityExclusions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54860090000000000000002 /* SessionRestoreIdentityExclusions.swift */; };
 		A50016B1A1B2C3D4E5F60718 /* SessionSnapshotDebugBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A50016B0A1B2C3D4E5F60718 /* SessionSnapshotDebugBenchmark.swift */; };
+		D9E700000000000000000001 /* SessionSnapshotPersistenceWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E700000000000000000002 /* SessionSnapshotPersistenceWriter.swift */; };
 		D86840000000000000000007 /* SessionSplitContainerLayoutCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = D86840000000000000000008 /* SessionSplitContainerLayoutCodec.swift */; };
 		D86840000000000000000009 /* SessionSplitContainerSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8684000000000000000000A /* SessionSplitContainerSnapshot.swift */; };
 		FE00310B /* SessionTranscriptPopoverLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE00300B /* SessionTranscriptPopoverLayout.swift */; };
@@ -4667,6 +4668,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		806600000000000000000001 /* SessionRestorableAgentSnapshotPermissionModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRestorableAgentSnapshotPermissionModeTests.swift; sourceTree = "<group>"; };
 		C54860090000000000000002 /* SessionRestoreIdentityExclusions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRestoreIdentityExclusions.swift; sourceTree = "<group>"; };
 		A50016B0A1B2C3D4E5F60718 /* SessionSnapshotDebugBenchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/SessionSnapshotDebugBenchmark.swift; sourceTree = "<group>"; };
+		D9E700000000000000000002 /* SessionSnapshotPersistenceWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSnapshotPersistenceWriter.swift; sourceTree = "<group>"; };
 		D86840000000000000000008 /* SessionSplitContainerLayoutCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSplitContainerLayoutCodec.swift; sourceTree = "<group>"; };
 		D8684000000000000000000A /* SessionSplitContainerSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSplitContainerSnapshot.swift; sourceTree = "<group>"; };
 		FE00300B /* SessionTranscriptPopoverLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTranscriptPopoverLayout.swift; sourceTree = "<group>"; };
@@ -6861,6 +6863,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				F4350A130000000000000001 /* AppBundleIconPersistencePolicy.swift */,
 				D1320AA0D1320AA0D1320AA4 /* AppIconDockTilePlugin.swift */,
 				A5001090 /* AppDelegate.swift */,
+				D9E700000000000000000002 /* SessionSnapshotPersistenceWriter.swift */,
 				FEE012340000000000000002 /* FeedSidebarUITestCoordinator.swift */,
 				FEE012340000000000000004 /* FeedSidebarUITestPushClient.swift */,
 				FEE012340000000000000006 /* FeedSidebarUITestRecorder.swift */,
@@ -10081,6 +10084,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				0A1107110000000000000022 /* SessionRestorableAgentSnapshot+Commands.swift in Sources */,
 				C54860090000000000000001 /* SessionRestoreIdentityExclusions.swift in Sources */,
 				A50016B1A1B2C3D4E5F60718 /* SessionSnapshotDebugBenchmark.swift in Sources */,
+				D9E700000000000000000001 /* SessionSnapshotPersistenceWriter.swift in Sources */,
 				D86840000000000000000007 /* SessionSplitContainerLayoutCodec.swift in Sources */,
 				D86840000000000000000009 /* SessionSplitContainerSnapshot.swift in Sources */,
 				FE00310B /* SessionTranscriptPopoverLayout.swift in Sources */,
