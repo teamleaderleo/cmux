@@ -107,6 +107,13 @@ struct SettingCatalogTests {
         #expect(!SettingCatalog().app.focusHistoryIncludesPanesAndTabs.defaultValue)
     }
 
+    @Test func conversationSidebarIsOptInAndUsesStableStorageKey() {
+        let key = SettingCatalog().betaFeatures.conversationSidebar
+        #expect(key.id == "sidebar.beta.conversations.enabled")
+        #expect(key.userDefaultsKey == "sidebar.beta.conversations.enabled")
+        #expect(!key.defaultValue)
+    }
+
     @Test func adaptiveDefaultTerminalThemeDefaultsOnForUntouchedConfigs() {
         #expect(SettingCatalog().terminal.adaptiveDefaultTheme.defaultValue)
     }

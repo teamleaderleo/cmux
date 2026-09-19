@@ -19,6 +19,7 @@ struct CustomSidebarPanelView: View {
     let windowAppearance: WindowAppearanceSnapshot
     let onRequestPanelFocus: () -> Void
 
+    @LiveSetting(\.betaFeatures.conversationSidebar) private var conversationSidebarEnabled
     @LiveSetting(\.customSidebars.renderer) private var customSidebarRenderer
     @State private var renderWorkerClient: RenderWorkerClient?
     @State private var surfaceStyle: String?
@@ -96,13 +97,19 @@ struct CustomSidebarPanelView: View {
     }
 
     private func customSidebarDataContext(now: Date) -> [String: SwiftValue] {
-        CustomSidebarPaneDataContextCache.shared.dataContext(
+        var context = CustomSidebarPaneDataContextCache.shared.dataContext(
             now: now,
             tabManager: tabManager,
             sidebarUnread: sidebarUnread
         ) {
             buildCustomSidebarDataContext(now: now)
         }
+        // Add availability after cache lookup so a live gate change is never
+        // hidden by a cached workspace snapshot.
+        context["conversationSidebarEnabled"] = .bool(
+            conversationSidebarEnabled && CmuxFeatureFlags.shared.isConversationSidebarAvailable
+        )
+        return context
     }
 
     private func buildCustomSidebarDataContext(now: Date) -> [String: SwiftValue] {

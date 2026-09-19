@@ -26,8 +26,12 @@ function buildLinks(workspaces) {
     if (String(w.description || '').startsWith('tk-history:')) {
       const saved = w.description.slice('tk-history:'.length);
       const colon = saved.indexOf(':');
-      const id = linkKey(saved.slice(0, colon), saved.slice(colon + 1));
-      if (!fallback[id]) fallback[id] = {w,panel:null};
+      const provider = colon > 0 ? saved.slice(0, colon) : '';
+      const session = colon >= 0 ? saved.slice(colon + 1) : '';
+      if (['Claude', 'Codex', 'OpenCode'].includes(provider) && session) {
+        const id = linkKey(provider, session);
+        if (!fallback[id]) fallback[id] = {w,panel:null};
+      }
     }
   }
   // A known hosting agent beats an old placeholder workspace anywhere in the window.
@@ -102,13 +106,25 @@ function focus(r) {
 }
 function resume(r) {
   if (linked(r)) return focus(r);
-  if (Date.now() - (pending()[key(r)]?.started || 0) < 15000) return;
+  const previous = pending()[key(r)];
+  if (previous && Date.now() - previous.started < 15000) return;
   const operationID = newOperationID();
   const failures = {...failed()}; delete failures[key(r)]; setFailed(failures);
   setPending({...pending(), [key(r)]: {started: Date.now(), operationID}});
   cmux('workspace.create', {title: r.title, working_directory: r.cwd,
     description: 'tk-history:' + key(r), initial_command: r.command, conversation_placement: 'tab',
     operation_id: operationID, focus: true});
+}
+
+// The host clock updates only deadline presentation. Ownership still comes
+// from live panel bindings; a timeout never claims the provider is ready.
+function launchStatus(r) {
+  if (linked(r)) return '';
+  if (failed()[key(r)]) return data.launchFailureLabel();
+  const request = pending()[key(r)];
+  if (!request) return '';
+  const now = data.launchClock?.() ?? Date.now();
+  return now - request.started >= 15000 ? data.launchTimeoutLabel() : data.launchPendingLabel();
 }
 
 function visibleHistory() {
@@ -177,9 +193,9 @@ function conversationList() { return VStack({spacing:2}, [
         .background(()=>isSelected(r()) ? '#80808030' : null)
       ]).conversationProvider(()=>r().provider).conversationID(()=>r().id)
         .conversationTitle(()=>r().title).conversationDirectory(()=>r().cwd),
-      ForEach({items:()=>failed()[key(r())] && !linked(r())?[key(r())]:[],key:n=>n},()=>
-        Button(()=>data.launchFailureLabel(),()=>focus(r()),[
-          Text(()=>data.launchFailureLabel()).font(11).secondary()
+      ForEach({items:()=>launchStatus(r())?[key(r())]:[],key:n=>n},()=>
+        Button(()=>launchStatus(r()),()=>focus(r()),[
+          Text(()=>launchStatus(r())).font(11).secondary()
         ]).paddingLeading(()=>g().pinned?10:28).paddingVertical(2)
       )
     ]))

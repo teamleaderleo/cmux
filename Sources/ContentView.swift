@@ -892,6 +892,7 @@ struct ContentView: View {
     private var selectedLeftSidebarProviderId = CmuxExtensionSidebarSelection.defaultProviderId
     @LiveSetting(\.betaFeatures.extensions) private var leftSidebarExtensionsExperimentalEnabled
     @LiveSetting(\.betaFeatures.customSidebars) private var leftSidebarCustomSidebarsExperimentalEnabled
+    @LiveSetting(\.betaFeatures.conversationSidebar) private var leftSidebarConversationSidebarExperimentalEnabled
     @LiveSetting(\.shortcuts.showModifierHoldHints) private var showModifierHoldHints
     @LiveSetting(\.customSidebars.renderer) private var customSidebarRenderer
     @LiveSetting(\.notifications.paneFlashColorHex) private var paneFlashColorHex
@@ -2556,10 +2557,13 @@ struct ContentView: View {
         // the synchronous custom-sidebar value that avoids a one-frame remount
         // mismatch when @LiveSetting initializes.
         _ = leftSidebarCustomSidebarsExperimentalEnabled
+        _ = leftSidebarConversationSidebarExperimentalEnabled
         return CmuxExtensionSidebarSelection.effectiveProviderId(
             selectedLeftSidebarProviderId,
             extensionsEnabled: leftSidebarExtensionsExperimentalEnabled,
-            customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled
+            customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled,
+            conversationSidebarEnabled: CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
+                && featureFlags.isConversationSidebarAvailable
         )
     }
 
@@ -10772,6 +10776,13 @@ enum CmuxExtensionSidebarSelection {
     static let selectedExtensionNameDefaultsKey = "cmuxExtensionSidebar.selectedExtensionName"
     static let defaultProviderId = CmuxSidebarProviderDescriptor.defaultWorkspacesID
     static let hostedExtensionsProviderId = "cmux.sidebar.extensions"
+    static let conversationSidebarProviderId = "cmux.sidebar.conversations"
+    /// Marker used by the built-in multi-provider conversation sidebar.
+    ///
+    /// Conversation sidebars are authored as ordinary JavaScript sidebars so
+    /// the renderer remains reusable, but their provider integrations need a
+    /// separate rollout and user opt-in gate from arbitrary custom sidebars.
+    static let conversationSidebarMarker = "// cmux:conversation-sidebar"
 
     /// Synchronous read of the experimental Extensions flag for the on-demand
     /// AppKit/static paths (the toggle menu, the command-palette builder, the
@@ -10812,6 +10823,13 @@ enum CmuxExtensionSidebarSelection {
         // See ``isEnabled``: read only the beta-features section so a body-path
         // access does not allocate the entire `SettingCatalog` (issue #5970).
         let key = BetaFeaturesCatalogSection().customSidebars
+        return Bool.decodeFromUserDefaults(UserDefaults.standard.object(forKey: key.userDefaultsKey)) ?? key.defaultValue
+    }
+
+    /// Reads the local opt-in for the built-in multi-provider conversation
+    /// sidebar. The remote rollout gate is combined at the render seam.
+    static var conversationSidebarSettingEnabled: Bool {
+        let key = BetaFeaturesCatalogSection().conversationSidebar
         return Bool.decodeFromUserDefaults(UserDefaults.standard.object(forKey: key.userDefaultsKey)) ?? key.defaultValue
     }
 
@@ -10881,6 +10899,20 @@ enum CmuxExtensionSidebarSelection {
         return nil
     }
 
+    /// Whether a custom-sidebar provider is the multi-provider conversation
+    /// sidebar, identified by its exact source marker.
+    static func isConversationSidebarProvider(
+        _ providerId: String,
+        sidebarsDirectory: URL = customSidebarsDirectory
+    ) -> Bool {
+        guard let fileURL = customSidebarFileURL(
+            forProviderId: providerId,
+            sidebarsDirectory: sidebarsDirectory
+        ), fileURL.pathExtension.lowercased() == "js" else { return false }
+        guard let source = try? String(contentsOf: fileURL, encoding: .utf8) else { return false }
+        return source.trimmingCharacters(in: .whitespacesAndNewlines) == conversationSidebarMarker
+    }
+
     private static func isValidCustomSidebarFileBaseName(_ name: String) -> Bool {
         guard !name.isEmpty, name != ".", name != ".." else { return false }
         return name == (name as NSString).lastPathComponent
@@ -10899,9 +10931,19 @@ enum CmuxExtensionSidebarSelection {
     /// extension entry belongs to the experimental Extensions feature, so it is
     /// only offered while that beta is enabled; the built-in views are always
     /// offered.
+    @MainActor
     static var descriptors: [CmuxSidebarProviderDescriptor] {
-        var result = isEnabled ? builtInDescriptors + [hostedExtensionsDescriptor] : builtInDescriptors
-        if customSidebarsEnabled { result += customSidebarDescriptors }
+        var result = builtInDescriptors
+        if conversationSidebarSettingEnabled && CmuxFeatureFlags.shared.isConversationSidebarAvailable {
+            result.append(conversationSidebarDescriptor)
+        }
+        if isEnabled { result.append(hostedExtensionsDescriptor) }
+        if customSidebarsEnabled {
+            result += customSidebarDescriptors.filter { descriptor in
+                !isConversationSidebarProvider(descriptor.id)
+                    || (conversationSidebarSettingEnabled && CmuxFeatureFlags.shared.isConversationSidebarAvailable)
+            }
+        }
         return result
     }
 
@@ -10909,7 +10951,23 @@ enum CmuxExtensionSidebarSelection {
     /// to register command-palette handlers so a runtime flag flip always has a
     /// handler to invoke; what is *shown* uses ``descriptors``.
     static var allDescriptors: [CmuxSidebarProviderDescriptor] {
-        builtInDescriptors + [hostedExtensionsDescriptor] + customSidebarDescriptors
+        builtInDescriptors + [conversationSidebarDescriptor, hostedExtensionsDescriptor] + customSidebarDescriptors
+    }
+
+    static var conversationSidebarDescriptor: CmuxSidebarProviderDescriptor {
+        CmuxSidebarProviderDescriptor(
+            id: conversationSidebarProviderId,
+            title: CmuxSidebarProviderLocalizedText(
+                key: "sidebar.provider.conversations.title",
+                defaultValue: String(localized: "sidebar.provider.conversations.title", defaultValue: "Conversations")
+            ),
+            subtitle: CmuxSidebarProviderLocalizedText(
+                key: "sidebar.provider.conversations.subtitle",
+                defaultValue: String(localized: "sidebar.provider.conversations.subtitle", defaultValue: "Multi-provider agent history")
+            ),
+            systemImageName: "bubble.left.and.bubble.right",
+            isHostProvided: false
+        )
     }
 
     static var hostedExtensionsDescriptor: CmuxSidebarProviderDescriptor {
@@ -10931,6 +10989,7 @@ enum CmuxExtensionSidebarSelection {
         )
     }
 
+    @MainActor
     static func descriptor(for providerId: String) -> CmuxSidebarProviderDescriptor {
         descriptors.first { $0.id == providerId } ?? .defaultWorkspaces
     }
@@ -10951,6 +11010,7 @@ enum CmuxExtensionSidebarSelection {
     /// non-default view.
     static func resolvesToDefaultSidebar(effectiveProviderId id: String) -> Bool {
         if id == defaultProviderId { return true }
+        if id == conversationSidebarProviderId { return false }
         if id == hostedExtensionsProviderId { return false }
         if id.hasPrefix(customSidebarProviderPrefix) {
             // A custom selection survives only while its backing file exists;
@@ -10984,9 +11044,13 @@ enum CmuxExtensionSidebarSelection {
     static func effectiveProviderId(
         _ persistedProviderId: String,
         extensionsEnabled: Bool,
-        customSidebarsEnabled: Bool
+        customSidebarsEnabled: Bool,
+        conversationSidebarEnabled: Bool = false
     ) -> String {
         if persistedProviderId.hasPrefix(customSidebarProviderPrefix), !customSidebarsEnabled {
+            return defaultProviderId
+        }
+        if persistedProviderId == conversationSidebarProviderId, !conversationSidebarEnabled {
             return defaultProviderId
         }
         return effectiveProviderId(
@@ -11022,7 +11086,13 @@ enum CmuxExtensionSidebarSelection {
         let menu = NSMenu()
         let persistedProviderId = UserDefaults.standard.string(forKey: defaultsKey) ?? defaultProviderId
         let selectedProviderId = descriptor(
-            for: effectiveProviderId(persistedProviderId, extensionsEnabled: isEnabled)
+            for: effectiveProviderId(
+                persistedProviderId,
+                extensionsEnabled: isEnabled,
+                customSidebarsEnabled: customSidebarsEnabled,
+                conversationSidebarEnabled: conversationSidebarSettingEnabled
+                    && CmuxFeatureFlags.shared.isConversationSidebarAvailable
+            )
         ).id
         for descriptor in descriptors {
             let item = NSMenuItem(
@@ -11277,6 +11347,7 @@ struct VerticalTabsSidebar: View, Equatable {
     private var selectedExtensionSidebarProviderId = CmuxExtensionSidebarSelection.defaultProviderId
     @LiveSetting(\.betaFeatures.extensions) private var extensionsExperimentalEnabled
     @LiveSetting(\.betaFeatures.customSidebars) private var customSidebarsExperimentalEnabled
+    @LiveSetting(\.betaFeatures.conversationSidebar) private var conversationSidebarExperimentalEnabled
     @LiveSetting(\.customSidebars.renderer) private var customSidebarRenderer
     @LiveSetting(\.shortcuts.showModifierHoldHints) private var showModifierHoldHints
 #if DEBUG
@@ -11303,10 +11374,13 @@ struct VerticalTabsSidebar: View, Equatable {
         // which would otherwise flash the default sidebar for a frame
         // before swapping to the custom one.
         _ = customSidebarsExperimentalEnabled
+        _ = conversationSidebarExperimentalEnabled
         return CmuxExtensionSidebarSelection.effectiveProviderId(
             selected,
             extensionsEnabled: extensionsExperimentalEnabled,
-            customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled
+            customSidebarsEnabled: CmuxExtensionSidebarSelection.customSidebarsEnabled,
+            conversationSidebarEnabled: CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
+                && featureFlags.isConversationSidebarAvailable
         )
     }
 
@@ -11347,7 +11421,15 @@ struct VerticalTabsSidebar: View, Equatable {
             totalUnreadCount: unreadSnapshot.totalUnreadCount,
             now: now
         )
-        return CustomSidebarDataContextBuilder().dataContext(for: snapshot)
+        var context = CustomSidebarDataContextBuilder().dataContext(for: snapshot)
+        // Host-owned capability: legacy marker files opened as custom sidebars
+        // obey the same opt-in and remote kill switch as the built-in view.
+        _ = conversationSidebarExperimentalEnabled
+        context["conversationSidebarEnabled"] = .bool(
+            CmuxExtensionSidebarSelection.conversationSidebarSettingEnabled
+                && featureFlags.isConversationSidebarAvailable
+        )
+        return context
     }
 
     @AppStorage("sidebarMatchTerminalBackground")
@@ -12722,7 +12804,28 @@ struct VerticalTabsSidebar: View, Equatable {
 
     @ViewBuilder
     private func extensionSidebarScrollAreaContent(renderContext: WorkspaceListRenderContext) -> some View {
-        if effectiveExtensionSidebarProviderId == CmuxExtensionSidebarSelection.hostedExtensionsProviderId {
+        if effectiveExtensionSidebarProviderId == CmuxExtensionSidebarSelection.conversationSidebarProviderId {
+            let _ = extensionSidebarUpdateToken
+            SidebarUnreadSnapshotReader(source: sidebarUnread) { unreadSnapshot in
+                // Focus and provider bindings do not all publish through the
+                // workspace metadata stream yet. Match custom sidebars' bounded
+                // snapshot cadence so external pane moves/focus cannot go stale.
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    ConversationSidebarView(
+                        dataContext: customSidebarDataContext(now: timeline.date, unreadSnapshot: unreadSnapshot),
+                        dispatch: makeCmuxSidebarActionDispatch()
+                    )
+                }
+            }
+            .onReceive(extensionSidebarImmediateObservationPublisher) { _ in
+                refreshExtensionSidebarSnapshot()
+            }
+            .onReceive(extensionSidebarDebouncedObservationPublisher) { _ in
+                refreshExtensionSidebarSnapshot()
+            }
+            .padding(.top, SidebarWorkspaceScrollInsets.workspaceList.top)
+            .padding(.bottom, SidebarWorkspaceScrollInsets.workspaceList.bottom)
+        } else if effectiveExtensionSidebarProviderId == CmuxExtensionSidebarSelection.hostedExtensionsProviderId {
             CMUXInstalledExtensionSidebarHostView(
                 snapshotProvider: { cmuxSidebarSnapshotForCurrentTabs() },
                 snapshotUpdateToken: extensionSidebarUpdateToken,

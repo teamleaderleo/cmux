@@ -337,6 +337,17 @@ extension Array where Element == CuratedSettingEntry {
             .init(section: .betaFeatures, id: "dock", title: String(localized: "settings.betaFeatures.dock", defaultValue: "Dock"), synonyms: "Dock dock right sidebar terminal controls tui beta unstable"),
             .init(
                 section: .betaFeatures,
+                id: "conversation-sidebar",
+                title: String(localized: "settings.betaFeatures.conversationSidebar", defaultValue: "Conversation Sidebar"),
+                detailText: [
+                    String(localized: "settings.betaFeatures.conversationSidebar.subtitleOn", defaultValue: "Offers Conversations in the sidebar view picker when the beta is available."),
+                    String(localized: "settings.betaFeatures.conversationSidebar.subtitleOff", defaultValue: "Hides conversation history while preserving open sessions."),
+                ].joined(separator: " "),
+                paths: ["sidebar.beta.conversations.enabled"],
+                synonyms: String(localized: "settings.search.alias.setting.betaFeatures.conversation-sidebar", defaultValue: "sidebar.beta.conversations.enabled conversation sidebar multi-provider provider history conversations sessions agents beta")
+            ),
+            .init(
+                section: .betaFeatures,
                 id: "cloudMachines",
                 title: String(localized: "settings.betaFeatures.cloudMachines", defaultValue: "Cloud Machines"),
                 detailText: [

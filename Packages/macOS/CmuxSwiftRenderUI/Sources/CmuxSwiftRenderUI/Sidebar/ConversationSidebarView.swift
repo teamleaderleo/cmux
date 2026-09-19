@@ -90,6 +90,8 @@ public struct ConversationSidebarView: View {
             "limit": .int(visibleIdentity == providerFilter + ":" + searchQuery ? visibleCount : 24)
         ])
         result["historyLabel"] = .string(String(localized: "conversation.history", defaultValue: "History", bundle: .module))
+        result["launchPendingLabel"] = .string(String(localized: "conversation.launchPending", defaultValue: "Opening…", bundle: .module))
+        result["launchTimeoutLabel"] = .string(String(localized: "conversation.launchTimeout", defaultValue: "Still waiting. Click to retry.", bundle: .module))
         result["launchFailureLabel"] = .string(String(localized: "conversation.launchFailure", defaultValue: "Could not open. Click to retry.", bundle: .module))
         // Resync the retained action handler when its native window attaches.
         result["ownerWindow"] = .string((ownerWindowID ?? "") + ":" + (ownerWindowNumber.map(String.init) ?? ""))
@@ -187,11 +189,15 @@ public struct ConversationSidebarView: View {
             ScrollViewReader { scroll in
             ScrollView {
                 Color.clear.frame(height: 0).id("conversation-top")
-                JSSidebarHostView(
-                    source: replaySource,
-                    dataContext: context,
-                    dispatch: scopedDispatch
-                )
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    JSSidebarHostView(
+                        source: replaySource,
+                        dataContext: context.merging([
+                            "launchClock": .double(timeline.date.timeIntervalSince1970 * 1_000)
+                        ]) { _, value in value },
+                        dispatch: scopedDispatch
+                    )
+                }
                 .padding(4)
                 .background(QuietScrollChrome())
                 .background(ConversationScrollDemand(identity: providerFilter + ":" + searchQuery) {

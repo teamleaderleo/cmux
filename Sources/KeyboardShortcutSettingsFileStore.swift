@@ -721,7 +721,7 @@ final class CmuxSettingsFileStore {
             }
         }
         if let rawBeta = section["beta"], let beta = rawBeta as? [String: Any] {
-            parseSidebarWorkspaceTodosBeta(beta, sourcePath: sourcePath, snapshot: &snapshot)
+            parseSidebarBeta(beta, sourcePath: sourcePath, snapshot: &snapshot)
         } else if section.keys.contains("beta") { logInvalid("sidebar.beta", sourcePath: sourcePath) }
         if let value = jsonInt(section["notificationMessageLineLimit"]), SidebarCatalogSection.notificationMessageLineLimitRange.contains(value) {
             snapshot.managedUserDefaults[SidebarCatalogSection().notificationMessageLineLimit.userDefaultsKey] = .int(value)

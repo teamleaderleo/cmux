@@ -27,6 +27,9 @@ function fixture(provider) {
     command: 'fixture resume session'+i}));
   set('history', history); set('workspaces', []);
   set('launchFailureLabel', 'Could not open. Click to retry.');
+  set('launchPendingLabel', 'Opening…');
+  set('launchTimeoutLabel', 'Still waiting. Click to retry.');
+  set('launchClock', now);
   set('historyView', {provider: 'All', query: '', limit: 24});
   vm.runInContext(fs.readFileSync(path.join(resources, 'ConversationSidebar.js'), 'utf8'), host);
   const click = () => {
@@ -36,9 +39,26 @@ function fixture(provider) {
   const owner = (workspace, panel) => ({id: workspace, selected: true,
     agents: [{id: 'session0', kind: provider.toLowerCase(), panelId: panel}],
     tabs: [{id: panel, surfaceId: 'internal-'+panel, title: 'Conversation 0', focused: true}]});
-  return {actions, set, click, owner, failed: () => [...nodes.values()].some(n => n.text === 'Could not open. Click to retry.'), advance: ms => { now += ms; }};
+  return {actions, set, click, owner, status: text => [...nodes.values()].some(n => n.text === text), failed: () => [...nodes.values()].some(n => n.text === 'Could not open. Click to retry.'), advance: ms => { now += ms; set('launchClock', now); }};
 }
 for (const provider of ['Codex', 'Claude', 'OpenCode']) {
+  test(provider+': pending and timeout feedback never imply readiness or launch automatically', () => {
+    const f = fixture(provider);
+    f.click();
+    assert.equal(f.status('Opening…'), true);
+    assert.equal(f.status('Still waiting. Click to retry.'), false);
+    f.advance(14999);
+    f.click(); assert.equal(f.actions.length, 1);
+    f.advance(1);
+    assert.equal(f.status('Opening…'), false);
+    assert.equal(f.status('Still waiting. Click to retry.'), true);
+    assert.equal(f.actions.length, 1, 'Deadline must not start another process');
+    f.click(); assert.equal(f.actions.length, 2);
+    assert.equal(f.status('Opening…'), true);
+    f.set('workspaces', [f.owner('ready', 'panel')]);
+    assert.equal(f.status('Opening…'), false);
+    assert.equal(f.status('Still waiting. Click to retry.'), false);
+  });
   test(provider+': another provider with the same session ID cannot own the conversation', () => {
     const f = fixture(provider);
     const other = f.owner('other-provider', 'wrong-panel');

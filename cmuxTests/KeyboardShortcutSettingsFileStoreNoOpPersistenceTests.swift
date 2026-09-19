@@ -144,6 +144,43 @@ struct KeyboardShortcutSettingsFileStoreNoOpPersistenceTests {
         #expect(defaults.persistentDomain(forName: defaultsSuiteName)?["appLanguageAppliedOverride"] == nil)
     }
 
+    @Test
+    func conversationSidebarConfigUpdatesSharedPreferenceAndRestoresItOnRemoval() throws {
+        let suiteName = "ConversationSidebarConfigTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let key = SettingCatalog().betaFeatures.conversationSidebar
+        defaults.set(true, forKey: key.userDefaultsKey)
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cmux.json")
+        try writeSettingsFile(
+            #"{"sidebar":{"beta":{"conversations":{"enabled":true}}}}"#,
+            to: file
+        )
+        let store = KeyboardShortcutSettingsFileStore(
+            primaryPath: file.path,
+            fallbackPath: nil,
+            additionalFallbackPaths: [],
+            notificationCenter: NotificationCenter(),
+            userDefaults: defaults,
+            languageSettingsStore: LanguageSettingsStore(defaults: defaults, domainName: suiteName),
+            startWatching: false
+        )
+        #expect(UserDefaultsSettingsClient(defaults: defaults).value(for: key))
+
+        try writeSettingsFile(
+            #"{"sidebar":{"beta":{"conversations":{"enabled":false}}}}"#,
+            to: file
+        )
+        store.reload()
+        #expect(!UserDefaultsSettingsClient(defaults: defaults).value(for: key))
+
+        try writeSettingsFile("{}", to: file)
+        store.reload()
+        #expect(defaults.object(forKey: key.userDefaultsKey) as? Bool == true)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "cmux-settings-no-op-persistence-\(UUID().uuidString)",

@@ -59,6 +59,7 @@ final class CmuxFeatureFlags {
     private static let appKitSidebarListDefault = true
     private static let mobileTerminalFilesChipDefault = true
     private nonisolated static let mobileTaskComposerDefault = true
+    private static let conversationSidebarDefault = false
 
     private static let overrideKeyPrefix = "cmux.flags.override."
     private static let remoteCacheKeyPrefix = "cmux.flags.remote."
@@ -164,6 +165,25 @@ final class CmuxFeatureFlags {
             defaultValue: "Enables the iOS New Task composer, including task model discovery, directory picking, and attachment staging."
         ),
         defaultWhenUnavailable: CmuxFeatureFlags.mobileTaskComposerDefault
+    )
+
+    // FLAG(key: conversation-sidebar-release, owner: teamleaderleo,
+    //      reviewBy: 2026-10-18, defaultWhenUnavailable: false)
+    // Controls availability of the opt-in multi-provider conversation sidebar.
+    // The user-facing beta setting is evaluated separately by the sidebar
+    // integration; this flag is the remote rollout gate and emergency kill
+    // switch for the feature.
+    static let conversationSidebarFlag = CmuxFeatureFlagDefinition(
+        key: "conversation-sidebar-release",
+        title: String(
+            localized: "featureFlags.conversationSidebar.title",
+            defaultValue: "Multi-provider conversation sidebar"
+        ),
+        flagDescription: String(
+            localized: "featureFlags.conversationSidebar.description",
+            defaultValue: "Enables the opt-in sidebar for conversations from multiple coding-agent providers."
+        ),
+        defaultWhenUnavailable: CmuxFeatureFlags.conversationSidebarDefault
     )
 
     // Order is load-bearing for the positional typed accessors below. Flags
@@ -288,6 +308,7 @@ final class CmuxFeatureFlags {
 
             CmuxFeatureFlags.mobileTerminalFilesChipFlag,
             CmuxFeatureFlags.mobileTaskComposerFlag,
+            CmuxFeatureFlags.conversationSidebarFlag,
         ]
     }()
 
@@ -337,6 +358,10 @@ final class CmuxFeatureFlags {
 
     var isMobileTaskComposerEnabled: Bool {
         effectiveValue(for: Self.mobileTaskComposerFlag)
+    }
+
+    var isConversationSidebarAvailable: Bool {
+        effectiveValue(for: Self.conversationSidebarFlag)
     }
 
     /// Effective values mirrored for nonisolated readers: the mobile host

@@ -153,6 +153,7 @@ struct RightSidebarPanelView: View {
     private var dockEnabled = RightSidebarBetaFeatureSettings.defaultDockEnabled
     @AppStorage(RightSidebarBetaFeatureSettings.cloudMachinesEnabledKey)
     private var cloudMachinesBetaEnabled = RightSidebarBetaFeatureSettings.defaultCloudMachinesEnabled
+    @LiveSetting(\.betaFeatures.conversationSidebar) private var conversationSidebarEnabled
     @LiveSetting(\.customSidebars.renderer) private var customSidebarRenderer
     /// The right rail's OWN worker client. Never share the left sidebar's:
     /// the remote host swaps files in place on one client, so a shared client
@@ -527,6 +528,14 @@ struct RightSidebarPanelView: View {
         }
     }
 
+    private func resolvedCustomSidebarDataContext(now: Date) -> [String: SwiftValue] {
+        var context = customSidebarDataContext(now)
+        context["conversationSidebarEnabled"] = .bool(
+            conversationSidebarEnabled && CmuxFeatureFlags.shared.isConversationSidebarAvailable
+        )
+        return context
+    }
+
     /// Custom mode: mounts the selected `~/.config/cmux/sidebars/<name>.{js,swift,json}`
     /// through the same surface as the left sidebar and panes (file-watched,
     /// hot-reloading, same data keys and `cmux(...)` actions).
@@ -537,7 +546,7 @@ struct RightSidebarPanelView: View {
             TimelineView(.periodic(from: .now, by: 1)) { timeline in
                 CustomSidebarSurface(
                     fileURL: fileURL,
-                    dataContext: customSidebarDataContext(timeline.date),
+                    dataContext: resolvedCustomSidebarDataContext(now: timeline.date),
                     dispatch: makeCmuxSidebarActionDispatch(),
                     contentInsets: CustomSidebarContentInsets(top: 8, bottom: 8),
                     rendersInProcess: customSidebarRenderer == .inProcess,
