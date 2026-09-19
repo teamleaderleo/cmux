@@ -74,10 +74,11 @@ struct ConversationSidebarRegressionTests {
         let old = sessionEntry(id: "old", title: "old", modified: 10)
         let refreshed = sessionEntry(id: "same", title: "new metadata", modified: 30)
         let stale = sessionEntry(id: "same", title: "stale metadata", modified: 20)
+        let olderDuplicate = sessionEntry(id: "same", title: "older duplicate", modified: 5)
 
         let merged = projection.recentHistory(
             initial: [refreshed],
-            expanded: [old, stale]
+            expanded: [old, stale, olderDuplicate]
         )
         let byID = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
 
@@ -174,5 +175,4 @@ struct ConversationSidebarRegressionTests {
             )
         )
     }
-
 }

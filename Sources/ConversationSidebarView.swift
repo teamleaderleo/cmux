@@ -433,7 +433,10 @@ struct ConversationSidebarView: View {
         isLoadingMoreHistory = true
         defer { isLoadingMoreHistory = false }
 
-        let previousEntries = expandedHistory.isEmpty ? store.entries : expandedHistory
+        let previousEntries = projection.recentHistory(
+            initial: store.entries,
+            expanded: expandedHistory
+        )
         let nextLimit = projection.nextHistoryPerAgentLimit(
             current: historyPerAgentLimit
         )
@@ -489,6 +492,4 @@ struct ConversationSidebarView: View {
         let trimmed = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? entry.agent.displayName : trimmed
     }
-
-
 }

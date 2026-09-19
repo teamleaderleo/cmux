@@ -25,7 +25,12 @@ struct ConversationSidebarProjection {
         expanded: [SessionEntry]
     ) -> [SessionEntry] {
         guard !expanded.isEmpty else { return initial }
-        var byID = Dictionary(uniqueKeysWithValues: expanded.map { ($0.id, $0) })
+        var byID = Dictionary(
+            expanded.map { ($0.id, $0) },
+            uniquingKeysWith: { current, candidate in
+                current.modified >= candidate.modified ? current : candidate
+            }
+        )
         for entry in initial {
             byID[entry.id] = entry
         }
