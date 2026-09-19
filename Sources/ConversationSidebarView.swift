@@ -459,7 +459,7 @@ struct ConversationSidebarView: View {
 
         isSearchInFlight = true
         do {
-            try await Task.sleep(for: .milliseconds(180))
+            try await ContinuousClock().sleep(for: .milliseconds(180))
             try Task.checkCancellation()
         } catch {
             return
