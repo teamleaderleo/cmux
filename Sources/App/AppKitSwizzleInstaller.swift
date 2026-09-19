@@ -11,32 +11,32 @@ enum AppKitSwizzleInstaller {
         exchange(
             on: NSWindow.self,
             original: #selector(NSWindow.performKeyEquivalent(with:)),
-            swizzled: #selector(NSWindow.cmux_performKeyEquivalent(with:))
+            swizzled: NSSelectorFromString("cmux_performKeyEquivalentWithEvent:")
         )
         exchange(
             on: NSWindow.self,
             original: #selector(NSWindow.makeFirstResponder(_:)),
-            swizzled: #selector(NSWindow.cmux_makeFirstResponder(_:))
+            swizzled: NSSelectorFromString("cmux_makeFirstResponder:")
         )
         exchange(
             on: NSWindow.self,
             original: #selector(NSWindow.sendEvent(_:)),
-            swizzled: #selector(NSWindow.cmux_sendEvent(_:))
+            swizzled: NSSelectorFromString("cmux_sendEvent:")
         )
         exchange(
             on: NSApplication.self,
             original: #selector(NSApplication.sendEvent(_:)),
-            swizzled: #selector(NSApplication.cmux_applicationSendEvent(_:))
+            swizzled: NSSelectorFromString("cmux_applicationSendEvent:")
         )
         exchange(
             on: NSApplication.self,
             original: #selector(NSApplication.sendAction(_:to:from:)),
-            swizzled: #selector(NSApplication.cmux_sendAction(_:to:from:))
+            swizzled: NSSelectorFromString("cmux_sendAction:to:from:")
         )
         exchange(
             on: NSApplication.self,
             original: #selector(NSApplication.accessibilityAttributeValue(_:)),
-            swizzled: #selector(NSApplication.cmux_accessibilityAttributeValue(_:))
+            swizzled: NSSelectorFromString("cmux_accessibilityAttributeValue:")
         )
     }()
 
