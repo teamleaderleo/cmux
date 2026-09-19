@@ -1074,7 +1074,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 #endif
 
-    var mainWindowContexts: [ObjectIdentifier: MainWindowContext] = [:]
+    private let mainWindowRegistry = MainWindowRegistry()
+
+    /// Compatibility view for existing routing and lifecycle callers.
+    var mainWindowContexts: [ObjectIdentifier: MainWindowContext] {
+        mainWindowRegistry.contexts
+    }
     private var mainWindowControllers: [MainWindowController] = []
 
     /// Tracks the cascade point for new windows, matching Ghostty's upstream algorithm.
@@ -4907,12 +4912,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         fileExplorerState: FileExplorerState? = nil,
         cmuxConfigStore: CmuxConfigStore? = nil
     ) {
-        let key = ObjectIdentifier(window)
         forgetRecoverableMainWindowRoute(windowId: windowId)
         #if DEBUG
         let priorManagerToken = debugManagerToken(self.tabManager)
         #endif
-        if let existing = mainWindowContexts[key] {
+        if let existing = mainWindowRegistry.context(for: window) {
             tabManager.window = window
             tabManager.windowId = existing.windowId
             existing.window = window
@@ -4981,7 +4985,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 workspaceTerminalFontSizeArbiter:
                     workspaceTerminalFontSizeArbiter
             )
-            mainWindowContexts[key] = context
+            mainWindowRegistry.insert(context, for: window)
             context.closeObserver = WindowCloseObserver(window: window) { [weak self] in self?.unregisterMainWindow($0) }
         }
         commandPaletteWindowStore.registerWindow(windowId)
@@ -6213,33 +6217,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func reindexMainWindowContextIfNeeded(_ context: MainWindowContext, for window: NSWindow) {
-        let desiredKey = ObjectIdentifier(window)
-        if mainWindowContexts[desiredKey] === context {
-            context.window = window
-            return
+        if mainWindowRegistry.reindex(context, for: window) {
+            notifyMainWindowContextsDidChange()
         }
-
-        let contextKeys = mainWindowContexts.compactMap { key, value in
-            value === context ? key : nil
-        }
-        for key in contextKeys {
-            mainWindowContexts.removeValue(forKey: key)
-        }
-
-        if let conflicting = mainWindowContexts[desiredKey], conflicting !== context {
-            context.window = window
-            return
-        }
-
-        mainWindowContexts[desiredKey] = context
-        context.window = window
-        notifyMainWindowContextsDidChange()
     }
 
     func contextForMainTerminalWindow(_ window: NSWindow, reindex: Bool = true) -> MainWindowContext? {
         guard isMainTerminalWindow(window) else { return nil }
 
-        if let context = mainWindowContexts[ObjectIdentifier(window)] {
+        if let context = mainWindowRegistry.context(for: window) {
             context.window = window
             return context
         }
@@ -6274,12 +6260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func unregisterMainWindowContext(for window: NSWindow) -> MainWindowContext? {
         guard let removed = contextForMainTerminalWindow(window, reindex: false) else { return nil }
         removed.teardownWindowDock()
-        let removedKeys = mainWindowContexts.compactMap { key, value in
-            value === removed ? key : nil
-        }
-        for key in removedKeys {
-            mainWindowContexts.removeValue(forKey: key)
-        }
+        mainWindowRegistry.removeReferences(to: removed)
         rememberRecoverableMainWindowRoute(windowId: removed.windowId, tabManager: removed.tabManager, window: removed.window)
         removeMobileWorkspaceListObserverIfUnused(for: removed.tabManager)
         notifyMainWindowContextsDidChange()
@@ -6289,12 +6270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // Internal (not private): see notifyMainWindowContextsDidChange.
     func discardOrphanedMainWindowContext(_ context: MainWindowContext, allowWindowlessFallback: Bool = false) {
         context.teardownWindowDock()
-        let contextKeys = mainWindowContexts.compactMap { key, value in
-            value === context ? key : nil
-        }
-        for key in contextKeys {
-            mainWindowContexts.removeValue(forKey: key)
-        }
+        mainWindowRegistry.removeReferences(to: context)
         rememberRecoverableMainWindowRoute(windowId: context.windowId, tabManager: context.tabManager, window: context.window)
         removeMobileWorkspaceListObserverIfUnused(for: context.tabManager)
         notifyMainWindowContextsDidChange()
@@ -6320,7 +6296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func mainWindowId(for window: NSWindow) -> UUID? {
-        if let context = mainWindowContexts[ObjectIdentifier(window)] {
+        if let context = mainWindowRegistry.context(for: window) {
             return context.windowId
         }
         guard let rawIdentifier = window.identifier?.rawValue,
@@ -16064,13 +16040,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
         debugDetachedContextWindows.append(detachedWindow)
 
-        let contextKeys = mainWindowContexts.compactMap { key, value in
-            value === context ? key : nil
-        }
-        for key in contextKeys {
-            mainWindowContexts.removeValue(forKey: key)
-        }
-        mainWindowContexts[ObjectIdentifier(detachedWindow)] = context
+        mainWindowRegistry.removeReferences(to: context)
+        mainWindowRegistry.insert(context, for: detachedWindow)
         context.window = window
         return true
     }
@@ -17393,7 +17364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
 
     func isMainTerminalWindow(_ window: NSWindow) -> Bool {
-        if mainWindowContexts[ObjectIdentifier(window)] != nil {
+        if mainWindowRegistry.context(for: window) != nil {
             return true
         }
         guard let raw = window.identifier?.rawValue else { return false }
