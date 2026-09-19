@@ -273,6 +273,7 @@ jobs:
         run: python3 tests/test_ios_testflight_notes.py
 
       - name: Validate CMUX INTERNAL main-push path filter
+        if: github.repository == 'manaflow-ai/cmux'
         run: python3 tests/test_ios_testflight_main_push_filter.py
 
       - name: Validate external TestFlight group assignment helper
@@ -326,6 +327,7 @@ jobs:
         run: ./tests/test_ci_xcode_selection_fast_path.sh
 
       - name: Validate universal nightly workflow
+        if: github.repository == 'manaflow-ai/cmux'
         run: bash ./tests/test_nightly_universal_build.sh
 
       - name: Validate cmux-tui client commit resolution
