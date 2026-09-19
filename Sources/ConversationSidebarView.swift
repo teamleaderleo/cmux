@@ -67,7 +67,9 @@ struct ConversationSidebarView: View {
                             .fill(row.isFocused ? Color.accentColor : Color.secondary.opacity(0.6))
                             .frame(width: 6, height: 6)
                             .padding(.top, 6)
-                            .accessibilityLabel(row.isFocused ? "Focused" : "Open")
+                            .accessibilityLabel(row.isFocused
+                                ? String(localized: "sessionIndex.status.activeIndicator", defaultValue: "Active")
+                                : String(localized: "sessionIndex.row.open", defaultValue: "Open"))
                     }
                 }
                 .padding(.horizontal, 8)
@@ -80,7 +82,9 @@ struct ConversationSidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(row.isOpen ? "Focus conversation" : "Open conversation")
+            .help(row.isOpen
+                ? String(localized: "sessionIndex.row.focusSession", defaultValue: "Focus Session")
+                : String(localized: "sessionIndex.row.openSession", defaultValue: "Open Session"))
             .accessibilityLabel(Self.displayTitle(for: row.entry))
         }
 
@@ -122,7 +126,7 @@ struct ConversationSidebarView: View {
                     }
 
                     if !visibleHistoryRows.isEmpty {
-                        sectionLabel("History")
+                        sectionLabel(String(localized: "menu.history.title", defaultValue: "History"))
                         ForEach(visibleHistoryRows) { row in
                             RowView(row: row) {
                                 Self.activate(row.entry, tabManager: manager)
@@ -133,7 +137,7 @@ struct ConversationSidebarView: View {
                             Button {
                                 visibleHistoryCount += Self.pageSize
                             } label: {
-                                Text("Show more")
+                                Text(String(localized: "sessionIndex.section.showMore", defaultValue: "Show more"))
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -156,7 +160,9 @@ struct ConversationSidebarView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(isSearchInFlight ? "Searching conversations…" : "Loading conversations…")
+                            Text(isSearchInFlight
+                                ? String(localized: "sessionIndex.search.searching", defaultValue: "Searching…")
+                                : String(localized: "sessionIndex.popover.loading", defaultValue: "Loading…"))
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }
@@ -164,8 +170,8 @@ struct ConversationSidebarView: View {
                         .padding(.vertical, 10)
                     } else if rows.isEmpty {
                         Text(trimmedSearch.isEmpty
-                            ? "No conversation history yet."
-                            : "No matching conversations.")
+                            ? String(localized: "sessionIndex.empty.title", defaultValue: "Vault is empty")
+                            : String(localized: "sessionIndex.search.noResults", defaultValue: "No matching sessions"))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 8)
@@ -193,7 +199,7 @@ struct ConversationSidebarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Search conversations and transcripts", text: $searchText)
+            TextField(String(localized: "sessionIndex.allSessions.searchPlaceholder", defaultValue: "Search sessions…"), text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
         }
