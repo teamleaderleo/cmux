@@ -24,7 +24,7 @@ import CmuxSidebarProviderKit
 @MainActor
 @Suite(.serialized)
 struct SidebarProviderMenuRegressionTests {
-    /// Stable ids of the seven built-in sidebar views, in menu order.
+    /// Stable ids of the built-in sidebar views, in menu order.
     private static let builtInViewIDs: [String] = [
         "cmux.sidebar.default",
         "com.example.cmux.sidebar.project-worktrees",
@@ -36,12 +36,21 @@ struct SidebarProviderMenuRegressionTests {
     ]
 
     private static let extensionsBetaKey = "extensions.beta.enabled"
+    private static let conversationBetaKey = "sidebar.beta.conversations.enabled"
 
     private func withExtensionsBeta(_ enabled: Bool, _ body: () -> Void) {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: Self.extensionsBetaKey)
         defaults.set(enabled, forKey: Self.extensionsBetaKey)
         defer { restore(previous, forKey: Self.extensionsBetaKey) }
+        body()
+    }
+
+    private func withConversationBeta(_ enabled: Bool, _ body: () -> Void) {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: Self.conversationBetaKey)
+        defaults.set(enabled, forKey: Self.conversationBetaKey)
+        defer { restore(previous, forKey: Self.conversationBetaKey) }
         body()
     }
 
@@ -75,6 +84,36 @@ struct SidebarProviderMenuRegressionTests {
                     "Built-in sidebar view \(builtInID) is missing from the switcher menu"
                 )
             }
+        }
+    }
+
+    @Test
+    func conversationSidebarAppearsOnlyWhileItsBetaIsEnabled() {
+        withConversationBeta(false) {
+            #expect(!CmuxExtensionSidebarSelection.descriptors.map(\.id).contains(
+                CmuxExtensionSidebarSelection.conversationSidebarProviderId
+            ))
+            #expect(
+                CmuxExtensionSidebarSelection.effectiveProviderId(
+                    CmuxExtensionSidebarSelection.conversationSidebarProviderId,
+                    extensionsEnabled: false,
+                    customSidebarsEnabled: true,
+                    conversationSidebarEnabled: false
+                ) == CmuxExtensionSidebarSelection.defaultProviderId
+            )
+        }
+        withConversationBeta(true) {
+            #expect(CmuxExtensionSidebarSelection.descriptors.map(\.id).contains(
+                CmuxExtensionSidebarSelection.conversationSidebarProviderId
+            ))
+            #expect(
+                CmuxExtensionSidebarSelection.effectiveProviderId(
+                    CmuxExtensionSidebarSelection.conversationSidebarProviderId,
+                    extensionsEnabled: false,
+                    customSidebarsEnabled: true,
+                    conversationSidebarEnabled: true
+                ) == CmuxExtensionSidebarSelection.conversationSidebarProviderId
+            )
         }
     }
 
