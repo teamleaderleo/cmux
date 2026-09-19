@@ -17,6 +17,8 @@ not been measured under the controlled protocol in `BUILD_PERFORMANCE.md`.
 | Glaeda prior-art comment-only build | cache-retaining | 1 | 30.737s; zero SwiftCompile tasks | Context from Glaeda issue #1048; not a cmux build measurement. |
 | Local cmux fresh DerivedData probe | fresh DerivedData, reused SwiftPM source cache | 1 | 9m04s, still compiling `cmux`; terminated after no progress | GhosttyKit was provisioned. This is a cold-ish full graph, not comparable to the warm tagged sample. |
 | Local cmux resumed probe | same DerivedData, 300s bound | 1 | timed out at 300s while still compiling `cmux` | Confirms the full graph is too expensive to repeat locally for the matrix. |
+| Benchmark-branch baseline | fresh tagged build, 900s bound | 1 | timed out at 900.053s while compiling `cmux` (`ContentView.swift`) | GhosttyKit was reused from the exact `3a9447f` cache and submodules were initialized; several unrelated Xcode builds shared the host, so this is cold-ish evidence only. Full receipt is retained with the investigation artifact. |
+| Benchmark-branch follow-up | reused DerivedData, 300s bound | 1 | timed out at 300.073s while still compiling `cmux` (`cmuxApp.swift` and related files) | The first run did not reach a completed app, so this did not become a warm sample. Full receipt is retained with the investigation artifact. |
 | Hosted `reload-build` smoke | GitHub-hosted `macos-14`, baseline | 1 | cancelled after >10m in GhosttyKit provisioning | Run [35407671237](https://github.com/teamleaderleo/cmux/actions/runs/35407671237); this older workflow did not reach `xcodebuild`, so it is setup evidence only. |
 
 ## Interpretation
@@ -41,5 +43,5 @@ The current machine cannot reach that fleet: Cloud Machines return
 credentials are present. This is an infrastructure prerequisite, not a
 benchmark result.
 
-Prior art: [teamleaderleo/Glaeda](https://github.com/teamleaderleo/glaeda) and
-[teamleaderleo/Tact](https://github.com/teamleaderleo/tact).
+Related references: [teamleaderleo/Glaeda](https://github.com/teamleaderleo/glaeda)
+and [teamleaderleo/Tact](https://github.com/teamleaderleo/tact).
