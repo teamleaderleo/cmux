@@ -168,7 +168,7 @@ struct ConversationSidebarView: View {
                         if canShowMoreHistory {
                             Button {
                                 visibleHistoryCount += Self.pageSize
-                                if trimmedSearch.isEmpty, canLoadMoreHistory {
+                                if trimmedSearch.isEmpty, canLoadMoreHistory, !projected.hasMoreLoadedHistory {
                                     Task { await loadMoreHistory() }
                                 }
                             } label: {
