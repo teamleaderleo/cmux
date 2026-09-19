@@ -5477,7 +5477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowId: UUID,
         workingDirectory: String? = nil,
         bringToFront shouldBringToFront: Bool = false,
-        select: Bool = false,
+        select: Bool? = nil,
         placementOverride: WorkspacePlacement? = nil
     ) -> UUID? {
         guard let state = scriptableMainWindow(windowId: windowId) else { return nil }
@@ -5487,7 +5487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         let workspace = state.tabManager.addWorkspace(
             workingDirectory: workingDirectory,
-            select: select,
+            select: select ?? shouldBringToFront,
             placementOverride: placementOverride
         )
         return workspace.id
