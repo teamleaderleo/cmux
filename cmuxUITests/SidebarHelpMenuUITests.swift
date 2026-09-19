@@ -123,6 +123,60 @@ final class SidebarHelpMenuUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["5/4000"].waitForExistence(timeout: 2.0))
     }
 
+    func testHelpMenuAgentIntegrationsOpensAutomationSettings() {
+        let app = XCUIApplication.cmuxTestApplication()
+        app.launchArguments += [
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+            "-ApplePersistenceIgnoreState", "YES",
+            "-NSQuitAlwaysKeepsWindows", "NO",
+            "-menuBarOnly", "false",
+        ]
+        app.launchEnvironment["CMUX_UI_TEST_MODE"] = "1"
+        app.launch()
+        XCTAssertTrue(
+            sidebarHelpPollUntil(timeout: 10.0) {
+                app.state == .runningForeground || app.state == .runningBackground
+            },
+            "App failed to launch. state=\(app.state.rawValue)"
+        )
+        app.activate()
+        XCTAssertTrue(sidebarHelpPollUntil(timeout: 6.0) { app.state == .runningForeground })
+
+        let helpButton = requireElement(
+            candidates: helpButtonCandidates(in: app),
+            timeout: 8.0,
+            description: "sidebar help button"
+        )
+        helpButton.click()
+
+        let integrationsItem = requireElement(
+            candidates: helpMenuItemCandidates(
+                in: app,
+                identifier: "SidebarHelpMenuOptionAgentIntegrations",
+                title: "Agent Integrations"
+            ),
+            timeout: 3.0,
+            description: "Agent Integrations help menu item"
+        )
+        integrationsItem.click()
+
+        let settings = app.windows["Settings"]
+        XCTAssertTrue(
+            sidebarHelpPollUntil(timeout: 6.0) { settings.exists },
+            "Expected Agent Integrations to open Settings"
+        )
+        XCTAssertTrue(
+            firstExistingElement(
+                candidates: [
+                    settings.staticTexts["Automation"],
+                ],
+                timeout: 4.0
+            ) != nil,
+            "Expected Settings to navigate to Automation"
+        )
+    }
+
     private func waitForWindowCount(atLeast count: Int, app: XCUIApplication, timeout: TimeInterval) -> Bool {
         sidebarHelpPollUntil(timeout: timeout) {
             app.windows.count >= count
@@ -136,6 +190,7 @@ final class SidebarHelpMenuUITests: XCTestCase {
             app.buttons["Help"],
             sidebar.buttons["SidebarHelpMenuButton"],
             sidebar.buttons["Help"],
+            app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Help")).firstMatch,
         ]
     }
 
