@@ -13,10 +13,19 @@ import Foundation
 enum CloudAgentSkillLauncher {
     static let installedSkillRelativePath = ".config/cmux/skills/cmux-cloud.md"
 
-    /// The bundled skill markdown (`Resources/cloud-agent-skill.md`).
+    /// The bundled skill markdown (`Resources/en.lproj/cloud-agent-skill.md`,
+    /// localized alongside `Resources/ja.lproj/cloud-agent-skill.md`). It ships
+    /// inside `<region>.lproj/`, so the fallbacks below name the English
+    /// localization explicitly rather than the unlocalized resource root.
     static func skillMarkdown(bundle: Bundle = .main) -> String? {
         let url = bundle.url(forResource: "cloud-agent-skill", withExtension: "md")
-            ?? bundle.resourceURL?.appendingPathComponent("cloud-agent-skill.md")
+            ?? bundle.url(
+                forResource: "cloud-agent-skill",
+                withExtension: "md",
+                subdirectory: nil,
+                localization: "en"
+            )
+            ?? bundle.resourceURL?.appendingPathComponent("en.lproj/cloud-agent-skill.md")
         guard let url, let data = try? Data(contentsOf: url) else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
