@@ -52,6 +52,7 @@ def main() -> int:
         started = time.monotonic()
         timed_out = False
         completion_marker = ""
+        reload_log_path: pathlib.Path | None = None
         process = subprocess.Popen(
             command,
             text=True,
@@ -90,6 +91,10 @@ def main() -> int:
                     selector.unregister(key.fileobj)
                     continue
                 output_parts.append(line)
+                if "log:" in line:
+                    candidate = line.split("log:", 1)[1].strip().rstrip(")")
+                    if candidate.startswith("/"):
+                        reload_log_path = pathlib.Path(candidate)
                 if "Build complete." in line:
                     completion_marker = "build_complete"
                 elif "==> reload succeeded" in line and not completion_marker:
@@ -124,6 +129,13 @@ def main() -> int:
             process.stderr.close()
 
         output = "".join(output_parts)
+        if (timed_out or (process.returncode not in (None, 0))) and reload_log_path:
+            try:
+                log_tail = reload_log_path.read_text(errors="replace").splitlines()[-20:]
+            except OSError:
+                log_tail = []
+            if log_tail:
+                output += "\n==> reload log tail:\n" + "\n".join(log_tail) + "\n"
         exit_code = process.returncode
         if completion_marker and not timed_out:
             # The process group is deliberately terminated after the build
