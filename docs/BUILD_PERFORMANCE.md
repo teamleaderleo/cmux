@@ -45,6 +45,10 @@ The harness records every sample, including failed builds, in a JSON receipt. Us
 
 For a controlled multi-arm run, dispatch `.github/workflows/build-performance.yml` on a macOS runner. It runs baseline, the exact #56/#60/#61 commits, and a composed cherry-pick with the same workflow and receipt format. The workflow is manual-only so ordinary pull requests do not consume five macOS build slots.
 
+The workflow pins Ghostty to the same revision and verified GhosttyKit checksum
+manifest for every arm. This keeps an older candidate ref from failing merely
+because its historical submodule revision predates the current prebuilt cache.
+
 ## Existing evidence
 
 - PR #56 reports three unchanged tagged native builds at 29.11–33.57 seconds, median 31.87 seconds including Glaeda startup/admission. Its separate 46.56-second sample was uncontrolled.
