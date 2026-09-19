@@ -72,4 +72,4 @@ Publish one table with:
 - first useful test result;
 - cache state and machine/Xcode/SDK identity.
 
-There is no valid composed number until these arms run under the same conditions. Credit the build-state model as prior art from [teamleaderleo/Glaeda](https://github.com/teamleaderleo/glaeda) and the hot-path measurement discipline from [teamleaderleo/Tact](https://github.com/teamleaderleo/tact).
+There is no valid composed number until these arms run under the same conditions. The build-state model follows [teamleaderleo/Glaeda](https://github.com/teamleaderleo/glaeda), and the hot-path measurement discipline follows [teamleaderleo/Tact](https://github.com/teamleaderleo/tact).
