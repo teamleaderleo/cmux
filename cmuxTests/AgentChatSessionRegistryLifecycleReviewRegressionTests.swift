@@ -12,41 +12,6 @@ import Testing
 
 struct AgentChatSessionRegistryLifecycleReviewRegressionTests {
     @MainActor
-    @Test func transcriptRecordChangesPublishLocalRefreshNotification() async {
-        let service = AgentChatTranscriptService(
-            registry: AgentChatSessionRegistry(),
-            hasEventSubscribers: { false },
-            emitEventPayload: { _ in }
-        )
-        let sessionID = "sidebar-refresh-session"
-        service.noteHookEvent(WorkstreamEvent(
-            sessionId: sessionID,
-            hookEventName: .sessionStart,
-            source: "claude",
-            workspaceId: UUID().uuidString,
-            surfaceId: UUID().uuidString,
-            cwd: "/Users/example/project",
-            receivedAt: Date(timeIntervalSince1970: 10)
-        ))
-
-        await confirmation("agent chat record update refreshes local projections") { refreshed in
-            let observer = NotificationCenter.default.addObserver(
-                forName: .agentChatSessionRecordsDidChange,
-                object: service,
-                queue: nil
-            ) { _ in
-                refreshed()
-            }
-            defer { NotificationCenter.default.removeObserver(observer) }
-
-            service.registry.update(sessionID: sessionID) {
-                $0.title = "Updated title"
-                $0.lastActivityAt = Date(timeIntervalSince1970: 20)
-            }
-        }
-    }
-
-    @MainActor
     @Test func liveCodexHookDefersFallbackTranscriptScanUntilHistoryOpen() async throws {
         let home = try temporaryHomeDirectory()
         let sessionID = "24ec0052-450c-4914-b1dd-2ee80d4bc84b"

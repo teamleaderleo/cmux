@@ -3,40 +3,6 @@ import CmuxFoundation
 import Foundation
 import SwiftUI
 
-enum ConversationSidebarProjection {
-    static let historyPagePerAgent = 30
-
-    static func liveSessionKey(for record: AgentChatSessionRecord) -> String {
-        VaultLiveSessionKeys.key(
-            kind: record.agentKind.sourceName,
-            sessionID: record.hookStoreLookupSessionID
-        )
-    }
-
-    static func presentationAgent(
-        for record: AgentChatSessionRecord,
-        configuredAgents: [SessionAgent]
-    ) -> SessionAgent? {
-        configuredAgents.first { $0.rawValue == record.agentKind.sourceName }
-            ?? SessionAgent(rawValue: record.agentKind.sourceName)
-    }
-
-    static func shouldFetchMoreHistory(
-        visibleHistoryCount: Int,
-        loadedHistoryCount: Int,
-        searchIsEmpty: Bool,
-        canLoadMoreHistory: Bool
-    ) -> Bool {
-        searchIsEmpty
-            && canLoadMoreHistory
-            && visibleHistoryCount >= loadedHistoryCount
-    }
-
-    static func nextHistoryPerAgentLimit(current: Int) -> Int {
-        min(current + historyPagePerAgent, SessionIndexStore.searchMaxFiles)
-    }
-}
-
 /// Current-main extraction of the useful conversation-sidebar behavior from
 /// the older fork experiment.
 ///
@@ -59,8 +25,7 @@ struct ConversationSidebarView: View {
     @State private var canLoadMoreHistory = true
     @State private var historyPerAgentLimit = SessionIndexStore.perAgentLimit
     @State private var visibleHistoryCount = 24
-    @State private var liveSessionRevision: UInt64 = 0
-    @State private var livePresentationAgents: [SessionAgent] = []
+    @StateObject private var liveState = ConversationSidebarLiveState()
 
     private static let pageSize = 24
 
@@ -156,7 +121,7 @@ struct ConversationSidebarView: View {
     }
 
     var body: some View {
-        let rows = projectedRows(liveSessionRevision: liveSessionRevision)
+        let rows = projectedRows(liveSessionRevision: liveState.revision)
         let openRows = rows.filter(\.isOpen)
         let historyRows = rows.filter { !$0.isOpen }
         let visibleHistoryRows = Array(historyRows.prefix(visibleHistoryCount))
@@ -287,19 +252,6 @@ struct ConversationSidebarView: View {
         .task(id: searchText) {
             await updateSearchResults(for: searchText)
         }
-        .task {
-            let loaded = await SessionIndexStore.defaultAgentOrder(workingDirectory: nil)
-            guard !Task.isCancelled else { return }
-            livePresentationAgents = loaded.agents
-        }
-        .task {
-            for await _ in NotificationCenter.default.notifications(
-                named: .agentChatSessionRecordsDidChange
-            ) {
-                guard !Task.isCancelled else { return }
-                liveSessionRevision &+= 1
-            }
-        }
         .onChange(of: searchText) { _, newValue in
             visibleHistoryCount = Self.pageSize
             searchResults = []
@@ -424,7 +376,7 @@ struct ConversationSidebarView: View {
             return []
         }
 
-        let configuredAgents = livePresentationAgents
+        let configuredAgents = liveState.presentationAgents
             + store.agentOrder
             + store.entries.map(\.agent)
             + expandedHistory.map(\.agent)

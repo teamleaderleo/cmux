@@ -2692,6 +2692,8 @@
 		A5001601 /* SentryHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5001600 /* SentryHelper.swift */; };
 		C0A0B0020000000000000001 /* ConversationSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0010000000000000001 /* ConversationSidebarView.swift */; };
 		C0A0B0040000000000000001 /* CmuxExtensionSidebarSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */; };
+		C0A0B0060000000000000001 /* ConversationSidebarSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0050000000000000001 /* ConversationSidebarSupport.swift */; };
+		C0A0B0080000000000000001 /* AgentChatSessionRecordsNotification.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0070000000000000001 /* AgentChatSessionRecordsNotification.swift */; };
 		FE003106 /* SessionAgentPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE003006 /* SessionAgentPresentation.swift */; };
 		A9F200000000000000000008 /* SessionAgentSessionPanelSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9F100000000000000000008 /* SessionAgentSessionPanelSnapshot.swift */; };
 		A74770010000000000000005 /* SessionConfigFrameEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A74770010000000000000006 /* SessionConfigFrameEntry.swift */; };
@@ -2747,6 +2749,7 @@
 		850000000000000000000002 /* SessionIndexTableViewportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850000000000000000000001 /* SessionIndexTableViewportTests.swift */; };
 		FE003102 /* SessionIndexView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE003002 /* SessionIndexView.swift */; };
 		8A3392FE64E0605D942213D1 /* SessionIndexViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D69572C8D276745E502B94 /* SessionIndexViewTests.swift */; };
+		C0A0B00A0000000000000001 /* ConversationSidebarRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A0B0090000000000000001 /* ConversationSidebarRegressionTests.swift */; };
 		A5F10000000000000000000F /* SessionNotificationSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F100000000000000000010 /* SessionNotificationSnapshot.swift */; };
 		0A1208090000000000000001 /* SessionPersistedVaultAgentRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A1208090000000000000002 /* SessionPersistedVaultAgentRegistration.swift */; };
 		481D7BF878AB38DA5642D1C9 /* SessionPersistence+Todos.swift in Sources */ = {isa = PBXBuildFile; fileRef = 769F7D1FD3622B7D06998B0F /* SessionPersistence+Todos.swift */; };
@@ -6555,6 +6558,8 @@
 		A5001600 /* SentryHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryHelper.swift; sourceTree = "<group>"; };
 		C0A0B0010000000000000001 /* ConversationSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebarView.swift; sourceTree = "<group>"; };
 		C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxExtensionSidebarSelection.swift; sourceTree = "<group>"; };
+		C0A0B0050000000000000001 /* ConversationSidebarSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebarSupport.swift; sourceTree = "<group>"; };
+		C0A0B0070000000000000001 /* AgentChatSessionRecordsNotification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatSessionRecordsNotification.swift; sourceTree = "<group>"; };
 		FE003006 /* SessionAgentPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAgentPresentation.swift; sourceTree = "<group>"; };
 		A9F100000000000000000008 /* SessionAgentSessionPanelSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionAgentSessionPanelSnapshot.swift; sourceTree = "<group>"; };
 		A74770010000000000000006 /* SessionConfigFrameEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfigFrameEntry.swift; sourceTree = "<group>"; };
@@ -6610,6 +6615,7 @@
 		850000000000000000000001 /* SessionIndexTableViewportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionIndexTableViewportTests.swift; sourceTree = "<group>"; };
 		FE003002 /* SessionIndexView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionIndexView.swift; sourceTree = "<group>"; };
 		42D69572C8D276745E502B94 /* SessionIndexViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionIndexViewTests.swift; sourceTree = "<group>"; };
+		C0A0B0090000000000000001 /* ConversationSidebarRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebarRegressionTests.swift; sourceTree = "<group>"; };
 		A5F100000000000000000010 /* SessionNotificationSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionNotificationSnapshot.swift; sourceTree = "<group>"; };
 		0A1208090000000000000002 /* SessionPersistedVaultAgentRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionPersistedVaultAgentRegistration.swift; sourceTree = "<group>"; };
 		769F7D1FD3622B7D06998B0F /* SessionPersistence+Todos.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionPersistence+Todos.swift"; sourceTree = "<group>"; };
@@ -10395,6 +10401,8 @@
 				F5320001A1B2C3D4E5F60718 /* HermesAgentIndex.swift */,
 				C0A0B0010000000000000001 /* ConversationSidebarView.swift */,
 				C0A0B0030000000000000001 /* CmuxExtensionSidebarSelection.swift */,
+				C0A0B0050000000000000001 /* ConversationSidebarSupport.swift */,
+				C0A0B0070000000000000001 /* AgentChatSessionRecordsNotification.swift */,
 				FE003006 /* SessionAgentPresentation.swift */,
 				D4476F030000000000000002 /* SessionIndexAgentIconImage.swift */,
 				D4476F020000000000000002 /* SessionIndexIconImage.swift */,
@@ -11459,6 +11467,7 @@
 				850000000000000000000007 /* SessionIndexSyntheticCorpus.swift */,
 				850000000000000000000001 /* SessionIndexTableViewportTests.swift */,
 				42D69572C8D276745E502B94 /* SessionIndexViewTests.swift */,
+				C0A0B0090000000000000001 /* ConversationSidebarRegressionTests.swift */,
 				F1C3F1DBF6BF5D7223C4A30C /* SidebarMarkdownRendererTests.swift */,
 				14A7DC53B9CA33BE2A421711 /* WorkspacePullRequestSidebarTests.swift */,
 				5659A0045659A0045659A004 /* WorkspaceSidebarObservationTests.swift */,
@@ -13999,6 +14008,8 @@
 				A5001601 /* SentryHelper.swift in Sources */,
 				C0A0B0020000000000000001 /* ConversationSidebarView.swift in Sources */,
 				C0A0B0040000000000000001 /* CmuxExtensionSidebarSelection.swift in Sources */,
+				C0A0B0060000000000000001 /* ConversationSidebarSupport.swift in Sources */,
+				C0A0B0080000000000000001 /* AgentChatSessionRecordsNotification.swift in Sources */,
 				FE003106 /* SessionAgentPresentation.swift in Sources */,
 				A9F200000000000000000008 /* SessionAgentSessionPanelSnapshot.swift in Sources */,
 				A74770010000000000000005 /* SessionConfigFrameEntry.swift in Sources */,
@@ -15917,6 +15928,7 @@
 				850000000000000000000008 /* SessionIndexSyntheticCorpus.swift in Sources */,
 				850000000000000000000002 /* SessionIndexTableViewportTests.swift in Sources */,
 				8A3392FE64E0605D942213D1 /* SessionIndexViewTests.swift in Sources */,
+				C0A0B00A0000000000000001 /* ConversationSidebarRegressionTests.swift in Sources */,
 				F6572002A1B2C3D4E5F60718 /* SessionPersistenceResumeBindingTests.swift in Sources */,
 				F5000000A1B2C3D4E5F60718 /* SessionPersistenceTests.swift in Sources */,
 				812600000000000000000003 /* SessionRemoteWorkspaceMoshRestoreTests.swift in Sources */,

@@ -1,7 +1,6 @@
 import AppKit
 import CMUXAgentLaunch
 import Combine
-import CmuxAgentChat
 import SQLite3
 import SwiftUI
 import Testing
@@ -15,99 +14,6 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SessionIndexViewTests {
-    @Test
-    func conversationSidebarDeduplicatesPendingClaudeAliasAgainstHistory() throws {
-        let surfaceID = UUID().uuidString
-        let pendingID = AgentChatSessionRegistry.pendingClaudeSessionID(surfaceID: surfaceID)
-        let realSessionID = "24ec0052-450c-4914-b1dd-2ee80d4bc84b"
-        var record = AgentChatSessionRecord(
-            sessionID: pendingID,
-            agentKind: .claude,
-            workspaceID: UUID().uuidString,
-            surfaceID: surfaceID,
-            workingDirectory: "/Users/example/project",
-            transcriptPath: nil,
-            state: .idle,
-            lastActivityAt: Date(timeIntervalSince1970: 10),
-            title: "Live conversation",
-            pid: nil
-        )
-        record.rememberHookStoreSessionID(realSessionID)
-        let history = makeEntry(
-            sessionId: realSessionID,
-            title: "Live conversation"
-        )
-
-        #expect(
-            ConversationSidebarProjection.liveSessionKey(for: record)
-                == VaultLiveSessionKeys.key(for: history)
-        )
-    }
-
-    @Test
-    func conversationSidebarKeepsRegisteredAgentPresentation() throws {
-        let registered = RegisteredSessionAgent(
-            id: "pi",
-            name: "Pi",
-            iconAssetName: "AgentIcons/Pi"
-        )
-        let record = AgentChatSessionRecord(
-            sessionID: "pi-session",
-            agentKind: .other("pi"),
-            workspaceID: UUID().uuidString,
-            surfaceID: UUID().uuidString,
-            workingDirectory: "/Users/example/project",
-            transcriptPath: nil,
-            state: .idle,
-            lastActivityAt: Date(timeIntervalSince1970: 10),
-            title: nil,
-            pid: nil
-        )
-
-        let resolved = try #require(
-            ConversationSidebarProjection.presentationAgent(
-                for: record,
-                configuredAgents: [.registered(registered)]
-            )
-        )
-        #expect(resolved == .registered(registered))
-        #expect(resolved.displayName == "Pi")
-        #expect(resolved.assetName == "AgentIcons/Pi")
-    }
-
-    @Test
-    func conversationSidebarFetchesDeeperHistoryAtLoadedBoundary() {
-        #expect(
-            !ConversationSidebarProjection.shouldFetchMoreHistory(
-                visibleHistoryCount: 24,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: true,
-                canLoadMoreHistory: true
-            )
-        )
-        #expect(
-            ConversationSidebarProjection.shouldFetchMoreHistory(
-                visibleHistoryCount: 48,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: true,
-                canLoadMoreHistory: true
-            )
-        )
-        #expect(
-            ConversationSidebarProjection.nextHistoryPerAgentLimit(
-                current: SessionIndexStore.perAgentLimit
-            ) == SessionIndexStore.perAgentLimit + ConversationSidebarProjection.historyPagePerAgent
-        )
-        #expect(
-            !ConversationSidebarProjection.shouldFetchMoreHistory(
-                visibleHistoryCount: 48,
-                loadedHistoryCount: SessionIndexStore.perAgentLimit,
-                searchIsEmpty: false,
-                canLoadMoreHistory: true
-            )
-        )
-    }
-
     @Test
     func claudeLocalCommandCaveatDisplaysReadableTitle() {
         let entry = makeEntry(
