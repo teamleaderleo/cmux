@@ -467,67 +467,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
     )
     private static let serviceErrorNoPath = NSString(string: String(localized: "error.clipboardFolderPath", defaultValue: "Could not load any folder path from the clipboard."))
-    private static let didInstallWindowKeyEquivalentSwizzle: Void = {
-        let targetClass: AnyClass = NSWindow.self
-        let originalSelector = #selector(NSWindow.performKeyEquivalent(with:))
-        let swizzledSelector = #selector(NSWindow.cmux_performKeyEquivalent(with:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-    private static let didInstallWindowFirstResponderSwizzle: Void = {
-        let targetClass: AnyClass = NSWindow.self
-        let originalSelector = #selector(NSWindow.makeFirstResponder(_:))
-        let swizzledSelector = #selector(NSWindow.cmux_makeFirstResponder(_:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-    private static let didInstallWindowSendEventSwizzle: Void = {
-        let targetClass: AnyClass = NSWindow.self
-        let originalSelector = #selector(NSWindow.sendEvent(_:))
-        let swizzledSelector = #selector(NSWindow.cmux_sendEvent(_:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-    private static let didInstallApplicationSendEventSwizzle: Void = {
-        let targetClass: AnyClass = NSApplication.self
-        let originalSelector = #selector(NSApplication.sendEvent(_:))
-        let swizzledSelector = #selector(NSApplication.cmux_applicationSendEvent(_:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-    private static let didInstallApplicationSendActionSwizzle: Void = {
-        let targetClass: AnyClass = NSApplication.self
-        let originalSelector = #selector(NSApplication.sendAction(_:to:from:))
-        let swizzledSelector = #selector(NSApplication.cmux_sendAction(_:to:from:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-    private static let didInstallApplicationAccessibilitySwizzle: Void = {
-        let targetClass: AnyClass = NSApplication.self
-        let originalSelector = #selector(NSApplication.accessibilityAttributeValue(_:))
-        let swizzledSelector = #selector(NSApplication.cmux_accessibilityAttributeValue(_:))
-        guard let originalMethod = class_getInstanceMethod(targetClass, originalSelector),
-              let swizzledMethod = class_getInstanceMethod(targetClass, swizzledSelector) else {
-            return
-        }
-        method_exchangeImplementations(originalMethod, swizzledMethod)
-    }()
-
     /// Live `cmux diff` viewer subprocesses, keyed by pid, retained until they exit.
     /// Declared outside `#if DEBUG` because process retention is production behavior.
     private var diffViewerProcesses: [Int32: Process] = [:]
@@ -11729,12 +11668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     static func installWindowResponderSwizzlesForTesting() {
-        _ = didInstallApplicationAccessibilitySwizzle
-        _ = didInstallApplicationSendActionSwizzle
-        _ = didInstallApplicationSendEventSwizzle
-        _ = didInstallWindowKeyEquivalentSwizzle
-        _ = didInstallWindowFirstResponderSwizzle
-        _ = didInstallWindowSendEventSwizzle
+        AppKitSwizzleInstaller.install()
 #if DEBUG
         installShortcutRoutingFocusedWindowSwizzleForTesting()
 #endif
@@ -11753,12 +11687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 #endif
 
     private func installWindowResponderSwizzles() {
-        _ = Self.didInstallApplicationAccessibilitySwizzle
-        _ = Self.didInstallApplicationSendActionSwizzle
-        _ = Self.didInstallApplicationSendEventSwizzle
-        _ = Self.didInstallWindowKeyEquivalentSwizzle
-        _ = Self.didInstallWindowFirstResponderSwizzle
-        _ = Self.didInstallWindowSendEventSwizzle
+        AppKitSwizzleInstaller.install()
     }
 
     private func installShortcutMonitor() {
