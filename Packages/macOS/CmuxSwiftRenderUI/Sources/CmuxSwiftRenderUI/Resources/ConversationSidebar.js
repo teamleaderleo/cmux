@@ -1,3 +1,4 @@
+// cmux:conversation-sidebar
 // Shared live conversation sidebar. Metadata arrives as per-key context updates.
 const history = computed(() => data.history() || []);
 const [collapsed, setCollapsed] = signal({});

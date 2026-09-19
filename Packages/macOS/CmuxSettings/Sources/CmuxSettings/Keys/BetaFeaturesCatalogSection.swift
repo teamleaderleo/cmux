@@ -25,6 +25,15 @@ public struct BetaFeaturesCatalogSection: SettingCatalogSection {
         userDefaultsKey: "rightSidebar.beta.dock.enabled"
     )
 
+    /// Conversation Sidebar: an opt-in multi-provider conversation history
+    /// surface. Disabling it hides the history UI while preserving any open
+    /// provider sessions.
+    public let conversationSidebar = DefaultsKey<Bool>(
+        id: "sidebar.beta.conversations.enabled",
+        defaultValue: false,
+        userDefaultsKey: "sidebar.beta.conversations.enabled"
+    )
+
     /// Extensions: the experimental ExtensionKit sidebar-extension surface
     /// (puzzle button, sidebar-toggle provider menu, installed-extension
     /// host, and the extensions browser). Defaults off; while off, every
