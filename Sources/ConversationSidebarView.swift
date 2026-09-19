@@ -19,9 +19,15 @@ struct ConversationSidebarView: View {
     @State private var searchResults: [SessionEntry] = []
     @State private var searchErrors: [String] = []
     @State private var isSearchInFlight = false
+    @State private var expandedHistory: [SessionEntry] = []
+    @State private var historyErrors: [String] = []
+    @State private var isLoadingMoreHistory = false
+    @State private var canLoadMoreHistory = true
+    @State private var historyPerAgentLimit = SessionIndexStore.perAgentLimit
     @State private var visibleHistoryCount = 24
 
     private static let pageSize = 24
+    private static let historyPagePerAgent = 30
 
     private enum Destination {
         case indexed(SessionEntry)
@@ -121,6 +127,8 @@ struct ConversationSidebarView: View {
         let visibleHistoryRows = Array(historyRows.prefix(visibleHistoryCount))
         let manager = tabManager
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canShowMoreHistory = historyRows.count > visibleHistoryRows.count
+            || (trimmedSearch.isEmpty && canLoadMoreHistory)
 
         VStack(spacing: 0) {
             searchField
@@ -148,9 +156,14 @@ struct ConversationSidebarView: View {
                             }
                         }
 
-                        if historyRows.count > visibleHistoryRows.count {
+                        if canShowMoreHistory {
                             Button {
+                                let previousVisibleCount = visibleHistoryCount
                                 visibleHistoryCount += Self.pageSize
+                                if trimmedSearch.isEmpty,
+                                   previousVisibleCount >= historyRows.count {
+                                    Task { await loadMoreHistory() }
+                                }
                             } label: {
                                 Text(
                                     String(
@@ -165,10 +178,28 @@ struct ConversationSidebarView: View {
                                 .padding(.vertical, 8)
                             }
                             .buttonStyle(.plain)
+                            .disabled(isLoadingMoreHistory)
+                        }
+
+                        if isLoadingMoreHistory {
+                            HStack(spacing: 7) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(
+                                    String(
+                                        localized: "sessionIndex.popover.loading",
+                                        defaultValue: "Loading…"
+                                    )
+                                )
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
                         }
                     }
 
-                    if let error = searchErrors.first, !trimmedSearch.isEmpty {
+                    if let error = trimmedSearch.isEmpty ? historyErrors.first : searchErrors.first {
                         Text(error)
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
@@ -270,7 +301,9 @@ struct ConversationSidebarView: View {
         // The live chat registry is authoritative for new sessions. Retained
         // restore snapshots/live-process observations provide a fallback for a
         // managed session that is active but has not reached that registry.
-        let historySource = trimmedSearch.isEmpty ? store.entries : searchResults
+        let historySource = trimmedSearch.isEmpty
+            ? (expandedHistory.isEmpty ? store.entries : expandedHistory)
+            : searchResults
         var fallbackOpen: [Row] = []
         for entry in historySource {
             let key = VaultLiveSessionKeys.key(for: entry)
@@ -381,6 +414,28 @@ struct ConversationSidebarView: View {
             row.directory ?? ""
         ].joined(separator: " "))
         return terms.allSatisfy { haystack.contains($0) }
+    }
+
+    private func loadMoreHistory() async {
+        guard !isLoadingMoreHistory, canLoadMoreHistory else { return }
+        isLoadingMoreHistory = true
+        defer { isLoadingMoreHistory = false }
+
+        let previousEntries = expandedHistory.isEmpty ? store.entries : expandedHistory
+        let nextLimit = min(
+            historyPerAgentLimit + Self.historyPagePerAgent,
+            SessionIndexStore.searchMaxFiles
+        )
+        let outcome = await store.loadRecentSessions(limitPerAgent: nextLimit)
+        guard !Task.isCancelled else { return }
+
+        historyErrors = outcome.errors
+        let previousIDs = Set(previousEntries.map(\.id))
+        let nextIDs = Set(outcome.entries.map(\.id))
+        expandedHistory = outcome.entries
+        historyPerAgentLimit = nextLimit
+        canLoadMoreHistory = nextIDs.subtracting(previousIDs).isEmpty == false
+            && nextLimit < SessionIndexStore.searchMaxFiles
     }
 
     private func updateSearchResults(for rawQuery: String) async {

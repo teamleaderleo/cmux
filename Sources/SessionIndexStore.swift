@@ -850,6 +850,36 @@ final class SessionIndexStore: ObservableObject {
         return combined.sorted { $0.modified > $1.modified }
     }
 
+    /// Loads a larger bounded recent-session slice for callers that have
+    /// exhausted the initial Vault preview. This deliberately reuses the same
+    /// per-agent readers, registry, caps, and error policy as Vault instead of
+    /// introducing a second history index.
+    func loadRecentSessions(limitPerAgent: Int) async -> SearchOutcome {
+        let safeLimit = min(max(limitPerAgent, Self.perAgentLimit), Self.searchMaxFiles)
+        let bag = ErrorBag()
+        let order = await Self.defaultAgentOrder(workingDirectory: nil)
+        let combined = await Self.loadAgents(
+            order.agents,
+            registry: order.registry,
+            ampSessionRepository: ampSessionRepository,
+            needle: "",
+            cwdFilter: nil,
+            offset: 0,
+            limit: safeLimit,
+            errorBag: bag
+        )
+        guard !Task.isCancelled else {
+            return SearchOutcome(entries: [], errors: [])
+        }
+        return SearchOutcome(
+            entries: combined.sorted { lhs, rhs in
+                if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
+                return lhs.id < rhs.id
+            },
+            errors: bag.snapshot()
+        )
+    }
+
     private struct ClaudeParsed {
         var title: String = ""
         var cwd: String?
