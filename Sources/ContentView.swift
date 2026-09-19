@@ -15054,6 +15054,7 @@ struct SidebarFooterButtons: View {
 }
 
 private enum SidebarHelpMenuAction {
+    case agentIntegrations
     case upgrade
     case importBrowserData
     case keyboardShortcuts
@@ -15148,6 +15149,12 @@ private struct SidebarHelpMenuButton: View {
                     trailingSystemImage: "sparkles"
                 )
             }
+            helpOptionButton(
+                title: String(localized: "menu.help.agentIntegrations", defaultValue: "Agent Integrations"),
+                action: .agentIntegrations,
+                accessibilityIdentifier: "SidebarHelpMenuOptionAgentIntegrations",
+                isExternalLink: false
+            )
             helpOptionButton(
                 title: String(localized: "sidebar.help.sendFeedback", defaultValue: "Send Feedback"),
                 action: .sendFeedback,
@@ -15269,6 +15276,17 @@ private struct SidebarHelpMenuButton: View {
 
     private func perform(_ action: SidebarHelpMenuAction) {
         switch action {
+        case .agentIntegrations:
+            Task { @MainActor in
+                if let appDelegate = AppDelegate.shared {
+                    appDelegate.openPreferencesWindow(
+                        debugSource: "sidebarHelpMenu.agentIntegrations",
+                        navigationTarget: .automation
+                    )
+                } else {
+                    AppDelegate.presentPreferencesWindow(navigationTarget: .automation)
+                }
+            }
         case .upgrade:
             ProUpgradePresenter.present()
         case .importBrowserData:
