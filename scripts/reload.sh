@@ -921,6 +921,14 @@ Options:
   --swift-disable-global-isel
                          Alias for --swift-frontend-workaround.
   -h, --help             Show this help.
+
+Compilation cache:
+  CMUX_COMPILATION_CACHE=1 shares one Xcode compilation cache across tags, in
+  ~/Library/Caches/cmux/compilation-cache, so a build into an emptied
+  DerivedData replays earlier compiler output (about 90-140 s instead of
+  400-490 s). Off by default: with caching on, a one-file edit recompiles the
+  whole module (250-320 s instead of about 50 s). CMUX_COMPILATION_CACHE_DIR
+  and CMUX_COMPILATION_CACHE_LIMIT_BYTES change the location and size limit.
 EOF
 }
 
@@ -1472,6 +1480,12 @@ if [[ "$SWIFT_FRONTEND_WORKAROUND" -eq 1 || "${CMUX_SWIFT_FRONTEND_WORKAROUND:-}
 else
   SWIFT_FRONTEND_WORKAROUND_EFFECTIVE=0
 fi
+# shellcheck source=lib/compilation-cache.sh
+source "$SCRIPT_DIR/lib/compilation-cache.sh"
+COMPILATION_CACHE_ARGS="$(cmux_compilation_cache_xcodebuild_args)" || exit 1
+while IFS= read -r compilation_cache_arg; do
+  [[ -n "$compilation_cache_arg" ]] && XCODEBUILD_ARGS+=("$compilation_cache_arg")
+done <<< "$COMPILATION_CACHE_ARGS"
 XCODEBUILD_ARGS+=(build)
 
 if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then

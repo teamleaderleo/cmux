@@ -230,6 +230,9 @@ jobs:
       - name: Validate xcodebuild failure diagnostics
         run: ./tests/test_ci_xcodebuild_with_diagnostics.sh
 
+      - name: Validate reload compilation cache arguments
+        run: ./tests/test_reload_compilation_cache.sh
+
       - name: Validate app-host xcodebuild retry guard
         run: ./tests/test_ci_app_host_xcodebuild_retry.sh
 
