@@ -780,6 +780,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		E7D100000000000000000005 /* CmuxMainThreadTurnProfiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D100000000000000000006 /* CmuxMainThreadTurnProfiler.swift */; };
 		2F0C07000000000000000002 /* CmuxMainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0C07000000000000000001 /* CmuxMainWindow.swift */; };
 		D36090010000000000000005 /* CmuxMainWindowConstrainFrameTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36090010000000000000006 /* CmuxMainWindowConstrainFrameTests.swift */; };
+		D4A200000000000000000001 /* CmuxMainWindowContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A200000000000000000002 /* CmuxMainWindowContext.swift */; };
 		D36090020000000000000005 /* CmuxMainWindowFullScreenCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D36090020000000000000006 /* CmuxMainWindowFullScreenCapabilityTests.swift */; };
 		799F1BEF876006EEB8CD1035 /* CMUXMobileCore in Frameworks */ = {isa = PBXBuildFile; productRef = EFB18E3B3099DFE2ECA3C263 /* CMUXMobileCore */; };
 		EFB18E3C0000000000000001 /* CMUXMobileCore in Frameworks */ = {isa = PBXBuildFile; productRef = EFB18E3B3099DFE2ECA3C263 /* CMUXMobileCore */; };
@@ -3611,6 +3612,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		E7D100000000000000000006 /* CmuxMainThreadTurnProfiler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Debug/CmuxMainThreadTurnProfiler.swift"; sourceTree = "<group>"; };
 		2F0C07000000000000000001 /* CmuxMainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/CmuxMainWindow.swift; sourceTree = "<group>"; };
 		D36090010000000000000006 /* CmuxMainWindowConstrainFrameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxMainWindowConstrainFrameTests.swift; sourceTree = "<group>"; };
+		D4A200000000000000000002 /* CmuxMainWindowContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxMainWindowContext.swift; sourceTree = "<group>"; };
 		D36090020000000000000006 /* CmuxMainWindowFullScreenCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxMainWindowFullScreenCapabilityTests.swift; sourceTree = "<group>"; };
 		CA1F0A02CA1F0A02CA1F0A02 /* CmuxModalAlertPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxModalAlertPresentation.swift; sourceTree = "<group>"; };
 		C54860110000000000000002 /* CmuxNavigationResolution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxNavigationResolution.swift; sourceTree = "<group>"; };
@@ -6891,6 +6893,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				E7E300000000000000000002 /* SessionAutosaveCoordinator.swift */,
 				FEE012340000000000000002 /* FeedSidebarUITestCoordinator.swift */,
 			D4A100000000000000000002 /* MainWindowRegistry.swift */,
+			D4A200000000000000000002 /* CmuxMainWindowContext.swift */,
 			E7C100000000000000000002 /* TerminalCmdClickUITestCoordinator.swift */,
 			E7C100000000000000000004 /* TerminalCmdClickUITestConfiguration.swift */,
 			E7C100000000000000000006 /* TerminalCmdClickUITestManifestWriter.swift */,
@@ -9387,6 +9390,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 			E7D100000000000000000003 /* CmuxMainRunLoopStallMonitor.swift in Sources */,
 			E7D100000000000000000005 /* CmuxMainThreadTurnProfiler.swift in Sources */,
 				2F0C07000000000000000002 /* CmuxMainWindow.swift in Sources */,
+				D4A200000000000000000001 /* CmuxMainWindowContext.swift in Sources */,
 				CA1F0A01CA1F0A01CA1F0A01 /* CmuxModalAlertPresentation.swift in Sources */,
 				C54860110000000000000001 /* CmuxNavigationResolution.swift in Sources */,
 				C54860120000000000000001 /* CmuxNavigationSurfaceDescriptor.swift in Sources */,

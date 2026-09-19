@@ -3,7 +3,7 @@ import AppKit
 /// Owns the identity index that maps terminal windows to their main-window contexts.
 @MainActor
 final class MainWindowRegistry {
-    typealias Context = AppDelegate.MainWindowContext
+    typealias Context = CmuxMainWindowContext
 
     private(set) var contexts: [ObjectIdentifier: Context] = [:]
 
