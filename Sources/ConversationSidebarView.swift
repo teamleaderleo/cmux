@@ -256,12 +256,11 @@ struct ConversationSidebarView: View {
         .task(id: searchText) {
             await updateSearchResults(for: searchText)
         }
-        .modifier(
-            ConversationSidebarLiveRefreshModifier(
-                revision: $liveSessionRevision,
-                presentationAgentsByDirectory: $livePresentationAgentsByDirectory
-            )
-        )
+        .modifier(ConversationSidebarLiveRefreshModifier(
+            store: store,
+            revision: $liveSessionRevision,
+            presentationAgentsByDirectory: $livePresentationAgentsByDirectory
+        ))
         .onChange(of: searchText) { _, newValue in
             visibleHistoryCount = Self.pageSize
             searchResults = []

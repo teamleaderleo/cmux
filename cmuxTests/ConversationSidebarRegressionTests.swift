@@ -187,6 +187,29 @@ struct ConversationSidebarRegressionTests {
     }
 
     @Test
+    func endedSessionPublishesHistoryRefreshNotification() async {
+        let service = AgentChatTranscriptService(
+            registry: AgentChatSessionRegistry(),
+            hasEventSubscribers: { false },
+            emitEventPayload: { _ in }
+        )
+        let sessionID = "sidebar-ended-session"
+        service.noteHookEvent(WorkstreamEvent(
+            sessionId: sessionID, hookEventName: .sessionStart, source: "claude",
+            workspaceId: UUID().uuidString, surfaceId: UUID().uuidString,
+            cwd: "/Users/example/project", receivedAt: Date(timeIntervalSince1970: 10)
+        ))
+
+        await confirmation("ended session refreshes Vault history") { refreshed in
+            let observer = NotificationCenter.default.addObserver(
+                forName: .agentChatSessionHistoryDidChange, object: service, queue: nil
+            ) { _ in refreshed() }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            service.registry.update(sessionID: sessionID) { $0.state = .ended }
+        }
+    }
+
+    @Test
     func recordChangesPublishSidebarRefreshNotification() async {
         let service = AgentChatTranscriptService(
             registry: AgentChatSessionRegistry(),

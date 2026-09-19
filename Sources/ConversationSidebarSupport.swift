@@ -169,22 +169,32 @@ struct ConversationSidebarProjection {
 
 @MainActor
 struct ConversationSidebarLiveRefreshModifier: ViewModifier {
+    let store: SessionIndexStore
     @Binding var revision: UInt64
     @Binding var presentationAgentsByDirectory: [String: [String: SessionAgent]]
     @State private var loadedDirectoryKeys: Set<String> = []
     private let projection = ConversationSidebarProjection()
 
     func body(content: Content) -> some View {
-        content.task {
-            await refreshPresentationAgents()
-            for await _ in NotificationCenter.default.notifications(
-                named: .agentChatSessionRecordsDidChange
-            ) {
-                guard !Task.isCancelled else { return }
-                revision &+= 1
+        content
+            .task {
                 await refreshPresentationAgents()
+                for await _ in NotificationCenter.default.notifications(
+                    named: .agentChatSessionRecordsDidChange
+                ) {
+                    guard !Task.isCancelled else { return }
+                    revision &+= 1
+                    await refreshPresentationAgents()
+                }
             }
-        }
+            .task {
+                for await _ in NotificationCenter.default.notifications(
+                    named: .agentChatSessionHistoryDidChange
+                ) {
+                    guard !Task.isCancelled else { return }
+                    store.reload()
+                }
+            }
     }
 
     private func refreshPresentationAgents() async {

@@ -634,6 +634,7 @@ final class AgentChatTranscriptService {
         }
         let stateChanged = previous?.state != record.state
         let transcriptBecameAvailable = previous?.transcriptPath == nil && record.transcriptPath != nil
+        if record.state == .ended, stateChanged || transcriptBecameAvailable { NotificationCenter.default.post(name: .agentChatSessionHistoryDidChange, object: self) }
         if transcriptBecameAvailable {
             fallbackResolutionCoordinator.cancel(sessionID: record.sessionID)
             failedResolutions.remove(record.sessionID)
@@ -684,7 +685,6 @@ final class AgentChatTranscriptService {
         guard hasEventSubscribers() else { return }
         emit(frame: ChatSessionEventFrame(sessionID: record.sessionID, event: .sessionRemoved(version: record.version)))
     }
-
     private func emit(frame: ChatSessionEventFrame) {
         guard let payload = wirePayload(frame) else { return }
         emitEventPayload(payload)
