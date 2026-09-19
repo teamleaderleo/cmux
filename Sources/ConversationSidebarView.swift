@@ -129,8 +129,11 @@ struct ConversationSidebarView: View {
         let visibleHistoryRows = rows.filter { !$0.isOpen }
         let manager = tabManager
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canShowMoreHistory = projected.hasMoreLoadedHistory
-            || (trimmedSearch.isEmpty && canLoadMoreHistory)
+        let canShowMoreHistory = projection.canShowMoreHistory(
+            hasMoreLoadedHistory: projected.hasMoreLoadedHistory,
+            searchIsEmpty: trimmedSearch.isEmpty, canLoadMoreHistory: canLoadMoreHistory,
+            hasLoadedHistorySource: !store.entries.isEmpty || !expandedHistory.isEmpty
+        )
         let showsHistorySection = projection.shouldShowHistorySection(
             hasVisibleHistory: !visibleHistoryRows.isEmpty,
             canShowMoreHistory: canShowMoreHistory

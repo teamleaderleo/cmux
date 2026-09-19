@@ -161,6 +161,10 @@ struct ConversationSidebarRegressionTests {
 
         #expect(visible.entries.isEmpty)
         #expect(!visible.hasMore)
+        #expect(projection.canShowMoreHistory(
+            hasMoreLoadedHistory: false, searchIsEmpty: true,
+            canLoadMoreHistory: true, hasLoadedHistorySource: true
+        ))
         #expect(projection.shouldShowHistorySection(
             hasVisibleHistory: false,
             canShowMoreHistory: true
@@ -168,6 +172,17 @@ struct ConversationSidebarRegressionTests {
         #expect(!projection.shouldShowHistorySection(
             hasVisibleHistory: false,
             canShowMoreHistory: false
+        ))
+    }
+
+    @Test
+    func emptyVaultDoesNotOfferHistoryExpansion() {
+        #expect(!projection.canShowMoreHistory(
+            hasMoreLoadedHistory: false, searchIsEmpty: true,
+            canLoadMoreHistory: true, hasLoadedHistorySource: false
+        ))
+        #expect(!projection.shouldShowHistorySection(
+            hasVisibleHistory: false, canShowMoreHistory: false
         ))
     }
 

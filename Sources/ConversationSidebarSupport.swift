@@ -141,6 +141,16 @@ struct ConversationSidebarProjection {
         return (entries, false)
     }
 
+    func canShowMoreHistory(
+        hasMoreLoadedHistory: Bool,
+        searchIsEmpty: Bool,
+        canLoadMoreHistory: Bool,
+        hasLoadedHistorySource: Bool
+    ) -> Bool {
+        hasMoreLoadedHistory
+            || (searchIsEmpty && canLoadMoreHistory && hasLoadedHistorySource)
+    }
+
     func shouldShowHistorySection(hasVisibleHistory: Bool, canShowMoreHistory: Bool) -> Bool {
         hasVisibleHistory || canShowMoreHistory
     }
