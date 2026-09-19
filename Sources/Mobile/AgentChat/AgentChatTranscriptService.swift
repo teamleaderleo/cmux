@@ -3,6 +3,14 @@ import CmuxAgentChat
 import CmuxTerminal
 import Foundation
 
+extension Notification.Name {
+    /// Local app observers use this to refresh projections of the authoritative
+    /// agent-chat registry without coupling SwiftUI views to the registry owner.
+    static let agentChatSessionRecordsDidChange = Notification.Name(
+        "agentChatSessionRecordsDidChange"
+    )
+}
+
 /// Retains terminal render/tick notifications only while live prose streaming
 /// can consume them. Frame notifications cover visible surfaces; tick
 /// notifications cover hidden/background surfaces that receive PTY output
@@ -624,6 +632,8 @@ final class AgentChatTranscriptService {
     }
 
     private func handleRecordChange(_ record: AgentChatSessionRecord, previous: AgentChatSessionRecord?) {
+        NotificationCenter.default.post(name: .agentChatSessionRecordsDidChange, object: self)
+
         let endedRecordIsListable: Bool
         if record.state == .ended {
             endedRecordIsListable = record.agentKind == .codex
@@ -673,6 +683,8 @@ final class AgentChatTranscriptService {
     }
 
     private func handleRecordRemoval(_ record: AgentChatSessionRecord) {
+        NotificationCenter.default.post(name: .agentChatSessionRecordsDidChange, object: self)
+
         fallbackResolutionCoordinator.cancel(sessionID: record.sessionID)
         endProseTurn(sessionID: record.sessionID)
         latestTranscriptSeqBySessionID[record.sessionID] = nil
