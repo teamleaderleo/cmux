@@ -25,9 +25,11 @@ struct ConversationSidebarView: View {
     @State private var canLoadMoreHistory = true
     @State private var historyPerAgentLimit = SessionIndexStore.perAgentLimit
     @State private var visibleHistoryCount = 24
-    @StateObject private var liveState = ConversationSidebarLiveState()
+    @State private var liveSessionRevision: UInt64 = 0
+    @State private var livePresentationAgents: [SessionAgent] = []
 
     private static let pageSize = 24
+    private let projection = ConversationSidebarProjection()
 
     private enum Destination {
         case indexed(SessionEntry)
@@ -121,7 +123,7 @@ struct ConversationSidebarView: View {
     }
 
     var body: some View {
-        let rows = projectedRows(liveSessionRevision: liveState.revision)
+        let rows = projectedRows(liveSessionRevision: liveSessionRevision)
         let openRows = rows.filter(\.isOpen)
         let historyRows = rows.filter { !$0.isOpen }
         let visibleHistoryRows = Array(historyRows.prefix(visibleHistoryCount))
@@ -159,7 +161,7 @@ struct ConversationSidebarView: View {
                         if canShowMoreHistory {
                             Button {
                                 visibleHistoryCount += Self.pageSize
-                                if ConversationSidebarProjection.shouldFetchMoreHistory(
+                                if projection.shouldFetchMoreHistory(
                                     visibleHistoryCount: visibleHistoryCount,
                                     loadedHistoryCount: historyRows.count,
                                     searchIsEmpty: trimmedSearch.isEmpty,
@@ -252,6 +254,12 @@ struct ConversationSidebarView: View {
         .task(id: searchText) {
             await updateSearchResults(for: searchText)
         }
+        .modifier(
+            ConversationSidebarLiveRefreshModifier(
+                revision: $liveSessionRevision,
+                presentationAgents: $livePresentationAgents
+            )
+        )
         .onChange(of: searchText) { _, newValue in
             visibleHistoryCount = Self.pageSize
             searchResults = []
@@ -306,7 +314,7 @@ struct ConversationSidebarView: View {
         // restore snapshots/live-process observations provide a fallback for a
         // managed session that is active but has not reached that registry.
         let historySource = trimmedSearch.isEmpty
-            ? (expandedHistory.isEmpty ? store.entries : expandedHistory)
+            ? projection.recentHistory(initial: store.entries, expanded: expandedHistory)
             : searchResults
         var fallbackOpen: [Row] = []
         for entry in historySource {
@@ -341,7 +349,13 @@ struct ConversationSidebarView: View {
         let visibleOpen = (live + fallbackOpen)
             .filter { row in
                 trimmedSearch.isEmpty
-                    || metadataMatches(row, query: trimmedSearch)
+                    || projection.metadataMatches(
+                        title: row.title,
+                        agent: row.agent,
+                        id: row.id,
+                        directory: row.directory,
+                        query: trimmedSearch
+                    )
                     || matchedKeys.contains(row.id)
             }
             .sorted { lhs, rhs in
@@ -376,7 +390,7 @@ struct ConversationSidebarView: View {
             return []
         }
 
-        let configuredAgents = liveState.presentationAgents
+        let configuredAgents = livePresentationAgents
             + store.agentOrder
             + store.entries.map(\.agent)
             + expandedHistory.map(\.agent)
@@ -388,7 +402,7 @@ struct ConversationSidebarView: View {
             }
             guard let panelID = record.surfaceID.flatMap(UUID.init(uuidString:)),
                   let workspace = tabManager.tabs.first(where: { $0.panels[panelID] != nil }),
-                  let agent = ConversationSidebarProjection.presentationAgent(
+                  let agent = projection.presentationAgent(
                     for: record,
                     configuredAgents: configuredAgents
                   ) else {
@@ -401,7 +415,7 @@ struct ConversationSidebarView: View {
                 ?? agent.displayName
 
             return Row(
-                id: ConversationSidebarProjection.liveSessionKey(for: record),
+                id: projection.liveSessionKey(for: record),
                 title: title,
                 agent: agent,
                 directory: record.workingDirectory,
@@ -414,25 +428,13 @@ struct ConversationSidebarView: View {
         }
     }
 
-    private func metadataMatches(_ row: Row, query: String) -> Bool {
-        let terms = normalized(query).split(separator: " ").map(String.init)
-        guard !terms.isEmpty else { return true }
-        let haystack = normalized([
-            row.title,
-            row.agent.displayName,
-            row.id,
-            row.directory ?? ""
-        ].joined(separator: " "))
-        return terms.allSatisfy { haystack.contains($0) }
-    }
-
     private func loadMoreHistory() async {
         guard !isLoadingMoreHistory, canLoadMoreHistory else { return }
         isLoadingMoreHistory = true
         defer { isLoadingMoreHistory = false }
 
         let previousEntries = expandedHistory.isEmpty ? store.entries : expandedHistory
-        let nextLimit = ConversationSidebarProjection.nextHistoryPerAgentLimit(
+        let nextLimit = projection.nextHistoryPerAgentLimit(
             current: historyPerAgentLimit
         )
         let outcome = await store.loadRecentSessions(limitPerAgent: nextLimit)
@@ -488,10 +490,5 @@ struct ConversationSidebarView: View {
         return trimmed.isEmpty ? entry.agent.displayName : trimmed
     }
 
-    private func normalized(_ value: String) -> String {
-        value
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+
 }

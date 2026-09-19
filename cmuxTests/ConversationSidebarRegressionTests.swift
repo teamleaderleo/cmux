@@ -11,6 +11,8 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ConversationSidebarRegressionTests {
+    private let projection = ConversationSidebarProjection()
+
     @Test
     func pendingClaudeAliasDeduplicatesAgainstHistoryIdentity() {
         let surfaceID = UUID().uuidString
@@ -31,7 +33,7 @@ struct ConversationSidebarRegressionTests {
         record.rememberHookStoreSessionID(realSessionID)
 
         #expect(
-            ConversationSidebarProjection.liveSessionKey(for: record)
+            projection.liveSessionKey(for: record)
                 == VaultLiveSessionKeys.key(kind: "claude", sessionID: realSessionID)
         )
     }
@@ -57,7 +59,7 @@ struct ConversationSidebarRegressionTests {
         )
 
         let resolved = try #require(
-            ConversationSidebarProjection.presentationAgent(
+            projection.presentationAgent(
                 for: record,
                 configuredAgents: [.registered(registered)]
             )
@@ -68,9 +70,25 @@ struct ConversationSidebarRegressionTests {
     }
 
     @Test
+    func expandedHistoryKeepsNewerStoreEntries() {
+        let old = sessionEntry(id: "old", title: "old", modified: 10)
+        let refreshed = sessionEntry(id: "same", title: "new metadata", modified: 30)
+        let stale = sessionEntry(id: "same", title: "stale metadata", modified: 20)
+
+        let merged = projection.recentHistory(
+            initial: [refreshed],
+            expanded: [old, stale]
+        )
+        let byID = Dictionary(uniqueKeysWithValues: merged.map { ($0.id, $0) })
+
+        #expect(Set(byID.keys) == ["old", "same"])
+        #expect(byID["same"]?.title == "new metadata")
+    }
+
+    @Test
     func deeperHistoryFetchStartsAtLoadedBoundary() {
         #expect(
-            !ConversationSidebarProjection.shouldFetchMoreHistory(
+            !projection.shouldFetchMoreHistory(
                 visibleHistoryCount: 24,
                 loadedHistoryCount: SessionIndexStore.perAgentLimit,
                 searchIsEmpty: true,
@@ -78,7 +96,7 @@ struct ConversationSidebarRegressionTests {
             )
         )
         #expect(
-            ConversationSidebarProjection.shouldFetchMoreHistory(
+            projection.shouldFetchMoreHistory(
                 visibleHistoryCount: 48,
                 loadedHistoryCount: SessionIndexStore.perAgentLimit,
                 searchIsEmpty: true,
@@ -86,12 +104,12 @@ struct ConversationSidebarRegressionTests {
             )
         )
         #expect(
-            ConversationSidebarProjection.nextHistoryPerAgentLimit(
+            projection.nextHistoryPerAgentLimit(
                 current: SessionIndexStore.perAgentLimit
-            ) == SessionIndexStore.perAgentLimit + ConversationSidebarProjection.historyPagePerAgent
+            ) == SessionIndexStore.perAgentLimit + projection.historyPagePerAgent
         )
         #expect(
-            !ConversationSidebarProjection.shouldFetchMoreHistory(
+            !projection.shouldFetchMoreHistory(
                 visibleHistoryCount: 48,
                 loadedHistoryCount: SessionIndexStore.perAgentLimit,
                 searchIsEmpty: false,
@@ -134,4 +152,27 @@ struct ConversationSidebarRegressionTests {
             }
         }
     }
+    private func sessionEntry(
+        id: String,
+        title: String,
+        modified: TimeInterval
+    ) -> SessionEntry {
+        SessionEntry(
+            id: id,
+            agent: .claude,
+            sessionId: id,
+            title: title,
+            cwd: "/Users/example/project",
+            gitBranch: nil,
+            pullRequest: nil,
+            modified: Date(timeIntervalSince1970: modified),
+            fileURL: nil,
+            specifics: .claude(
+                model: nil,
+                permissionMode: nil,
+                configDirectoryForResume: nil
+            )
+        )
+    }
+
 }

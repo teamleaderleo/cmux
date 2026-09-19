@@ -1,17 +1,18 @@
-import Combine
 import Foundation
+import SwiftUI
 
-enum ConversationSidebarProjection {
-    static let historyPagePerAgent = 30
+@MainActor
+struct ConversationSidebarProjection {
+    let historyPagePerAgent = 30
 
-    static func liveSessionKey(for record: AgentChatSessionRecord) -> String {
+    func liveSessionKey(for record: AgentChatSessionRecord) -> String {
         VaultLiveSessionKeys.key(
             kind: record.agentKind.sourceName,
             sessionID: record.hookStoreLookupSessionID
         )
     }
 
-    static func presentationAgent(
+    func presentationAgent(
         for record: AgentChatSessionRecord,
         configuredAgents: [SessionAgent]
     ) -> SessionAgent? {
@@ -19,7 +20,37 @@ enum ConversationSidebarProjection {
             ?? SessionAgent(rawValue: record.agentKind.sourceName)
     }
 
-    static func shouldFetchMoreHistory(
+    func recentHistory(
+        initial: [SessionEntry],
+        expanded: [SessionEntry]
+    ) -> [SessionEntry] {
+        guard !expanded.isEmpty else { return initial }
+        var byID = Dictionary(uniqueKeysWithValues: expanded.map { ($0.id, $0) })
+        for entry in initial {
+            byID[entry.id] = entry
+        }
+        return Array(byID.values)
+    }
+
+    func metadataMatches(
+        title: String,
+        agent: SessionAgent,
+        id: String,
+        directory: String?,
+        query: String
+    ) -> Bool {
+        let terms = normalized(query).split(separator: " ").map(String.init)
+        guard !terms.isEmpty else { return true }
+        let haystack = normalized([
+            title,
+            agent.displayName,
+            id,
+            directory ?? ""
+        ].joined(separator: " "))
+        return terms.allSatisfy { haystack.contains($0) }
+    }
+
+    func shouldFetchMoreHistory(
         visibleHistoryCount: Int,
         loadedHistoryCount: Int,
         searchIsEmpty: Bool,
@@ -30,31 +61,37 @@ enum ConversationSidebarProjection {
             && visibleHistoryCount >= loadedHistoryCount
     }
 
-    static func nextHistoryPerAgentLimit(current: Int) -> Int {
+    func nextHistoryPerAgentLimit(current: Int) -> Int {
         min(current + historyPagePerAgent, SessionIndexStore.searchMaxFiles)
+    }
+
+    private func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 @MainActor
-final class ConversationSidebarLiveState: ObservableObject {
-    @Published private(set) var revision: UInt64 = 0
-    @Published private(set) var presentationAgents: [SessionAgent] = []
+struct ConversationSidebarLiveRefreshModifier: ViewModifier {
+    @Binding var revision: UInt64
+    @Binding var presentationAgents: [SessionAgent]
 
-    private var recordChanges: AnyCancellable?
-
-    init() {
-        recordChanges = NotificationCenter.default
-            .publisher(for: .agentChatSessionRecordsDidChange)
-            .sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.revision &+= 1
+    func body(content: Content) -> some View {
+        content
+            .task {
+                let loaded = await SessionIndexStore.defaultAgentOrder(workingDirectory: nil)
+                guard !Task.isCancelled else { return }
+                presentationAgents = loaded.agents
+            }
+            .task {
+                for await _ in NotificationCenter.default.notifications(
+                    named: .agentChatSessionRecordsDidChange
+                ) {
+                    guard !Task.isCancelled else { return }
+                    revision &+= 1
                 }
             }
-
-        Task { @MainActor [weak self] in
-            let loaded = await SessionIndexStore.defaultAgentOrder(workingDirectory: nil)
-            guard !Task.isCancelled else { return }
-            self?.presentationAgents = loaded.agents
-        }
     }
 }
