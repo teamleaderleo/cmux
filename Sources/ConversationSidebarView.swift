@@ -1,11 +1,14 @@
+import CmuxAgentChat
 import Foundation
 import SwiftUI
 
-/// First upstream-sized extraction of the conversation-sidebar experiment.
+/// Current-main extraction of the useful conversation-sidebar behavior from
+/// the older fork experiment.
 ///
-/// The view intentionally reuses the native Vault index instead of the old
-/// terminal-kit JSON reader. It owns only presentation/search state; live pane
-/// identity and open behavior remain with SessionEntryResumeCoordinator.
+/// Open rows come from cmux's authoritative live agent registry. History and
+/// transcript search come from the native Vault index. The two projections are
+/// joined by canonical agent/session identity so a live conversation never
+/// appears twice.
 @MainActor
 struct ConversationSidebarView: View {
     @ObservedObject var store: SessionIndexStore
@@ -19,12 +22,20 @@ struct ConversationSidebarView: View {
 
     private static let pageSize = 24
 
+    private enum Destination {
+        case indexed(SessionEntry)
+        case live(workspaceID: UUID, panelID: UUID)
+    }
+
     private struct Row: Identifiable {
-        let entry: SessionEntry
+        let id: String
+        let title: String
+        let agent: SessionAgent
+        let directory: String?
+        let modified: Date
         let isOpen: Bool
         let isFocused: Bool
-
-        var id: String { entry.id }
+        let destination: Destination
     }
 
     /// Value-only row presentation. The LazyVStack never receives the
@@ -37,25 +48,25 @@ struct ConversationSidebarView: View {
         var body: some View {
             Button(action: onActivate) {
                 HStack(alignment: .top, spacing: 9) {
-                    SessionIndexSectionIconImage(icon: .agent(row.entry.agent), size: 18)
+                    SessionIndexSectionIconImage(icon: .agent(row.agent), size: 18)
                         .frame(width: 20, height: 20)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.displayTitle(for: row.entry))
+                        Text(row.title)
                             .font(.system(size: 12.5, weight: row.isFocused ? .semibold : .regular))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
 
                         HStack(spacing: 5) {
-                            Text(row.entry.agent.displayName)
-                            if let directory = Self.directoryLabel(for: row.entry) {
+                            Text(row.agent.displayName)
+                            if let directory = Self.directoryLabel(row.directory) {
                                 Text("·")
                                 Text(directory)
                                     .truncationMode(.head)
                             }
                             Spacer(minLength: 4)
-                            Text(row.entry.modified, style: .relative)
+                            Text(row.modified, style: .relative)
                         }
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
@@ -67,9 +78,11 @@ struct ConversationSidebarView: View {
                             .fill(row.isFocused ? Color.accentColor : Color.secondary.opacity(0.6))
                             .frame(width: 6, height: 6)
                             .padding(.top, 6)
-                            .accessibilityLabel(row.isFocused
-                                ? String(localized: "sessionIndex.status.activeIndicator", defaultValue: "Active")
-                                : String(localized: "sessionIndex.row.open", defaultValue: "Open"))
+                            .accessibilityLabel(
+                                row.isFocused
+                                    ? String(localized: "sessionIndex.status.activeIndicator", defaultValue: "Active")
+                                    : String(localized: "sessionIndex.row.open", defaultValue: "Open")
+                            )
                     }
                 }
                 .padding(.horizontal, 8)
@@ -82,19 +95,16 @@ struct ConversationSidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(row.isOpen
-                ? String(localized: "sessionIndex.row.focusSession", defaultValue: "Focus Session")
-                : String(localized: "sessionIndex.row.openSession", defaultValue: "Open Session"))
-            .accessibilityLabel(Self.displayTitle(for: row.entry))
+            .help(
+                row.isOpen
+                    ? String(localized: "sessionIndex.row.focusSession", defaultValue: "Focus Session")
+                    : String(localized: "sessionIndex.row.openSession", defaultValue: "Open Session")
+            )
+            .accessibilityLabel(row.title)
         }
 
-        private static func displayTitle(for entry: SessionEntry) -> String {
-            let trimmed = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? entry.agent.displayName : trimmed
-        }
-
-        private static func directoryLabel(for entry: SessionEntry) -> String? {
-            guard let cwd = entry.cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
+        private static func directoryLabel(_ cwd: String?) -> String? {
+            guard let cwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !cwd.isEmpty else {
                 return nil
             }
@@ -117,19 +127,23 @@ struct ConversationSidebarView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if !openRows.isEmpty {
-                        sectionLabel("Open")
+                        sectionLabel(
+                            String(localized: "sessionIndex.row.open", defaultValue: "Open")
+                        )
                         ForEach(openRows) { row in
                             RowView(row: row) {
-                                Self.activate(row.entry, tabManager: manager)
+                                Self.activate(row, tabManager: manager)
                             }
                         }
                     }
 
                     if !visibleHistoryRows.isEmpty {
-                        sectionLabel(String(localized: "menu.history.title", defaultValue: "History"))
+                        sectionLabel(
+                            String(localized: "menu.history.title", defaultValue: "History")
+                        )
                         ForEach(visibleHistoryRows) { row in
                             RowView(row: row) {
-                                Self.activate(row.entry, tabManager: manager)
+                                Self.activate(row, tabManager: manager)
                             }
                         }
 
@@ -137,12 +151,17 @@ struct ConversationSidebarView: View {
                             Button {
                                 visibleHistoryCount += Self.pageSize
                             } label: {
-                                Text(String(localized: "sessionIndex.section.showMore", defaultValue: "Show more"))
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 8)
+                                Text(
+                                    String(
+                                        localized: "sessionIndex.section.showMore",
+                                        defaultValue: "Show more"
+                                    )
+                                )
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
                             }
                             .buttonStyle(.plain)
                         }
@@ -160,22 +179,26 @@ struct ConversationSidebarView: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(isSearchInFlight
-                                ? String(localized: "sessionIndex.search.searching", defaultValue: "Searching…")
-                                : String(localized: "sessionIndex.popover.loading", defaultValue: "Loading…"))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
+                            Text(
+                                isSearchInFlight
+                                    ? String(localized: "sessionIndex.search.searching", defaultValue: "Searching…")
+                                    : String(localized: "sessionIndex.popover.loading", defaultValue: "Loading…")
+                            )
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 10)
                     } else if rows.isEmpty {
-                        Text(trimmedSearch.isEmpty
-                            ? String(localized: "sessionIndex.empty.title", defaultValue: "Vault is empty")
-                            : String(localized: "sessionIndex.search.noResults", defaultValue: "No matching sessions"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 10)
+                        Text(
+                            trimmedSearch.isEmpty
+                                ? String(localized: "sessionIndex.empty.title", defaultValue: "Vault is empty")
+                                : String(localized: "sessionIndex.search.noResults", defaultValue: "No matching sessions")
+                        )
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 10)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -183,14 +206,22 @@ struct ConversationSidebarView: View {
             }
             .scrollIndicators(.never)
         }
-        .task {
-            store.reload()
+        .onAppear {
+            // Share the same process-wide SessionIndexStore as Vault. Do not
+            // restart an in-flight/full scan just because the user switches
+            // back to the Conversations provider.
+            if store.entries.isEmpty && !store.isLoading {
+                store.reload()
+            }
         }
         .task(id: searchText) {
             await updateSearchResults(for: searchText)
         }
-        .onChange(of: searchText) { _, _ in
+        .onChange(of: searchText) { _, newValue in
             visibleHistoryCount = Self.pageSize
+            searchResults = []
+            searchErrors = []
+            isSearchInFlight = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -199,9 +230,15 @@ struct ConversationSidebarView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField(String(localized: "sessionIndex.allSessions.searchPlaceholder", defaultValue: "Search sessions…"), text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
+            TextField(
+                String(
+                    localized: "sessionIndex.allSessions.searchPlaceholder",
+                    defaultValue: "Search sessions…"
+                ),
+                text: $searchText
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 12))
         }
         .padding(.horizontal, 9)
         .frame(height: 32)
@@ -224,29 +261,125 @@ struct ConversationSidebarView: View {
     }
 
     private func projectedRows() -> [Row] {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let entries = trimmed.isEmpty ? store.entries : searchResults
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matchedKeys = Set(searchResults.map(VaultLiveSessionKeys.key(for:)))
+        let live = authoritativeLiveRows()
+        var openIDs = Set(live.map(\.id))
 
-        return entries
+        // The live chat registry is authoritative for new sessions. Retained
+        // restore snapshots/live-process observations provide a fallback for a
+        // managed session that is active but has not reached that registry.
+        let historySource = trimmedSearch.isEmpty ? store.entries : searchResults
+        var fallbackOpen: [Row] = []
+        for entry in historySource {
+            let key = VaultLiveSessionKeys.key(for: entry)
+            guard !openIDs.contains(key), store.liveSessionKeys.contains(key),
+                  let target = SessionEntryResumeCoordinator.activeTarget(
+                    for: entry,
+                    tabManager: tabManager
+                  ) else {
+                continue
+            }
+            let workspace = tabManager.tabs.first { $0.id == target.workspaceID }
+            fallbackOpen.append(
+                Row(
+                    id: key,
+                    title: displayTitle(for: entry),
+                    agent: entry.agent,
+                    directory: entry.cwd,
+                    modified: entry.modified,
+                    isOpen: true,
+                    isFocused: tabManager.selectedTabId == target.workspaceID
+                        && workspace?.focusedPanelId == target.surfaceID,
+                    destination: .live(
+                        workspaceID: target.workspaceID,
+                        panelID: target.surfaceID
+                    )
+                )
+            )
+            openIDs.insert(key)
+        }
+
+        let visibleOpen = (live + fallbackOpen)
+            .filter { row in
+                trimmedSearch.isEmpty
+                    || metadataMatches(row, query: trimmedSearch)
+                    || matchedKeys.contains(row.id)
+            }
+            .sorted { lhs, rhs in
+                if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
+                return lhs.id < rhs.id
+            }
+
+        let history = historySource
+            .filter { !openIDs.contains(VaultLiveSessionKeys.key(for: $0)) }
             .sorted { lhs, rhs in
                 if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
                 return lhs.id < rhs.id
             }
             .map { entry in
-                let key = VaultLiveSessionKeys.key(for: entry)
-                let target = store.liveSessionKeys.contains(key)
-                    ? SessionEntryResumeCoordinator.activeTarget(for: entry, tabManager: tabManager)
-                    : nil
-                let focused: Bool = {
-                    guard let target,
-                          tabManager.selectedTabId == target.workspaceID,
-                          let workspace = tabManager.tabs.first(where: { $0.id == target.workspaceID }) else {
-                        return false
-                    }
-                    return workspace.focusedPanelId == target.surfaceID
-                }()
-                return Row(entry: entry, isOpen: target != nil, isFocused: focused)
+                Row(
+                    id: VaultLiveSessionKeys.key(for: entry),
+                    title: displayTitle(for: entry),
+                    agent: entry.agent,
+                    directory: entry.cwd,
+                    modified: entry.modified,
+                    isOpen: false,
+                    isFocused: false,
+                    destination: .indexed(entry)
+                )
             }
+
+        return visibleOpen + history
+    }
+
+    private func authoritativeLiveRows() -> [Row] {
+        guard let service = TerminalController.shared.agentChatTranscriptService else {
+            return []
+        }
+
+        return service.sessionRecords(workspaceID: nil).compactMap { record in
+            if case .ended = record.state {
+                return nil
+            }
+            guard let panelID = record.surfaceID.flatMap(UUID.init(uuidString:)),
+                  let workspace = tabManager.tabs.first(where: { $0.panels[panelID] != nil }),
+                  let agent = SessionAgent(rawValue: record.agentKind.sourceName) else {
+                return nil
+            }
+
+            let title = record.title?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+                ?? agent.displayName
+
+            return Row(
+                id: VaultLiveSessionKeys.key(
+                    kind: record.agentKind.sourceName,
+                    sessionID: record.sessionID
+                ),
+                title: title,
+                agent: agent,
+                directory: record.workingDirectory,
+                modified: record.lastActivityAt,
+                isOpen: true,
+                isFocused: tabManager.selectedTabId == workspace.id
+                    && workspace.focusedPanelId == panelID,
+                destination: .live(workspaceID: workspace.id, panelID: panelID)
+            )
+        }
+    }
+
+    private func metadataMatches(_ row: Row, query: String) -> Bool {
+        let terms = normalized(query).split(separator: " ").map(String.init)
+        guard !terms.isEmpty else { return true }
+        let haystack = normalized([
+            row.title,
+            row.agent.displayName,
+            row.id,
+            row.directory ?? ""
+        ].joined(separator: " "))
+        return terms.allSatisfy { haystack.contains($0) }
     }
 
     private func updateSearchResults(for rawQuery: String) async {
@@ -273,10 +406,27 @@ struct ConversationSidebarView: View {
         isSearchInFlight = false
     }
 
-    private static func activate(_ entry: SessionEntry, tabManager: TabManager) {
-        if SessionEntryResumeCoordinator.focusIfActive(entry, tabManager: tabManager) {
-            return
+    private static func activate(_ row: Row, tabManager: TabManager) {
+        switch row.destination {
+        case .live(let workspaceID, let panelID):
+            tabManager.focusTab(workspaceID, surfaceId: panelID)
+        case .indexed(let entry):
+            if SessionEntryResumeCoordinator.focusIfActive(entry, tabManager: tabManager) {
+                return
+            }
+            SessionEntryResumeCoordinator.open(entry, tabManager: tabManager)
         }
-        SessionEntryResumeCoordinator.open(entry, tabManager: tabManager)
+    }
+
+    private func displayTitle(for entry: SessionEntry) -> String {
+        let trimmed = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? entry.agent.displayName : trimmed
+    }
+
+    private func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
