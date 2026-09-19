@@ -49,6 +49,26 @@ backend. This changes runtime endpoint configuration, not the Xcode build graph.
 
 For a controlled multi-arm run, dispatch `.github/workflows/build-performance.yml` on a macOS runner. It runs baseline, the exact #56/#60/#61 commits, and a composed cherry-pick with the same workflow and receipt format. The workflow is manual-only so ordinary pull requests do not consume five macOS build slots.
 
+After this workflow is available on the fork's default branch, the complete
+run can be started and collected with GitHub CLI:
+
+```bash
+gh workflow run build-performance.yml \
+  --repo teamleaderleo/cmux \
+  --ref main \
+  -f runner=macos-14 \
+  -f iterations=5
+run_id="$(gh run list --repo teamleaderleo/cmux \
+  --workflow build-performance.yml --branch main --limit 1 \
+  --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run_id" --repo teamleaderleo/cmux --exit-status
+gh run download "$run_id" --repo teamleaderleo/cmux --dir /tmp/cmux-build-performance
+```
+
+Keep the downloaded `perf-results/*` receipts with the report. If a runner
+label or checkout ref must change, record that input alongside the receipts so
+results remain comparable.
+
 The workflow pins Ghostty to the same revision and verified GhosttyKit checksum
 manifest for every arm. This keeps an older candidate ref from failing merely
 because its historical submodule revision predates the current prebuilt cache.
