@@ -1331,6 +1331,7 @@ C0DE71B10000000000000001 /* AppDelegate+AgentChatNotifications.swift in Sources 
 		2F0C05000000000000000002 /* MainWindowFocusController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0C05000000000000000001 /* MainWindowFocusController.swift */; };
 		6512F0C06512F0C06512F002 /* MainWindowFocusRestoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6512F0C06512F0C06512F001 /* MainWindowFocusRestoreTests.swift */; };
 		B37A00000000000000000005 /* MainWindowFocusTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B37A00000000000000000006 /* MainWindowFocusTypes.swift */; };
+		D4A100000000000000000001 /* MainWindowRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4A100000000000000000002 /* MainWindowRegistry.swift */; };
 		40ED33F6C1CEB26EAE7C9476 /* MainWindowSelfSizingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 570ED364A7E41085FB2D31FE /* MainWindowSelfSizingTests.swift */; };
 		A6D1F0300000000000000002 /* MainWindowVisibilityController+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6D1F0300000000000000001 /* MainWindowVisibilityController+Lifecycle.swift */; };
 		2F0C06000000000000000002 /* MainWindowVisibilityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0C06000000000000000001 /* MainWindowVisibilityController.swift */; };
@@ -4118,6 +4119,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 		2F0C05000000000000000001 /* MainWindowFocusController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowFocusController.swift; sourceTree = "<group>"; };
 		6512F0C06512F0C06512F001 /* MainWindowFocusRestoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowFocusRestoreTests.swift; sourceTree = "<group>"; };
 		B37A00000000000000000006 /* MainWindowFocusTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowFocusTypes.swift; sourceTree = "<group>"; };
+		D4A100000000000000000002 /* MainWindowRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowRegistry.swift; sourceTree = "<group>"; };
 		570ED364A7E41085FB2D31FE /* MainWindowSelfSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowSelfSizingTests.swift; sourceTree = "<group>"; };
 		A6D1F0300000000000000001 /* MainWindowVisibilityController+Lifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/MainWindowVisibilityController+Lifecycle.swift"; sourceTree = "<group>"; };
 		2F0C06000000000000000001 /* MainWindowVisibilityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/MainWindowVisibilityController.swift; sourceTree = "<group>"; };
@@ -6888,6 +6890,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				D9E700000000000000000002 /* SessionSnapshotPersistenceWriter.swift */,
 				E7E300000000000000000002 /* SessionAutosaveCoordinator.swift */,
 				FEE012340000000000000002 /* FeedSidebarUITestCoordinator.swift */,
+			D4A100000000000000000002 /* MainWindowRegistry.swift */,
 			E7C100000000000000000002 /* TerminalCmdClickUITestCoordinator.swift */,
 			E7C100000000000000000004 /* TerminalCmdClickUITestConfiguration.swift */,
 			E7C100000000000000000006 /* TerminalCmdClickUITestManifestWriter.swift */,
@@ -9722,6 +9725,7 @@ C0DE71B10000000000000002 /* AppDelegate+AgentChatNotifications.swift */ = {isa =
 				895500000000000000000003 /* MainWindowController.swift in Sources */,
 				2F0C05000000000000000002 /* MainWindowFocusController.swift in Sources */,
 				B37A00000000000000000005 /* MainWindowFocusTypes.swift in Sources */,
+				D4A100000000000000000001 /* MainWindowRegistry.swift in Sources */,
 				A6D1F0300000000000000002 /* MainWindowVisibilityController+Lifecycle.swift in Sources */,
 				2F0C06000000000000000002 /* MainWindowVisibilityController.swift in Sources */,
 				730600020000000000000002 /* MainWindowVisibleFrameFitRescue.swift in Sources */,
