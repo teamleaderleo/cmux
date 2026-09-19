@@ -923,11 +923,12 @@ Options:
   -h, --help             Show this help.
 
 Compilation cache:
-  Builds share one Xcode compilation cache across tags, in
+  CMUX_COMPILATION_CACHE=1 shares one Xcode compilation cache across tags, in
   ~/Library/Caches/cmux/compilation-cache, so a build into an emptied
-  DerivedData replays earlier compiler output instead of recompiling.
-  CMUX_COMPILATION_CACHE=0 turns it off. CMUX_COMPILATION_CACHE_DIR and
-  CMUX_COMPILATION_CACHE_LIMIT_BYTES change the location and the size limit.
+  DerivedData replays earlier compiler output (about 90-140 s instead of
+  400-490 s). Off by default: with caching on, a one-file edit recompiles the
+  whole module (250-320 s instead of about 50 s). CMUX_COMPILATION_CACHE_DIR
+  and CMUX_COMPILATION_CACHE_LIMIT_BYTES change the location and size limit.
 EOF
 }
 
