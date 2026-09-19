@@ -19,7 +19,15 @@ final class MainWindowRegistry {
 
     /// Inserts `context` under the window's identity key.
     func insert(_ context: Context, for window: NSWindow) {
-        contexts[ObjectIdentifier(window)] = context
+        insert(context, for: ObjectIdentifier(window))
+    }
+
+    /// Inserts `context` under an already-resolved identity key.
+    ///
+    /// The key overload keeps test-only windowless contexts on the same mutation
+    /// path without exposing the registry's backing dictionary to callers.
+    func insert(_ context: Context, for key: ObjectIdentifier) {
+        contexts[key] = context
     }
 
     /// Removes every key currently referring to `context`.

@@ -64,7 +64,7 @@ extension AppDelegate {
         fileExplorerState: FileExplorerState? = nil
     ) -> UUID {
         tabManager.windowId = windowId
-        mainWindowContexts[ObjectIdentifier(tabManager)] = MainWindowContext(
+        let context = MainWindowContext(
             windowId: windowId,
             tabManager: tabManager,
             sidebarState: SidebarState(),
@@ -75,6 +75,7 @@ extension AppDelegate {
             workspaceTerminalFontSizeArbiter:
                 workspaceTerminalFontSizeArbiter
         )
+        insertMainWindowContextForTesting(context, key: ObjectIdentifier(tabManager))
         // Context-based tests exercise observer pipelines without a live phone
         // subscriber; force presence on so the graph attaches (pre-gate
         // behavior). This is deliberately sticky across tests: any test that
