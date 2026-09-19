@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import pathlib
+import selectors
 import signal
 import subprocess
 import time
@@ -50,6 +51,7 @@ def main() -> int:
     for index in range(args.iterations):
         started = time.monotonic()
         timed_out = False
+        completion_marker = ""
         process = subprocess.Popen(
             command,
             text=True,
@@ -57,21 +59,71 @@ def main() -> int:
             stderr=subprocess.PIPE,
             env=environment,
             start_new_session=True,
+            bufsize=1,
         )
-        try:
-            stdout, stderr = process.communicate(timeout=args.timeout)
-            output = stdout + stderr
-            exit_code = process.returncode
-        except subprocess.TimeoutExpired as timeout:
-            timed_out = True
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
+        # reload.sh can finish the build and print its completion summary while
+        # a descendant keeps the inherited stdout/stderr pipes open. Waiting on
+        # communicate() in that case turns a successful build into a timeout.
+        # The summary is emitted only after the build and post-build cleanup are
+        # complete, so terminate the isolated process group at that marker and
+        # measure the build instead of waiting for unrelated descendants.
+        output_parts: list[str] = []
+        selector = selectors.DefaultSelector()
+        assert process.stdout is not None
+        assert process.stderr is not None
+        selector.register(process.stdout, selectors.EVENT_READ)
+        selector.register(process.stderr, selectors.EVENT_READ)
+        deadline = started + args.timeout
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            events = selector.select(remaining)
+            if not events:
+                timed_out = True
+                break
+            for key, _ in events:
+                line = key.fileobj.readline()
+                if line == "":
+                    selector.unregister(key.fileobj)
+                    continue
+                output_parts.append(line)
+                if "Build complete." in line:
+                    completion_marker = "build_complete"
+                elif "==> reload succeeded" in line and not completion_marker:
+                    completion_marker = "reload_succeeded"
+            if completion_marker:
+                break
+
+        selector.close()
+        if timed_out or completion_marker:
+            if process.poll() is None:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = process.communicate()
+            output_parts.extend((stdout or "", stderr or ""))
+        else:
             stdout, stderr = process.communicate()
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode(errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode(errors="replace")
-            output = stdout + stderr
-            exit_code = None
+            output_parts.extend((stdout or "", stderr or ""))
+
+        output = "".join(output_parts)
+        exit_code = process.returncode
+        if completion_marker and not timed_out:
+            # The process group is deliberately terminated after the build
+            # summary. Preserve a successful benchmark result even when a
+            # descendant kept the pipes open and forced that cleanup.
+            exit_code = 0
         elapsed = time.monotonic() - started
         combined = output.splitlines()
         samples.append(
@@ -80,6 +132,7 @@ def main() -> int:
                 "elapsed_seconds": round(elapsed, 3),
                 "exit_code": exit_code,
                 "timed_out": timed_out,
+                "completion_marker": completion_marker or None,
                 "tail": combined[-20:],
             }
         )
@@ -95,7 +148,9 @@ def main() -> int:
         "timeout_seconds": args.timeout,
         "samples": samples,
         "successful_samples": [
-            sample["elapsed_seconds"] for sample in samples if sample["exit_code"] == 0
+            sample["elapsed_seconds"]
+            for sample in samples
+            if sample["exit_code"] == 0 and not sample["timed_out"]
         ],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
