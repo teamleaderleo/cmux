@@ -27,6 +27,17 @@ struct ConversationSidebarProjection {
         return directory
     }
 
+    func livePresentationDirectoryKeys(
+        for records: [AgentChatSessionRecord]
+    ) -> Set<String> {
+        var keys: Set<String> = [""]
+        for record in records {
+            if case .ended = record.state { continue }
+            keys.insert(presentationDirectoryKey(record.workingDirectory))
+        }
+        return keys
+    }
+
     func presentationAgent(
         for record: AgentChatSessionRecord,
         configuredAgentsByDirectory: [String: [String: SessionAgent]],
@@ -169,10 +180,7 @@ struct ConversationSidebarLiveRefreshModifier: ViewModifier {
     private func refreshPresentationAgents() async {
         let records = TerminalController.shared.agentChatTranscriptService?
             .sessionRecords(workspaceID: nil) ?? []
-        var requiredDirectoryKeys = Set(
-            records.map { projection.presentationDirectoryKey($0.workingDirectory) }
-        )
-        requiredDirectoryKeys.insert("")
+        let requiredDirectoryKeys = projection.livePresentationDirectoryKeys(for: records)
         let missingDirectoryKeys = requiredDirectoryKeys.subtracting(loadedDirectoryKeys)
         guard !missingDirectoryKeys.isEmpty else { return }
 

@@ -72,6 +72,22 @@ struct ConversationSidebarRegressionTests {
     }
 
     @Test
+    func endedRecordsDoNotLoadPresentationConfigForOldDirectories() {
+        let live = AgentChatSessionRecord(
+            sessionID: "live", agentKind: .claude, workspaceID: nil, surfaceID: nil,
+            workingDirectory: "/repo/live", transcriptPath: nil, state: .idle,
+            lastActivityAt: Date.distantPast, title: nil, pid: nil
+        )
+        let ended = AgentChatSessionRecord(
+            sessionID: "ended", agentKind: .claude, workspaceID: nil, surfaceID: nil,
+            workingDirectory: "/repo/old", transcriptPath: nil, state: .ended,
+            lastActivityAt: Date.distantPast, title: nil, pid: nil
+        )
+
+        #expect(projection.livePresentationDirectoryKeys(for: [live, ended]) == ["", "/repo/live"])
+    }
+
+    @Test
     func projectLocalAgentPresentationWinsForItsLiveDirectory() throws {
         let global = RegisteredSessionAgent(id: "custom", name: "Global Custom")
         let local = RegisteredSessionAgent(
