@@ -41,7 +41,7 @@ python3 scripts/bench-reload-build.py \
 
 Run the same command at each arm and change only `--profile`, `--tag`, and the isolated DerivedData path. Keep the tag and DerivedData unique per concurrent run. A failed sample remains in the JSON receipt and makes the harness exit nonzero.
 
-The harness records every sample, including failed builds, in a JSON receipt. Use `--timeout` to bound a cold-cache or package-resolution stall; timed-out samples are failures and retain the captured output tail. A tagged reload can print `Build complete.` while a descendant still holds the inherited output pipe open; the harness treats that completion marker as success, terminates only its isolated process group, and records the build elapsed time instead of misclassifying it as a timeout.
+The harness records every sample, including failed builds, in a JSON receipt. Use `--timeout` to bound a cold-cache or package-resolution stall; timed-out samples are failures and retain the captured output tail. A tagged reload can print `Build complete.` while a descendant still holds the inherited output pipe open; the harness treats that completion marker as success, closes its own descriptors without waiting for unrelated descendants, and records the build elapsed time instead of misclassifying it as a timeout.
 
 The manual CI workflow passes `--prod-auth` so a hosted or leased runner can
 measure the build without starting the private GCP/Tailscale development

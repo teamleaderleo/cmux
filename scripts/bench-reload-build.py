@@ -105,17 +105,23 @@ def main() -> int:
                 except ProcessLookupError:
                     pass
             try:
-                stdout, stderr = process.communicate(timeout=5)
+                process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                stdout, stderr = process.communicate()
-            output_parts.extend((stdout or "", stderr or ""))
+                process.wait()
+            # A descendant can retain the pipe after the isolated reload
+            # process exits. Close our descriptors instead of waiting for EOF
+            # from an unrelated child; the selector already captured the
+            # output needed for this receipt.
+            process.stdout.close()
+            process.stderr.close()
         else:
-            stdout, stderr = process.communicate()
-            output_parts.extend((stdout or "", stderr or ""))
+            process.wait()
+            process.stdout.close()
+            process.stderr.close()
 
         output = "".join(output_parts)
         exit_code = process.returncode
