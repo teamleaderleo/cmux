@@ -629,12 +629,12 @@ final class SessionIndexStore: ObservableObject {
         return ordered
     }
 
-    private struct LoadedAgentOrder: Sendable {
+    struct LoadedAgentOrder: Sendable {
         let agents: [SessionAgent]
         let registry: CmuxVaultAgentRegistry
     }
 
-    nonisolated private static func defaultAgentOrder(workingDirectory: String?) async -> LoadedAgentOrder {
+    nonisolated static func defaultAgentOrder(workingDirectory: String?) async -> LoadedAgentOrder {
         await Task.detached(priority: .utility) {
             defaultAgentOrderSync(workingDirectory: workingDirectory)
         }.value
@@ -848,36 +848,6 @@ final class SessionIndexStore: ObservableObject {
             errorBag: bag
         )
         return combined.sorted { $0.modified > $1.modified }
-    }
-
-    /// Loads a larger bounded recent-session slice for callers that have
-    /// exhausted the initial Vault preview. This deliberately reuses the same
-    /// per-agent readers, registry, caps, and error policy as Vault instead of
-    /// introducing a second history index.
-    func loadRecentSessions(limitPerAgent: Int) async -> SearchOutcome {
-        let safeLimit = min(max(limitPerAgent, Self.perAgentLimit), Self.searchMaxFiles)
-        let bag = ErrorBag()
-        let order = await Self.defaultAgentOrder(workingDirectory: nil)
-        let combined = await Self.loadAgents(
-            order.agents,
-            registry: order.registry,
-            ampSessionRepository: ampSessionRepository,
-            needle: "",
-            cwdFilter: nil,
-            offset: 0,
-            limit: safeLimit,
-            errorBag: bag
-        )
-        guard !Task.isCancelled else {
-            return SearchOutcome(entries: [], errors: [])
-        }
-        return SearchOutcome(
-            entries: combined.sorted { lhs, rhs in
-                if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
-                return lhs.id < rhs.id
-            },
-            errors: bag.snapshot()
-        )
     }
 
     private struct ClaudeParsed {
@@ -1479,7 +1449,7 @@ final class SessionIndexStore: ObservableObject {
         }
     }
 
-    nonisolated private static func loadAgents(
+    nonisolated static func loadAgents(
         _ agents: [SessionAgent],
         registry: CmuxVaultAgentRegistry,
         ampSessionRepository: any AmpHookSessionReading,
