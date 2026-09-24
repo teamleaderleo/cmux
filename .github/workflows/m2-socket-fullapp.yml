@@ -1,0 +1,130 @@
+name: m2-socket-fullapp (throwaway, glaeda#1134)
+
+on:
+  push:
+    branches: [exp/m2-socket-fullapp]
+  workflow_dispatch:
+    inputs:
+      label:
+        description: runner label
+        default: xcode-27
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [macos-26, xcode-27]
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 10
+    steps:
+      - run: |
+          sw_vers; uname -m; sysctl -n hw.ncpu hw.memsize
+          ls -la /Applications | grep -i xcode || true
+          xcodebuild -version || true
+          df -h / "$HOME"
+
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        plan: [cold, socket, localcas]
+    runs-on: ${{ inputs.label || 'xcode-27' }}
+    timeout-minutes: 360
+    env:
+      W: /Users/runner/m2
+      OUT: /Users/runner/m2/out
+      CMUX_SKIP_ZIG_BUILD: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          ls -la /Applications | grep -i xcode || true
+          XC=""
+          for c in /Applications/Xcode_27*.app /Applications/Xcode.app; do
+            [ -d "$c" ] || continue
+            v=$(DEVELOPER_DIR="$c/Contents/Developer" xcodebuild -version | head -1 | awk '{print $2}')
+            case "$v" in 27*) XC="$c"; break ;; esac
+          done
+          if [ -z "$XC" ]; then echo "NO_XCODE_27 on this image"; exit 1; fi
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -version
+          ls -la "$XC/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libToolchainCASPlugin.dylib"
+          sw_vers; sysctl -n hw.ncpu hw.memsize; df -h /
+          echo "workspace real path: $(pwd -P) (logical $(pwd))"
+
+      - name: Fetch GhosttyKit
+        run: ./scripts/download-prebuilt-ghosttykit.sh
+
+      - name: Install Rust
+        run: ./scripts/install-rust-ci.sh
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: Build fleet-cas
+        if: matrix.plan == 'socket'
+        run: |
+          set -euo pipefail
+          git clone -q https://github.com/teamleaderleo/glaeda.git "$HOME/glaeda"
+          git -C "$HOME/glaeda" checkout -q 4c7247e1bcd842b5cbf68ec4d34de71669a316a4
+          cd "$HOME/glaeda/tools/fleet-cas-prototype"
+          cargo build --release
+          cp target/release/fleet-cas "$HOME/fleet-cas"
+
+      - name: Resolve packages
+        run: |
+          set -euo pipefail
+          mkdir -p "$W" "$OUT" "$W/store"
+          test "$(cd "$W" && pwd -P)" = "$W"
+          xcodebuild -resolvePackageDependencies -project cmux.xcodeproj -scheme cmux \
+            -clonedSourcePackagesDirPath "$W/spm" > "$OUT/resolve.txt" 2>&1 || { tail -40 "$OUT/resolve.txt"; exit 1; }
+
+      - name: Measure
+        run: |
+          set -u
+          export SRC="$PWD"
+          B=.github/workflows/m2-build.sh
+          printf 'label\tmode\tresult\twall_s\thits\tmisses\tstall\n' > "$OUT/summary.tsv"
+          case "${{ matrix.plan }}" in
+            cold)
+              bash $B cold off 150 ;;
+            socket)
+              "$HOME/fleet-cas" "$W/fcas.sock" "$W/store" > "$OUT/fleet-cas.log" 2>&1 &
+              FCAS=$!
+              sleep 2; ls -la "$W/fcas.sock"
+              bash $B fill socket 150
+              du -sh "$W/store" "$W/localcas-fill" 2>/dev/null | tee "$OUT/sizes.txt"
+              find "$W/store" -type f | wc -l | sed 's/^/store files: /' | tee -a "$OUT/sizes.txt"
+              # fresh machine: no DerivedData, no local CAS, only the socket
+              rm -rf "$W/dd-fill" "$W/localcas-fill"
+              bash $B fresh socket 90
+              rm -rf "$W/dd-fresh" "$W/localcas-fresh"
+              bash $B fresh2 socket 90
+              kill -INT $FCAS; sleep 2; tail -5 "$OUT/fleet-cas.log" ;;
+            localcas)
+              bash $B lc-fill localcas 150
+              du -sh "$W/sharedcas" | tee "$OUT/sizes.txt"
+              rm -rf "$W/dd-lc-fill"
+              bash $B lc-warm localcas 90 ;;
+          esac
+          echo; column -t -s $'\t' "$OUT/summary.tsv"
+          { echo '```'; column -t -s $'\t' "$OUT/summary.tsv"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: m2-${{ matrix.plan }}
+          path: /Users/runner/m2/out
+          if-no-files-found: warn
