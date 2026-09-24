@@ -29,6 +29,12 @@ public final class ClaudeDesktopLinkRouter {
     private let processLedger: ForeignWindowProcessLedger
     private let logger: ForeignWindowLogger
     private var claimed = false
+    /// Every Claude launch re-registers Claude as the `claude` handler, so a
+    /// claim made while a pane's Claude is starting is immediately undone.
+    /// While claimed, the router re-checks on this interval and takes the
+    /// handler back if a Claude launch (a pane's or the user's own) took it.
+    private var watchdog: Timer?
+    private static let watchdogInterval: TimeInterval = 3
 
     /// The result of one attempt to make the host app the `claude` handler.
     public struct ClaimResult: Sendable {
@@ -72,16 +78,13 @@ public final class ClaudeDesktopLinkRouter {
     /// Idempotent; called whenever cmux launches a Claude process for a pane.
     /// macOS may ask the user to confirm the change once.
     public func claimSchemeIfNeeded() {
-        guard !claimed else { return }
-        claimed = true
-        setHandler(handlerApplicationURL) { [weak self] error in
-            let errorDescription = error?.localizedDescription
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self?.verifyClaim(errorDescription: errorDescription)
-                }
-            }
+        if !claimed {
+            claimed = true
+            startWatchdog()
         }
+        // A pane's Claude just started; it re-registers itself as the handler
+        // during launch, so claim now and again once it has settled.
+        reassertClaim()
         guard terminationObserver == nil else { return }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
@@ -158,8 +161,39 @@ public final class ClaudeDesktopLinkRouter {
         return handlerURL.standardizedFileURL == handlerApplicationURL.standardizedFileURL
     }
 
+    private func startWatchdog() {
+        guard watchdog == nil else { return }
+        let timer = Timer(timeInterval: Self.watchdogInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.reassertClaim()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        watchdog = timer
+    }
+
+    private func stopWatchdog() {
+        watchdog?.invalidate()
+        watchdog = nil
+    }
+
+    /// Sets the host app as the handler when Launch Services names anyone
+    /// else. Cheap when already the handler: one lookup, no write.
+    private func reassertClaim() {
+        guard claimed, !currentHandlerIsCmux else { return }
+        setHandler(handlerApplicationURL) { [weak self] error in
+            let errorDescription = error?.localizedDescription
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.verifyClaim(errorDescription: errorDescription)
+                }
+            }
+        }
+    }
+
     private func restoreClaudeHandler(waitForCompletion: Bool) {
         claimed = false
+        stopWatchdog()
         guard let claudeURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: ClaudeDesktopProfileStore.bundleIdentifier
         ) else { return }
