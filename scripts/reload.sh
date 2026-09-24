@@ -7,6 +7,8 @@ RELOAD_ORIGINAL_ARGS=("$@")
 source "$SCRIPT_DIR/lib/mobile-attach.sh"
 # shellcheck source=scripts/lib/dev-secrets.sh
 source "$SCRIPT_DIR/lib/dev-secrets.sh"
+# shellcheck source=scripts/lib/dev-build-hygiene.sh
+source "$SCRIPT_DIR/lib/dev-build-hygiene.sh"
 
 APP_NAME="cmux DEV"
 BUNDLE_ID="com.cmuxterm.app.debug"
@@ -938,6 +940,12 @@ Options:
   --swift-disable-global-isel
                          Alias for --swift-frontend-workaround.
   -h, --help             Show this help.
+
+Environment:
+  CMUX_RELOAD_MIN_FREE_GB
+                         Free disk required before building (default: 15 for a
+                         cold tag, 4 for an incremental one; 0 disables). Run
+                         ./scripts/prune-dev-builds.sh to reclaim space.
 EOF
 }
 
@@ -1179,6 +1187,7 @@ print_tag_cleanup_reminder() {
       print_tag_cleanup_commands "$tag"
     done
   fi
+  echo "Or remove every orphaned/idle tag build at once: ./scripts/prune-dev-builds.sh --apply"
   echo "After you verify current tag, cleanup command:"
   print_tag_cleanup_commands "$current_slug" "$current_derived"
 }
@@ -1621,6 +1630,12 @@ if [[ "$SWIFT_OTHER_FLAGS" != '$(inherited)' ]]; then
   XCODEBUILD_ARGS+=("OTHER_SWIFT_FLAGS=$SWIFT_OTHER_FLAGS")
 fi
 XCODEBUILD_ARGS+=(build)
+
+if [[ -n "$DERIVED_DATA" ]]; then
+  # Check before anything is created, so a refused build leaves no directory.
+  cmux_dev_build_disk_guard "$DERIVED_DATA" || exit 1
+  cmux_dev_build_write_lease "$DERIVED_DATA" "${TAG_SLUG:-}" "$PWD"
+fi
 
 if [[ -n "$BUILD_PRODUCTS_DEBUG_DIR" ]]; then
   mkdir -p "$BUILD_PRODUCTS_DEBUG_DIR"
