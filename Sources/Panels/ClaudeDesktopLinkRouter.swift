@@ -46,10 +46,7 @@ final class ClaudeDesktopLinkRouter {
         claimed = true
         setHandler(Bundle.main.bundleURL) { error in
 #if DEBUG
-            cmuxDebugLog(
-                "claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none") "
-                    + "isCmux=\(ClaudeDesktopLinkRouter.shared.currentHandlerIsCmux)"
-            )
+            cmuxDebugLog("claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none")")
 #endif
         }
         guard terminationObserver == nil else { return }
