@@ -82,7 +82,7 @@ jobs:
           set -u
           export SRC="$PWD"
           B=.github/workflows/m2-build.sh
-          printf 'label\tmode\tresult\twall_s\thits\tmisses\tstall\n' > "$OUT/summary.tsv"
+          printf 'label\tmode\tresult\twall_s\thits\tmisses\tgaps20s\tidle\tstall10m\n' > "$OUT/summary.tsv"
           case "${{ matrix.plan }}" in
             cold)
               bash $B cold off 150 ;;
