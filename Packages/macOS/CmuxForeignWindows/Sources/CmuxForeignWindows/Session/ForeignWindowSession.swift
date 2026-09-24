@@ -367,21 +367,7 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
     }
 
     private func resolveApplicationURL() -> URL? {
-        let fileManager = FileManager.default
-        if let preferredApplicationURL = launchConfiguration.preferredApplicationURL,
-           fileManager.fileExists(atPath: preferredApplicationURL.path) {
-            return preferredApplicationURL
-        }
-
-        if let installedURL = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: launchConfiguration.bundleIdentifier
-        ) {
-            return installedURL
-        }
-
-        return launchConfiguration.fallbackApplicationURLs.first {
-            fileManager.fileExists(atPath: $0.path)
-        }
+        launchConfiguration.resolveApplicationURL()
     }
 
     private func prepareLaunchDirectories() -> Bool {

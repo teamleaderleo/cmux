@@ -97,3 +97,25 @@ checked by `ClaudeDesktopSignInLink` (only `claude://login/…` and
 only.
 Menu: Lab > Toggle Yield (Cmd-Y) exercises hide and restore; Lab > Focus Next
 Pane (Cmd-]) moves focus. Quitting terminates the Claude processes it started.
+
+## Claude Profiles menu-bar app
+
+`ClaudeProfiles` is a personal menu-bar launcher: one Claude Desktop instance
+per profile directory under `~/Library/Application Support/cmux/external-apps/claude`,
+the same layout the `claude-profile` CLI uses. It finds running instances by
+their `--user-data-dir` launch argument, so it tracks ones the CLI started
+too, and never starts a second process on one profile. While any profile
+instance runs it claims `claude://` through `ClaudeDesktopLinkRouter`, so
+Google sign-in callbacks reach the instance that started them; it hands the
+scheme back to Claude.app when none remain and on quit.
+
+```bash
+scripts/build-profiles-app.sh             # .build/Claude Profiles.app
+scripts/build-profiles-app.sh --install   # also replaces ~/Applications/Claude Profiles.app
+open ~/Applications/"Claude Profiles.app"
+```
+
+"Open on Login" profiles live in
+`~/Library/Application Support/cmux/external-apps/claude-profiles.json`
+(`{"autoOpen": ["work", "personal"]}`) and open when the app starts. Logs go to
+the unified log under subsystem `com.cmuxterm.claudeprofiles`.

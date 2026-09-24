@@ -20,4 +20,17 @@ struct ForeignWindowProcessLedgerTests {
         #expect(reports == [[10], [11], []])
         #expect(ledger.ownedProcessIdentifiers.isEmpty)
     }
+
+    @Test
+    func testReconcileReportsOnlyChanges() {
+        let ledger = ForeignWindowProcessLedger()
+        var reports: [Set<pid_t>] = []
+        ledger.onChange = { reports.append($0) }
+
+        ledger.reconcile([10, 11])
+        ledger.reconcile([11, 10])
+        ledger.reconcile([])
+
+        #expect(reports == [[10, 11], []])
+    }
 }

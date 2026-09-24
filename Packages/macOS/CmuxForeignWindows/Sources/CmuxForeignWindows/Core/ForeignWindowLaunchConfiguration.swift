@@ -1,3 +1,4 @@
+import AppKit
 public import Foundation
 
 /// How a ``ForeignWindowSession`` finds and launches its external application.
@@ -42,5 +43,28 @@ public struct ForeignWindowLaunchConfiguration: Equatable, Sendable {
         self.arguments = arguments
         self.environment = environment
         self.directoriesToCreate = directoriesToCreate
+    }
+
+    /// The application bundle to launch, in resolution order:
+    /// ``preferredApplicationURL`` when it exists, then the installed app for
+    /// ``bundleIdentifier``, then the first existing
+    /// ``fallbackApplicationURLs`` entry.
+    ///
+    /// - Parameter fileManager: File manager used to check candidate paths.
+    /// - Returns: The bundle URL, or `nil` when the application is not found.
+    @MainActor
+    public func resolveApplicationURL(fileManager: FileManager = .default) -> URL? {
+        if let preferredApplicationURL,
+           fileManager.fileExists(atPath: preferredApplicationURL.path) {
+            return preferredApplicationURL
+        }
+        if let installedURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleIdentifier
+        ) {
+            return installedURL
+        }
+        return fallbackApplicationURLs.first {
+            fileManager.fileExists(atPath: $0.path)
+        }
     }
 }

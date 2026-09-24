@@ -15,6 +15,7 @@ let package = Package(
     products: [
         .library(name: "CmuxForeignWindows", targets: ["CmuxForeignWindows"]),
         .executable(name: "ForeignWindowLab", targets: ["ForeignWindowLab"]),
+        .executable(name: "ClaudeProfiles", targets: ["ClaudeProfiles"]),
     ],
     targets: [
         .target(
@@ -26,6 +27,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "ForeignWindowLab",
+            dependencies: ["CmuxForeignWindows"],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "ClaudeProfiles",
             dependencies: ["CmuxForeignWindows"],
             swiftSettings: swiftSettings
         ),

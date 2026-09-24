@@ -3,7 +3,9 @@ public import Darwin
 /// Process identifiers of the external applications this host launched.
 ///
 /// Every ``ForeignWindowSession`` built with a ledger records its process here
-/// while it runs. Consumers such as ``ClaudeDesktopLinkRouter`` use it to tell
+/// while it runs. A host that does not launch through sessions, such as a
+/// launcher that tracks instances started elsewhere, reports its set with
+/// ``reconcile(_:)``. Consumers such as ``ClaudeDesktopLinkRouter`` use it to tell
 /// pane-owned instances from the user's own.
 @MainActor
 public final class ForeignWindowProcessLedger {
@@ -27,5 +29,14 @@ public final class ForeignWindowProcessLedger {
         guard next != ownedProcessIdentifiers else { return }
         ownedProcessIdentifiers = next
         onChange?(next)
+    }
+
+    /// Replaces the whole owned set, reporting once if it changed.
+    ///
+    /// - Parameter processIdentifiers: Every process the host now owns.
+    public func reconcile(_ processIdentifiers: Set<pid_t>) {
+        guard processIdentifiers != ownedProcessIdentifiers else { return }
+        ownedProcessIdentifiers = processIdentifiers
+        onChange?(processIdentifiers)
     }
 }
