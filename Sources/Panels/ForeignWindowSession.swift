@@ -62,6 +62,8 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
             if let runningApplication {
                 Self.ownedProcessIdentifiers.insert(runningApplication.processIdentifier)
                 ClaudeDesktopLinkRouter.shared.claimSchemeIfNeeded()
+            } else {
+                ClaudeDesktopLinkRouter.shared.releaseSchemeIfUnused()
             }
         }
     }
@@ -70,8 +72,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private var observedWindow: AXUIElement?
     private var accessibilityObserver: AXObserver?
     private var observerRefcon: Unmanaged<ForeignWindowSession>?
-    private var accessibilityPromptRequested = false
-    private var isAccessibilityTrusted = false
+    private var accessibilityObserverToken: NSObjectProtocol?
 
     private var targetFrame: CGRect?
     private var shouldBeVisible = false
@@ -94,6 +95,20 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     ) {
         self.identifier = identifier
         self.launchConfiguration = launchConfiguration
+        ForeignWindowAccessibility.shared.beginInterest()
+        accessibilityObserverToken = NotificationCenter.default.addObserver(
+            forName: ForeignWindowAccessibility.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // A fresh grant: bind the window and place it over the pane.
+                self.lastAppliedFrame = nil
+                self.pendingRaise = true
+                self.scheduleApply()
+            }
+        }
         yieldObserver = NotificationCenter.default.addObserver(
             forName: ForeignWindowYieldCoordinator.didChangeNotification,
             object: nil,
@@ -147,6 +162,11 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
             NotificationCenter.default.removeObserver(yieldObserver)
         }
         yieldObserver = nil
+        if let accessibilityObserverToken {
+            NotificationCenter.default.removeObserver(accessibilityObserverToken)
+            ForeignWindowAccessibility.shared.endInterest()
+        }
+        accessibilityObserverToken = nil
         removeAccessibilityObserver()
         externalWindow = nil
         applicationElement = nil
@@ -349,14 +369,11 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private func ensureAccessibilityBinding() {
         guard let runningApplication, !runningApplication.isTerminated else { return }
 
-        if !isAccessibilityTrusted {
-            let shouldPrompt = !accessibilityPromptRequested
-            let options = [
-                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: shouldPrompt
-            ] as CFDictionary
-            accessibilityPromptRequested = true
-            isAccessibilityTrusted = AXIsProcessTrustedWithOptions(options)
-            guard isAccessibilityTrusted else { return }
+        guard ForeignWindowAccessibility.shared.isTrusted else {
+            // Shows the system prompt once per launch; later requests come
+            // from the pane's "Open Accessibility Settings" button.
+            ForeignWindowAccessibility.shared.requestAccess()
+            return
         }
 
         if applicationElement == nil {
@@ -518,6 +535,13 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
 
     private func applyPresentation() {
         guard let runningApplication, !runningApplication.isTerminated else { return }
+
+        // Without Accessibility the window cannot be placed over the pane, so
+        // keep the app hidden instead of letting it float over cmux.
+        guard ForeignWindowAccessibility.shared.isTrusted else {
+            hideApplication(runningApplication)
+            return
+        }
 
         guard shouldBeVisible, !isYielding else {
             if shouldBeVisible {

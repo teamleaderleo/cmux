@@ -35,31 +35,40 @@ final class ClaudeDesktopLinkRouter {
     /// claimed it and quit (or crashed) before restoring it.
     func restoreIfOrphaned() {
         guard !claimed, currentHandlerIsCmux else { return }
-        restoreClaudeHandler()
+        restoreClaudeHandler(waitForCompletion: false)
     }
 
-    /// Makes cmux the `claude` handler. Idempotent; called whenever cmux
-    /// launches a Claude process for a pane.
+    /// Makes cmux the `claude` handler while cmux owns Claude processes.
+    /// Idempotent; called whenever cmux launches a Claude process for a pane.
+    /// macOS may ask the user to confirm the change once.
     func claimSchemeIfNeeded() {
-        guard !claimed, let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
-        let status = LSSetDefaultHandlerForURLScheme(
-            Self.scheme as CFString,
-            bundleIdentifier as CFString
-        )
-        claimed = status == noErr
+        guard !claimed else { return }
+        claimed = true
+        setHandler(Bundle.main.bundleURL) { error in
 #if DEBUG
-        cmuxDebugLog("claudeLinkRouter.claim status=\(status) bundle=\(bundleIdentifier)")
+            cmuxDebugLog(
+                "claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none") "
+                    + "isCmux=\(ClaudeDesktopLinkRouter.shared.currentHandlerIsCmux)"
+            )
 #endif
-        guard claimed, terminationObserver == nil else { return }
+        }
+        guard terminationObserver == nil else { return }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                ClaudeDesktopLinkRouter.shared.restoreClaudeHandler()
+                ClaudeDesktopLinkRouter.shared.restoreClaudeHandler(waitForCompletion: true)
             }
         }
+    }
+
+    /// Called when a cmux-owned Claude process goes away; hands the scheme back
+    /// once none are left.
+    func releaseSchemeIfUnused() {
+        guard claimed, ForeignWindowSession.ownedProcessIdentifiers.isEmpty else { return }
+        restoreClaudeHandler(waitForCompletion: false)
     }
 
     /// Returns true when `url` is a `claude://` link this router handled.
@@ -97,15 +106,30 @@ final class ClaudeDesktopLinkRouter {
         return handlerURL.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
     }
 
-    private func restoreClaudeHandler() {
-        let status = LSSetDefaultHandlerForURLScheme(
-            Self.scheme as CFString,
-            Self.claudeBundleIdentifier as CFString
-        )
+    private func restoreClaudeHandler(waitForCompletion: Bool) {
         claimed = false
+        guard let claudeURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: Self.claudeBundleIdentifier
+        ) else { return }
+        // At quit the process may exit before the change lands; wait briefly.
+        let done = DispatchSemaphore(value: 0)
+        setHandler(claudeURL) { error in
 #if DEBUG
-        cmuxDebugLog("claudeLinkRouter.restore status=\(status)")
+            cmuxDebugLog("claudeLinkRouter.restore error=\(error?.localizedDescription ?? "none")")
 #endif
+            done.signal()
+        }
+        if waitForCompletion {
+            _ = done.wait(timeout: .now() + 1.5)
+        }
+    }
+
+    private func setHandler(_ applicationURL: URL, completion: @escaping @Sendable (Error?) -> Void) {
+        NSWorkspace.shared.setDefaultApplication(
+            at: applicationURL,
+            toOpenURLsWithScheme: Self.scheme,
+            completion: completion
+        )
     }
 
     /// Sends a GetURL Apple Event to one process, which is how macOS itself

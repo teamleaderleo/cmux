@@ -2005,6 +2005,7 @@
 		C0DEFB300000000000000001 /* FocusSurfaceBroadcasterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEFB300000000000000002 /* FocusSurfaceBroadcasterTests.swift */; };
 		AA5269A0C0DE0002FACE0002 /* ForeignFirstResponderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5269A0C0DE0001FACE0001 /* ForeignFirstResponderPolicy.swift */; };
 		AA5269A0C0DE0004FACE0004 /* ForeignFirstResponderPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5269A0C0DE0003FACE0003 /* ForeignFirstResponderPolicyTests.swift */; };
+		C13985000000000000000036 /* ForeignWindowAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000026 /* ForeignWindowAccessibility.swift */; };
 		C13985000000000000000013 /* ForeignWindowHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000003 /* ForeignWindowHostView.swift */; };
 		C13985000000000000000011 /* ForeignWindowLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000001 /* ForeignWindowLaunchConfiguration.swift */; };
 		C13985000000000000000032 /* ForeignWindowProfileRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */; };
@@ -6149,6 +6150,7 @@
 		C0DEFB300000000000000002 /* FocusSurfaceBroadcasterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSurfaceBroadcasterTests.swift; sourceTree = "<group>"; };
 		AA5269A0C0DE0001FACE0001 /* ForeignFirstResponderPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/ForeignFirstResponderPolicy.swift; sourceTree = "<group>"; };
 		AA5269A0C0DE0003FACE0003 /* ForeignFirstResponderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForeignFirstResponderPolicyTests.swift; sourceTree = "<group>"; };
+		C13985000000000000000026 /* ForeignWindowAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowAccessibility.swift; sourceTree = "<group>"; };
 		C13985000000000000000003 /* ForeignWindowHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowHostView.swift; sourceTree = "<group>"; };
 		C13985000000000000000001 /* ForeignWindowLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowLaunchConfiguration.swift; sourceTree = "<group>"; };
 		C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowProfileRegistry.swift; sourceTree = "<group>"; };
@@ -10695,6 +10697,7 @@
 				C13985000000000000000004 /* ForeignWindowSurface.swift */,
 				C13985000000000000000021 /* ForeignWindowYieldCoordinator.swift */,
 				C13985000000000000000024 /* ForeignWindowYieldTriggers.swift */,
+				C13985000000000000000026 /* ForeignWindowAccessibility.swift */,
 				C13985000000000000000025 /* ClaudeDesktopLinkRouter.swift */,
 				C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */,
 				C13985000000000000000023 /* ClaudeDesktopProfiles.swift */,
@@ -14381,6 +14384,7 @@
 				5E55400000000000000000D1 /* FocusStealingResponderConformances.swift in Sources */,
 					C0DEFB100000000000000001 /* FocusSurfaceBroadcaster.swift in Sources */,
 				AA5269A0C0DE0002FACE0002 /* ForeignFirstResponderPolicy.swift in Sources */,
+				C13985000000000000000036 /* ForeignWindowAccessibility.swift in Sources */,
 				C13985000000000000000013 /* ForeignWindowHostView.swift in Sources */,
 				C13985000000000000000011 /* ForeignWindowLaunchConfiguration.swift in Sources */,
 				C13985000000000000000032 /* ForeignWindowProfileRegistry.swift in Sources */,

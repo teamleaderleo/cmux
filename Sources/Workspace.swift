@@ -806,6 +806,9 @@ extension Workspace {
             simulatorSnapshot = snapshot; agentSessionSnapshot = nil; projectSnapshot = nil
         case .agentSession:
             guard let agentPanel = panel as? AgentSessionPanel else { return nil }
+            // Claude Desktop panes are not restored yet: the snapshot has no
+            // profile, so a restore would launch a stray "default" Claude.
+            guard agentPanel.rendererKind != .claudeDesktop else { return nil }
             terminalSnapshot = nil
             browserSnapshot = nil
             markdownSnapshot = nil

@@ -20,6 +20,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private let profile: String
     private let registry: ForeignWindowProfileRegistry
     private let placeholderLabel: NSTextField
+    private let accessStack = NSStackView()
     private var isAttached = false
     private var isDetached = false
     private var isPresenting = false
@@ -47,11 +48,18 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         super.init(frame: .zero)
         wantsLayer = true
         configurePlaceholder()
+        configureAccessPrompt()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cmuxApplicationBecameActive(_:)),
             name: NSApplication.didBecomeActiveNotification,
             object: NSApp
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(accessibilityAccessChanged(_:)),
+            name: ForeignWindowAccessibility.didChangeNotification,
+            object: nil
         )
     }
 
@@ -69,7 +77,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if !isPresenting {
+        if !isPresenting, ForeignWindowAccessibility.shared.isTrusted {
             onRequestPanelFocus?()
         }
         super.mouseDown(with: event)
@@ -106,6 +114,11 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
             self,
             name: NSApplication.didBecomeActiveNotification,
             object: NSApp
+        )
+        NotificationCenter.default.removeObserver(
+            self,
+            name: ForeignWindowAccessibility.didChangeNotification,
+            object: nil
         )
         if isAttached {
             registry.detach(hostID: hostID)
@@ -145,13 +158,73 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         ])
     }
 
+    private func configureAccessPrompt() {
+        let message = NSTextField(
+            wrappingLabelWithString: String(
+                localized: "foreignWindow.accessibility.message",
+                defaultValue: "cmux needs Accessibility access to place Claude in this pane."
+            )
+        )
+        message.alignment = .center
+        message.textColor = .secondaryLabelColor
+        message.font = .systemFont(ofSize: NSFont.systemFontSize)
+        let button = NSButton(
+            title: String(
+                localized: "foreignWindow.accessibility.openSettings",
+                defaultValue: "Open Accessibility Settings"
+            ),
+            target: self,
+            action: #selector(requestAccessibilityAccess(_:))
+        )
+        button.bezelStyle = .rounded
+        accessStack.orientation = .vertical
+        accessStack.alignment = .centerX
+        accessStack.spacing = 12
+        accessStack.addArrangedSubview(message)
+        accessStack.addArrangedSubview(button)
+        accessStack.translatesAutoresizingMaskIntoConstraints = false
+        accessStack.isHidden = true
+        addSubview(accessStack)
+        NSLayoutConstraint.activate([
+            accessStack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            accessStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            accessStack.leadingAnchor.constraint(
+                greaterThanOrEqualTo: leadingAnchor,
+                constant: 16
+            ),
+            accessStack.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor,
+                constant: -16
+            )
+        ])
+    }
+
+    /// One of three states while visible: the app's window sits over the
+    /// pane, Accessibility is missing (prompt), or another pane shows it.
     private func updatePlaceholderVisibility() {
+        let needsAccess = lastReportedVisibility
+            && isAttached
+            && !ForeignWindowAccessibility.shared.isTrusted
         let shouldShowPlaceholder = lastReportedVisibility
             && isAttached
             && !isPresenting
+            && !needsAccess
+        if accessStack.isHidden == needsAccess {
+            accessStack.isHidden = !needsAccess
+        }
         if placeholderLabel.isHidden == shouldShowPlaceholder {
             placeholderLabel.isHidden = !shouldShowPlaceholder
         }
+    }
+
+    @objc private func requestAccessibilityAccess(_ sender: Any?) {
+        _ = sender
+        ForeignWindowAccessibility.shared.requestAccess()
+    }
+
+    @objc private func accessibilityAccessChanged(_ notification: Notification) {
+        _ = notification
+        syncPresentation(raiseExternalWindow: true)
     }
 
     private func attachIfNeeded() {
