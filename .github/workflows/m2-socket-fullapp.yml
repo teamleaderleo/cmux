@@ -38,7 +38,7 @@ jobs:
           for c in /Applications/Xcode_27.app /Applications/Xcode_27*.app /Applications/Xcode.app; do
             c=$(cd "$c" 2>/dev/null && pwd -P) || continue
             [ -d "$c" ] || continue
-            v=$(DEVELOPER_DIR="$c/Contents/Developer" xcodebuild -version | head -1 | awk '{print $2}')
+            v=$(DEVELOPER_DIR="$c/Contents/Developer" xcodebuild -version | awk 'NR==1{print $2}')
             case "$v" in 27*) XC="$c"; break ;; esac
           done
           if [ -z "$XC" ]; then echo "NO_XCODE_27 on this image"; exit 1; fi
