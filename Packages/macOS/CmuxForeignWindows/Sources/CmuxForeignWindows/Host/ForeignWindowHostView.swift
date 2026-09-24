@@ -1,11 +1,19 @@
-import AppKit
-import Foundation
+public import AppKit
+public import Foundation
 
-/// Marks a pane rect for a profile's foreign window. The view leases the
-/// profile from the registry while it exists; it never owns the process, so
-/// SwiftUI teardown (pane moves, split drags, workspace moves) only detaches.
+/// Marks a pane rect for a profile's foreign window.
+///
+/// The view leases the profile from the registry while it exists; it never
+/// owns the process, so view teardown (pane moves, split drags, workspace
+/// moves) only detaches. While visible it shows one of three states: the
+/// external window sits over it, an Accessibility prompt, or a placeholder
+/// saying another pane shows the profile.
+///
+/// Call ``update(isFocused:isVisibleInUI:backgroundColor:)`` whenever pane
+/// state changes and ``detach()`` on teardown. SwiftUI callers use
+/// ``ForeignWindowSurface``, which does both.
 @MainActor
-final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
+public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private static let observedHostWindowNotifications: [Notification.Name] = [
         NSWindow.didMoveNotification,
         NSWindow.didResizeNotification,
@@ -19,6 +27,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private let panelID: UUID
     private let profile: String
     private let registry: ForeignWindowProfileRegistry
+    private let accessibility: ForeignWindowAccessibility
     private let placeholderLabel: NSTextField
     private let accessStack = NSStackView()
     private var isAttached = false
@@ -28,21 +37,31 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private var isVisibleInUI = false
     private var lastReportedVisibility = false
     private weak var observedHostWindow: NSWindow?
-    /// Clicking the placeholder focuses this pane, which moves the window here.
-    var onRequestPanelFocus: (() -> Void)?
+    /// Called when the user clicks the placeholder; the host app should focus
+    /// this pane, which moves the external window here.
+    public var onRequestPanelFocus: (() -> Void)?
 
-    init(
+    /// Creates a host view for one pane.
+    ///
+    /// - Parameter panelID: The panel that claims `profile` in `registry`.
+    /// - Parameter profile: The profile whose window this pane shows.
+    /// - Parameter registry: The registry the view leases from.
+    /// - Parameter accessibility: The trust gate the sessions use.
+    public init(
         panelID: UUID,
         profile: String,
-        registry: ForeignWindowProfileRegistry
+        registry: ForeignWindowProfileRegistry,
+        accessibility: ForeignWindowAccessibility
     ) {
         self.panelID = panelID
         self.profile = profile
         self.registry = registry
+        self.accessibility = accessibility
         self.placeholderLabel = NSTextField(
             wrappingLabelWithString: String(
                 localized: "foreignWindow.placeholder.shownInOtherPane",
-                defaultValue: "This account is open in another pane. Focus this pane to show it here."
+                defaultValue: "This account is open in another pane. Focus this pane to show it here.",
+                bundle: .module
             )
         )
         super.init(frame: .zero)
@@ -59,37 +78,42 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
             self,
             selector: #selector(accessibilityAccessChanged(_:)),
             name: ForeignWindowAccessibility.didChangeNotification,
-            object: nil
+            object: accessibility
         )
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
+    public required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override var isOpaque: Bool { true }
+    override public var isOpaque: Bool { true }
 
-    override func viewDidMoveToWindow() {
+    override public func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         installHostWindowObservers()
         syncPresentation(raiseExternalWindow: isFocused)
     }
 
-    override func mouseDown(with event: NSEvent) {
-        if !isPresenting, ForeignWindowAccessibility.shared.isTrusted {
+    override public func mouseDown(with event: NSEvent) {
+        if !isPresenting, accessibility.isTrusted {
             onRequestPanelFocus?()
         }
         super.mouseDown(with: event)
     }
 
-    override func layout() {
+    override public func layout() {
         super.layout()
         // Cheap: the session coalesces AX writes and skips unchanged rects.
         syncPresentation(raiseExternalWindow: false)
     }
 
-    func update(
+    /// Reports pane state to the registry and restyles the view.
+    ///
+    /// - Parameter isFocused: Whether the pane has focus.
+    /// - Parameter isVisibleInUI: Whether the pane is on screen in the host UI.
+    /// - Parameter backgroundColor: Fill shown behind placeholders.
+    public func update(
         isFocused: Bool,
         isVisibleInUI: Bool,
         backgroundColor: NSColor
@@ -105,8 +129,8 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     }
 
     /// View teardown: releases the lease only. The process keeps running
-    /// until its panel is closed.
-    func detach() {
+    /// until its panel releases the profile. Idempotent.
+    public func detach() {
         guard !isDetached else { return }
         isDetached = true
         removeHostWindowObservers()
@@ -118,7 +142,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         NotificationCenter.default.removeObserver(
             self,
             name: ForeignWindowAccessibility.didChangeNotification,
-            object: nil
+            object: accessibility
         )
         if isAttached {
             registry.detach(hostID: hostID)
@@ -130,7 +154,10 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
 
     // MARK: ForeignWindowProfileHost
 
-    func foreignWindowProfileHostDidChangePresenting(_ isPresenting: Bool) {
+    /// Shows or hides the placeholder as the registry moves the window.
+    ///
+    /// - Parameter isPresenting: Whether the window now sits over this view.
+    public func foreignWindowProfileHostDidChangePresenting(_ isPresenting: Bool) {
         self.isPresenting = isPresenting
         updatePlaceholderVisibility()
     }
@@ -162,7 +189,8 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         let message = NSTextField(
             wrappingLabelWithString: String(
                 localized: "foreignWindow.accessibility.message",
-                defaultValue: "cmux needs Accessibility access to place Claude in this pane."
+                defaultValue: "cmux needs Accessibility access to place Claude in this pane.",
+                bundle: .module
             )
         )
         message.alignment = .center
@@ -171,7 +199,8 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         let button = NSButton(
             title: String(
                 localized: "foreignWindow.accessibility.openSettings",
-                defaultValue: "Open Accessibility Settings"
+                defaultValue: "Open Accessibility Settings",
+                bundle: .module
             ),
             target: self,
             action: #selector(requestAccessibilityAccess(_:))
@@ -204,7 +233,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private func updatePlaceholderVisibility() {
         let needsAccess = lastReportedVisibility
             && isAttached
-            && !ForeignWindowAccessibility.shared.isTrusted
+            && !accessibility.isTrusted
         let shouldShowPlaceholder = lastReportedVisibility
             && isAttached
             && !isPresenting
@@ -219,7 +248,7 @@ final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
 
     @objc private func requestAccessibilityAccess(_ sender: Any?) {
         _ = sender
-        ForeignWindowAccessibility.shared.requestAccess()
+        accessibility.requestAccess()
     }
 
     @objc private func accessibilityAccessChanged(_ notification: Notification) {

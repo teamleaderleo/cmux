@@ -1,4 +1,5 @@
 import AppKit
+import CmuxForeignWindows
 import Foundation
 
 @MainActor
@@ -57,7 +58,7 @@ final class AgentSessionPanel: Panel {
         }
         if rendererKind == .claudeDesktop {
             // The panel, not its view, keeps the profile's process alive.
-            ClaudeDesktopProfiles.registry.claim(
+            ClaudeDesktopAppRuntime.hosting.registry.claim(
                 profile: self.desktopProfile,
                 panelID: self.id
             )
@@ -74,11 +75,7 @@ final class AgentSessionPanel: Panel {
 
     /// Maps a user-supplied profile name to a safe directory component.
     nonisolated static func normalizedDesktopProfile(_ raw: String?) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
-        let cleaned = String((raw ?? "").lowercased().unicodeScalars.map {
-            allowed.contains($0) ? Character($0) : "-"
-        }).trimmingCharacters(in: CharacterSet(charactersIn: "-."))
-        return cleaned.isEmpty ? "default" : cleaned
+        ClaudeDesktopProfileName(raw).rawValue
     }
 
     nonisolated static func desktopTitle(profile: String) -> String {
@@ -99,7 +96,7 @@ final class AgentSessionPanel: Panel {
         if rendererKind == .claudeDesktop {
             // Real close only (moves and re-renders never call this). Ends the
             // Claude process when no other open panel uses the profile.
-            ClaudeDesktopProfiles.registry.releasePanel(id)
+            ClaudeDesktopAppRuntime.hosting.registry.releasePanel(id)
         }
     }
 

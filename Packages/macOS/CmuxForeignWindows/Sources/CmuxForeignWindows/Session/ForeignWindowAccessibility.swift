@@ -1,8 +1,8 @@
 import AppKit
 import ApplicationServices
-import Foundation
+public import Foundation
 
-/// Whether cmux may move other apps' windows (macOS Accessibility).
+/// Whether this process may move other apps' windows (macOS Accessibility).
 ///
 /// Without it, a hosted app's window cannot be placed over its pane, so it
 /// would float wherever the app opens it. Sessions keep hosted apps hidden
@@ -10,40 +10,46 @@ import Foundation
 /// is interested and access is missing, this polls once a second so a grant in
 /// System Settings takes effect without relaunching anything.
 @MainActor
-final class ForeignWindowAccessibility {
-    static let shared = ForeignWindowAccessibility()
+public final class ForeignWindowAccessibility {
+    /// Posted on the main thread with this instance as the object when
+    /// ``isTrusted`` changes.
+    public static let didChangeNotification = Notification.Name("cmux.foreignWindowAccessibility.didChange")
 
-    /// Posted on the main thread when `isTrusted` changes.
-    static let didChangeNotification = Notification.Name("cmux.foreignWindowAccessibility.didChange")
-
-    private(set) var isTrusted: Bool = AXIsProcessTrusted()
+    /// The last observed trust state.
+    public private(set) var isTrusted: Bool
     private var interestCount = 0
+    // A repeating main-run-loop timer: the grant arrives from System Settings
+    // with no notification, so polling while interested is the only signal.
     private var pollTimer: Timer?
     private var didPrompt = false
 
-    private init() {}
+    /// Creates a gate reading the current trust state.
+    public init() {
+        isTrusted = AXIsProcessTrusted()
+    }
 
-    /// Starts watching for a grant. Balance with `endInterest()`.
-    func beginInterest() {
+    /// Starts watching for a grant. Balance with ``endInterest()``.
+    public func beginInterest() {
         interestCount += 1
         refresh()
         updatePolling()
     }
 
-    func endInterest() {
+    /// Stops one caller's interest in grant changes.
+    public func endInterest() {
         interestCount = max(0, interestCount - 1)
         updatePolling()
     }
 
     /// Shows the system prompt once per launch, then opens the Accessibility
     /// pane of System Settings on later requests.
-    func requestAccess() {
+    public func requestAccess() {
         guard !refresh() else { return }
         if !didPrompt {
             didPrompt = true
-            let options = [
-                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-            ] as CFDictionary
+            // The value of kAXTrustedCheckOptionPrompt, which Swift 6 rejects
+            // as a mutable global.
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
             return
         }
@@ -54,8 +60,11 @@ final class ForeignWindowAccessibility {
         }
     }
 
+    /// Re-reads the trust state and posts ``didChangeNotification`` on change.
+    ///
+    /// - Returns: Whether the process is trusted.
     @discardableResult
-    func refresh() -> Bool {
+    public func refresh() -> Bool {
         let trusted = AXIsProcessTrusted()
         if trusted != isTrusted {
             isTrusted = trusted
@@ -68,9 +77,10 @@ final class ForeignWindowAccessibility {
     private func updatePolling() {
         let shouldPoll = interestCount > 0 && !isTrusted
         if shouldPoll, pollTimer == nil {
-            let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                // Scheduled on the main run loop below.
                 MainActor.assumeIsolated {
-                    ForeignWindowAccessibility.shared.refresh()
+                    _ = self?.refresh()
                 }
             }
             RunLoop.main.add(timer, forMode: .common)

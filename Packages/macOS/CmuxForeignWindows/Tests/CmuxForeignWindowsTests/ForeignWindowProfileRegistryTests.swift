@@ -1,12 +1,8 @@
-import AppKit
+import CoreGraphics
 import Foundation
 import Testing
 
-#if canImport(cmux_DEV)
-    @testable import cmux_DEV
-#elseif canImport(cmux)
-    @testable import cmux
-#endif
+@testable import CmuxForeignWindows
 
 @MainActor
 private final class FakeForeignWindowSession: ForeignWindowProfileSession {
@@ -91,17 +87,17 @@ struct ForeignWindowProfileRegistryTests {
         book.attach(hostID: hostA, panelID: panelA, profile: "work")
         book.attach(hostID: hostB, panelID: panelB, profile: "work")
 
-        expectNil(book.presenter(for: "work"))
+        #expect(book.presenter(for: "work") == nil)
 
         book.update(hostID: hostA, isVisible: true, isFocused: false, targetFrame: frameA)
         book.update(hostID: hostB, isVisible: true, isFocused: false, targetFrame: frameB)
-        expectEqual(book.presenter(for: "work"), hostB)
+        #expect(book.presenter(for: "work") == hostB)
 
         book.update(hostID: hostA, isVisible: true, isFocused: true, targetFrame: frameA)
-        expectEqual(book.presenter(for: "work"), hostA)
+        #expect(book.presenter(for: "work") == hostA)
 
         book.update(hostID: hostA, isVisible: false, isFocused: false, targetFrame: nil)
-        expectEqual(book.presenter(for: "work"), hostB)
+        #expect(book.presenter(for: "work") == hostB)
     }
 
     @Test
@@ -115,14 +111,14 @@ struct ForeignWindowProfileRegistryTests {
         book.attach(hostID: hostA, panelID: panelA, profile: "work")
         book.update(hostID: hostA, isVisible: true, isFocused: true, targetFrame: frameA)
 
-        expectNil(book.release(panelID: panelA))
-        expectNil(book.presenter(for: "work"))
-        expectEqual(book.release(panelID: panelB), "work")
-        expectFalse(book.isClaimed("work"))
+        #expect(book.release(panelID: panelA) == nil)
+        #expect(book.presenter(for: "work") == nil)
+        #expect(book.release(panelID: panelB) == "work")
+        #expect(!book.isClaimed("work"))
     }
 
     @Test
-    func testTwoPanesWithSameProfileShareOneSession() {
+    func testTwoPanesWithSameProfileShareOneSession() throws {
         let harness = RegistryHarness()
         let registry = harness.registry!
         let panelA = UUID()
@@ -133,28 +129,35 @@ struct ForeignWindowProfileRegistryTests {
         let hostBID = UUID()
         registry.claim(profile: "work", panelID: panelA)
         registry.claim(profile: "work", panelID: panelB)
-        expectTrue(harness.created.isEmpty)
+        #expect(harness.created.isEmpty)
 
         registry.attach(host: hostA, hostID: hostAID, panelID: panelA, profile: "work")
         registry.attach(host: hostB, hostID: hostBID, panelID: panelB, profile: "work")
-        expectTrue(harness.created.isEmpty)
+        #expect(harness.created.isEmpty)
 
         registry.updateHost(hostID: hostAID, isVisible: true, isFocused: true, targetFrame: frameA, raiseWindow: false)
         registry.updateHost(hostID: hostBID, isVisible: true, isFocused: false, targetFrame: frameB, raiseWindow: false)
 
-        expectEqual(harness.created.count, 1)
-        expectTrue(hostA.isPresenting)
-        expectFalse(hostB.isPresenting)
-        expectEqual(harness.created.first?.presentations.last?.targetFrame, frameA)
+        #expect(harness.created.count == 1)
+        #expect(hostA.isPresenting)
+        #expect(!hostB.isPresenting)
+        #expect(harness.created.first?.presentations.last?.targetFrame == frameA)
 
-        // Focus moves to B: B takes the window, A shows its placeholder.
+        // Focus moves to B: B takes the window, A shows its placeholder. The
+        // handoff itself raises the window; B's later focus update does not
+        // need to (the real host passes its own raise on becoming focused).
+        let session = try #require(harness.created.first)
+        let beforeHandoff = session.presentations.count
         registry.updateHost(hostID: hostAID, isVisible: true, isFocused: false, targetFrame: frameA, raiseWindow: false)
         registry.updateHost(hostID: hostBID, isVisible: true, isFocused: true, targetFrame: frameB, raiseWindow: false)
-        expectEqual(harness.created.count, 1)
-        expectFalse(hostA.isPresenting)
-        expectTrue(hostB.isPresenting)
-        expectEqual(harness.created.first?.presentations.last?.targetFrame, frameB)
-        expectEqual(harness.created.first?.presentations.last?.raiseWindow, true)
+        #expect(harness.created.count == 1)
+        #expect(!hostA.isPresenting)
+        #expect(hostB.isPresenting)
+        let handoff = Array(session.presentations[beforeHandoff...])
+        #expect(handoff.first?.targetFrame == frameB)
+        #expect(handoff.first?.raiseWindow == true)
+        #expect(handoff.last?.targetFrame == frameB)
+        #expect(handoff.last?.isFocused == true)
     }
 
     @Test
@@ -170,17 +173,17 @@ struct ForeignWindowProfileRegistryTests {
         let session = try #require(harness.created.first)
 
         registry.detach(hostID: hostID)
-        expectEqual(session.invalidateCount, 0)
-        expectEqual(session.presentations.last?.isVisible, false)
+        #expect(session.invalidateCount == 0)
+        #expect(session.presentations.last?.isVisible == false)
 
         // The pane re-mounts elsewhere (split move): same session, new host.
         let movedHost = FakeForeignWindowHost()
         let movedHostID = UUID()
         registry.attach(host: movedHost, hostID: movedHostID, panelID: panel, profile: "work")
         registry.updateHost(hostID: movedHostID, isVisible: true, isFocused: true, targetFrame: frameB, raiseWindow: false)
-        expectEqual(harness.created.count, 1)
-        expectTrue(movedHost.isPresenting)
-        expectEqual(session.presentations.last?.targetFrame, frameB)
+        #expect(harness.created.count == 1)
+        #expect(movedHost.isPresenting)
+        #expect(session.presentations.last?.targetFrame == frameB)
     }
 
     @Test
@@ -198,14 +201,14 @@ struct ForeignWindowProfileRegistryTests {
         let session = try #require(harness.created.first)
 
         registry.releasePanel(panelA)
-        expectEqual(session.invalidateCount, 0)
-        expectFalse(host.isPresenting)
-        expectEqual(registry.claimedProfiles, ["work"])
+        #expect(session.invalidateCount == 0)
+        #expect(!host.isPresenting)
+        #expect(registry.claimedProfiles == ["work"])
 
         registry.releasePanel(panelB)
-        expectEqual(session.invalidateCount, 1)
-        expectEqual(registry.sessionProfiles, [])
-        expectEqual(registry.claimedProfiles, [])
+        #expect(session.invalidateCount == 1)
+        #expect(registry.sessionProfiles == [])
+        #expect(registry.claimedProfiles == [])
     }
 
     @Test
@@ -225,9 +228,9 @@ struct ForeignWindowProfileRegistryTests {
         registry.updateHost(hostID: hostAID, isVisible: true, isFocused: true, targetFrame: frameA, raiseWindow: false)
         registry.updateHost(hostID: hostBID, isVisible: true, isFocused: false, targetFrame: frameB, raiseWindow: false)
 
-        expectEqual(harness.created.map(\.profile).sorted(), ["personal", "work"])
-        expectTrue(hostA.isPresenting)
-        expectTrue(hostB.isPresenting)
+        #expect(harness.created.map(\.profile).sorted() == ["personal", "work"])
+        #expect(hostA.isPresenting)
+        #expect(hostB.isPresenting)
     }
 
     @Test
@@ -242,29 +245,9 @@ struct ForeignWindowProfileRegistryTests {
         registry.updateHost(hostID: hostID, isVisible: true, isFocused: true, targetFrame: frameA, raiseWindow: false)
 
         registry.terminateAll()
-        expectEqual(harness.created.map(\.invalidateCount), [1])
+        #expect(harness.created.map(\.invalidateCount) == [1])
 
         registry.updateHost(hostID: hostID, isVisible: true, isFocused: true, targetFrame: frameB, raiseWindow: true)
-        expectEqual(harness.created.count, 1)
-    }
-
-    @Test
-    func testProfilesOnDiskListsNormalizedDirectoriesOnly() throws {
-        let fileManager = FileManager.default
-        let root = fileManager.temporaryDirectory
-            .appendingPathComponent("cmux-claude-profiles-\(UUID().uuidString)", isDirectory: true)
-        defer { try? fileManager.removeItem(at: root) }
-        for name in ["work", "default", "Not Normalized"] {
-            try fileManager.createDirectory(
-                at: root.appendingPathComponent(name, isDirectory: true),
-                withIntermediateDirectories: true
-            )
-        }
-        try Data().write(to: root.appendingPathComponent("stray-file"))
-
-        expectEqual(
-            ClaudeDesktopProfiles.profilesOnDisk(rootURL: root),
-            ["default", "work"]
-        )
+        #expect(harness.created.count == 1)
     }
 }

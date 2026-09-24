@@ -1,4 +1,5 @@
 import AppKit
+import CmuxForeignWindows
 
 /// App-wide observers that hold a foreign-window yield while cmux floats UI
 /// over pane content, so hosted other-process windows do not cover it.
@@ -109,7 +110,7 @@ final class ForeignWindowYieldTriggers {
 
     /// Idempotent: repeated shows keep one token, repeated hides are no-ops.
     private func setYield(_ active: Bool, for key: Key) {
-        let coordinator = ForeignWindowYieldCoordinator.shared
+        let coordinator = ClaudeDesktopAppRuntime.hosting.yieldCoordinator
         if active {
             guard tokens[key] == nil else { return }
             tokens[key] = coordinator.beginYield(reason: key.kind.rawValue)

@@ -1,4 +1,5 @@
 import AppKit
+import CmuxForeignWindows
 import Foundation
 import SwiftUI
 
@@ -14,7 +15,8 @@ struct ClaudeDesktopAgentSurface: View {
         ForeignWindowSurface(
             panelID: panelID,
             profile: profile,
-            registry: ClaudeDesktopProfiles.registry,
+            registry: ClaudeDesktopAppRuntime.hosting.registry,
+            accessibility: ClaudeDesktopAppRuntime.hosting.accessibility,
             isFocused: isFocused,
             isVisibleInUI: isVisibleInUI,
             backgroundColor: backgroundColor,

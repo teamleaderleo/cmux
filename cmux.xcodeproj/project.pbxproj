@@ -617,8 +617,7 @@
 		A5D41232A1B2C3D4E5F60718 /* ClaudeBackgroundWorkNotifyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D41233A1B2C3D4E5F60718 /* ClaudeBackgroundWorkNotifyTests.swift */; };
 		C13519000000000000000007 /* ClaudeConfigDirectoryPathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13519000000000000000008 /* ClaudeConfigDirectoryPathTests.swift */; };
 		C13985000000000000000015 /* ClaudeDesktopAgentSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000005 /* ClaudeDesktopAgentSurface.swift */; };
-		C13985000000000000000035 /* ClaudeDesktopLinkRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000025 /* ClaudeDesktopLinkRouter.swift */; };
-		C13985000000000000000033 /* ClaudeDesktopProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000023 /* ClaudeDesktopProfiles.swift */; };
+		C13985000000000000000033 /* ClaudeDesktopAppRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000023 /* ClaudeDesktopAppRuntime.swift */; };
 		C7A534000000000000000002 /* ClaudeHookFeedTelemetrySwiftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A534000000000000000001 /* ClaudeHookFeedTelemetrySwiftTests.swift */; };
 		A12123000000000000000009 /* ClaudeHookHibernationGenerationHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12123000000000000000010 /* ClaudeHookHibernationGenerationHistoryTests.swift */; };
 		A12123000000000000000011 /* ClaudeHookHibernationSessionEndPreservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12123000000000000000012 /* ClaudeHookHibernationSessionEndPreservationTests.swift */; };
@@ -1387,6 +1386,8 @@
 		C9A2C00000000000000000C3 /* CmuxFeedback in Frameworks */ = {isa = PBXBuildFile; productRef = C9A2C00000000000000000C2 /* CmuxFeedback */; };
 		D0F1A0000000000000000003 /* CmuxFilePreviewCore in Frameworks */ = {isa = PBXBuildFile; productRef = D0F1A0000000000000000002 /* CmuxFilePreviewCore */; };
 		D0F1A0000000000000000004 /* CmuxFilePreviewCore in Frameworks */ = {isa = PBXBuildFile; productRef = D0F1A0000000000000000002 /* CmuxFilePreviewCore */; };
+		C13985000000000000000043 /* CmuxForeignWindows in Frameworks */ = {isa = PBXBuildFile; productRef = C13985000000000000000042 /* CmuxForeignWindows */; };
+		C13985000000000000000044 /* CmuxForeignWindows in Frameworks */ = {isa = PBXBuildFile; productRef = C13985000000000000000042 /* CmuxForeignWindows */; };
 		5E2701040000000000000004 /* CmuxFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 5E2701040000000000000002 /* CmuxFoundation */; };
 		CF00F00000000000000000A3 /* CmuxFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = CF00F00000000000000000A2 /* CmuxFoundation */; };
 		CF00F00000000000000000A4 /* CmuxFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = CF00F00000000000000000A2 /* CmuxFoundation */; };
@@ -2005,14 +2006,6 @@
 		C0DEFB300000000000000001 /* FocusSurfaceBroadcasterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEFB300000000000000002 /* FocusSurfaceBroadcasterTests.swift */; };
 		AA5269A0C0DE0002FACE0002 /* ForeignFirstResponderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5269A0C0DE0001FACE0001 /* ForeignFirstResponderPolicy.swift */; };
 		AA5269A0C0DE0004FACE0004 /* ForeignFirstResponderPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA5269A0C0DE0003FACE0003 /* ForeignFirstResponderPolicyTests.swift */; };
-		C13985000000000000000036 /* ForeignWindowAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000026 /* ForeignWindowAccessibility.swift */; };
-		C13985000000000000000013 /* ForeignWindowHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000003 /* ForeignWindowHostView.swift */; };
-		C13985000000000000000011 /* ForeignWindowLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000001 /* ForeignWindowLaunchConfiguration.swift */; };
-		C13985000000000000000032 /* ForeignWindowProfileRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */; };
-		2949DF2A37CCAA126B6FD997 /* ForeignWindowProfileRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63308D67346C1E3922385F44 /* ForeignWindowProfileRegistryTests.swift */; };
-		C13985000000000000000012 /* ForeignWindowSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000002 /* ForeignWindowSession.swift */; };
-		C13985000000000000000014 /* ForeignWindowSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000004 /* ForeignWindowSurface.swift */; };
-		C13985000000000000000031 /* ForeignWindowYieldCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000021 /* ForeignWindowYieldCoordinator.swift */; };
 		C13985000000000000000034 /* ForeignWindowYieldTriggers.swift in Sources */ = {isa = PBXBuildFile; fileRef = C13985000000000000000024 /* ForeignWindowYieldTriggers.swift */; };
 		F0F0CF0F0000000000000001 /* ForkParentFallbackGeneralizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0F0CF0F0000000000000002 /* ForkParentFallbackGeneralizationTests.swift */; };
 		F76550030000000000000001 /* ForkParentFallbackResidualTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F76550030000000000000002 /* ForkParentFallbackResidualTests.swift */; };
@@ -4874,8 +4867,7 @@
 		A5D41233A1B2C3D4E5F60718 /* ClaudeBackgroundWorkNotifyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeBackgroundWorkNotifyTests.swift; sourceTree = "<group>"; };
 		C13519000000000000000008 /* ClaudeConfigDirectoryPathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeConfigDirectoryPathTests.swift; sourceTree = "<group>"; };
 		C13985000000000000000005 /* ClaudeDesktopAgentSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ClaudeDesktopAgentSurface.swift; sourceTree = "<group>"; };
-		C13985000000000000000025 /* ClaudeDesktopLinkRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ClaudeDesktopLinkRouter.swift; sourceTree = "<group>"; };
-		C13985000000000000000023 /* ClaudeDesktopProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ClaudeDesktopProfiles.swift; sourceTree = "<group>"; };
+		C13985000000000000000023 /* ClaudeDesktopAppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ClaudeDesktopAppRuntime.swift; sourceTree = "<group>"; };
 		C7A534000000000000000001 /* ClaudeHookFeedTelemetrySwiftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeHookFeedTelemetrySwiftTests.swift; sourceTree = "<group>"; };
 		A12123000000000000000010 /* ClaudeHookHibernationGenerationHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeHookHibernationGenerationHistoryTests.swift; sourceTree = "<group>"; };
 		A12123000000000000000012 /* ClaudeHookHibernationSessionEndPreservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeHookHibernationSessionEndPreservationTests.swift; sourceTree = "<group>"; };
@@ -6150,14 +6142,6 @@
 		C0DEFB300000000000000002 /* FocusSurfaceBroadcasterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSurfaceBroadcasterTests.swift; sourceTree = "<group>"; };
 		AA5269A0C0DE0001FACE0001 /* ForeignFirstResponderPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/ForeignFirstResponderPolicy.swift; sourceTree = "<group>"; };
 		AA5269A0C0DE0003FACE0003 /* ForeignFirstResponderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForeignFirstResponderPolicyTests.swift; sourceTree = "<group>"; };
-		C13985000000000000000026 /* ForeignWindowAccessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowAccessibility.swift; sourceTree = "<group>"; };
-		C13985000000000000000003 /* ForeignWindowHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowHostView.swift; sourceTree = "<group>"; };
-		C13985000000000000000001 /* ForeignWindowLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowLaunchConfiguration.swift; sourceTree = "<group>"; };
-		C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowProfileRegistry.swift; sourceTree = "<group>"; };
-		63308D67346C1E3922385F44 /* ForeignWindowProfileRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ForeignWindowProfileRegistryTests.swift"; sourceTree = "<group>"; };
-		C13985000000000000000002 /* ForeignWindowSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowSession.swift; sourceTree = "<group>"; };
-		C13985000000000000000004 /* ForeignWindowSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowSurface.swift; sourceTree = "<group>"; };
-		C13985000000000000000021 /* ForeignWindowYieldCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowYieldCoordinator.swift; sourceTree = "<group>"; };
 		C13985000000000000000024 /* ForeignWindowYieldTriggers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Panels/ForeignWindowYieldTriggers.swift; sourceTree = "<group>"; };
 		F0F0CF0F0000000000000002 /* ForkParentFallbackGeneralizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkParentFallbackGeneralizationTests.swift; sourceTree = "<group>"; };
 		F76550030000000000000002 /* ForkParentFallbackResidualTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkParentFallbackResidualTests.swift; sourceTree = "<group>"; };
@@ -8324,6 +8308,7 @@
 				C0DE49000000000000000001 /* CmuxExtensionSidebarExamples in Frameworks */,
 				C9A2C00000000000000000C3 /* CmuxFeedback in Frameworks */,
 				D0F1A0000000000000000003 /* CmuxFilePreviewCore in Frameworks */,
+				C13985000000000000000043 /* CmuxForeignWindows in Frameworks */,
 				CF00F00000000000000000A3 /* CmuxFoundation in Frameworks */,
 				C617000000000000000000A3 /* CmuxGit in Frameworks */,
 				800100000000000000000201 /* CmuxHive in Frameworks */,
@@ -8433,6 +8418,7 @@
 				A500D015A1B2C3D4E5F60718 /* CMUXDebugLog in Frameworks */,
 				CC0033E15A1B2C3D4E5F0012 /* CmuxDiffComments in Frameworks */,
 				D0F1A0000000000000000004 /* CmuxFilePreviewCore in Frameworks */,
+				C13985000000000000000044 /* CmuxForeignWindows in Frameworks */,
 				5E2701040000000000000004 /* CmuxFoundation in Frameworks */,
 				800100000000000000000203 /* CmuxHive in Frameworks */,
 				1A0B0C0D0E0F101112132014 /* CmuxIrohTransport in Frameworks */,
@@ -10691,16 +10677,8 @@
 				A9E01000000000000000000D /* AgentSessionWebTheme.swift */,
 				A9E010000000000000000004 /* AgentSessionPanelView.swift */,
 				C13985000000000000000005 /* ClaudeDesktopAgentSurface.swift */,
-				C13985000000000000000003 /* ForeignWindowHostView.swift */,
-				C13985000000000000000001 /* ForeignWindowLaunchConfiguration.swift */,
-				C13985000000000000000002 /* ForeignWindowSession.swift */,
-				C13985000000000000000004 /* ForeignWindowSurface.swift */,
-				C13985000000000000000021 /* ForeignWindowYieldCoordinator.swift */,
 				C13985000000000000000024 /* ForeignWindowYieldTriggers.swift */,
-				C13985000000000000000026 /* ForeignWindowAccessibility.swift */,
-				C13985000000000000000025 /* ClaudeDesktopLinkRouter.swift */,
-				C13985000000000000000022 /* ForeignWindowProfileRegistry.swift */,
-				C13985000000000000000023 /* ClaudeDesktopProfiles.swift */,
+				C13985000000000000000023 /* ClaudeDesktopAppRuntime.swift */,
 
 				B0A501000000000000000002 /* BrowserOmnibarAppKitBridge.swift */,
 				B0A500000000000000000002 /* BrowserOmnibarPerformanceSupport.swift */,
@@ -12513,7 +12491,6 @@
 				52476C8E96AAA6928BA35B95 /* CloudDesktopOpenActionTests.swift */,
 				AC9CBF6AD1163240A7A1E161 /* CloudDesktopOpenFixture.swift */,
 				C09C35915CA32C6A8B13F0A0 /* CloudDesktopOpenTestProvider.swift */,
-				63308D67346C1E3922385F44 /* ForeignWindowProfileRegistryTests.swift */,
 			);
 			path = cmuxTests;
 			sourceTree = "<group>";
@@ -12731,6 +12708,7 @@
 				EFB18E3B3099DFE2ECA57571 /* CmuxSimulatorStreamKit */,
 				1A0B0C0D0E0F101112132002 /* CmuxMobileTransport */,
 				D0F3A0000000000000000002 /* CmuxCloudImagePaste */,
+				C13985000000000000000042 /* CmuxForeignWindows */,
 			);
 			productName = cmux;
 			productReference = A5001000 /* cmux.app */;
@@ -12858,6 +12836,7 @@
 				CC0033E15A1B2C3D4E5F0011 /* CmuxDiffComments */,
 				AC4A6E7C4A700001AC4A0004 /* CmuxAgentChat */,
 				D0F3A0000000000000000002 /* CmuxCloudImagePaste */,
+				C13985000000000000000042 /* CmuxForeignWindows */,
 			);
 			productName = cmuxTests;
 			productReference = F1000002A1B2C3D4E5F60718 /* cmuxTests.xctest */;
@@ -12990,6 +12969,7 @@
 				C1A072000000000000000001 /* XCLocalSwiftPackageReference "CmuxMobileRPC" */,
 				1A0B0C0D0E0F101112132001 /* XCLocalSwiftPackageReference "CmuxMobileTransport" */,
 				D0F3A0000000000000000001 /* XCLocalSwiftPackageReference "CmuxCloudImagePaste" */,
+				C13985000000000000000041 /* XCLocalSwiftPackageReference "CmuxForeignWindows" */,
 			);
 			productRefGroup = A5001042 /* Products */;
 			projectDirPath = "";
@@ -13677,8 +13657,7 @@
 				D78129DCAE6C4D919AE20FF9 /* ChecklistPopoverPointerTracking.swift in Sources */,
 				ED226C59A21547BB962DB2A5 /* ChecklistSummaryPopoverModifier.swift in Sources */,
 				C13985000000000000000015 /* ClaudeDesktopAgentSurface.swift in Sources */,
-				C13985000000000000000035 /* ClaudeDesktopLinkRouter.swift in Sources */,
-				C13985000000000000000033 /* ClaudeDesktopProfiles.swift in Sources */,
+				C13985000000000000000033 /* ClaudeDesktopAppRuntime.swift in Sources */,
 				C7A533000000000000000002 /* ClaudeSessionCanonicalizationContext.swift in Sources */,
 				A9F200000000000000000015 /* ClaudeStreamJSONAccumulator.swift in Sources */,
 				C46790000000000000000003 /* CLIForwardingLaunchRouter.swift in Sources */,
@@ -14384,13 +14363,6 @@
 				5E55400000000000000000D1 /* FocusStealingResponderConformances.swift in Sources */,
 					C0DEFB100000000000000001 /* FocusSurfaceBroadcaster.swift in Sources */,
 				AA5269A0C0DE0002FACE0002 /* ForeignFirstResponderPolicy.swift in Sources */,
-				C13985000000000000000036 /* ForeignWindowAccessibility.swift in Sources */,
-				C13985000000000000000013 /* ForeignWindowHostView.swift in Sources */,
-				C13985000000000000000011 /* ForeignWindowLaunchConfiguration.swift in Sources */,
-				C13985000000000000000032 /* ForeignWindowProfileRegistry.swift in Sources */,
-				C13985000000000000000012 /* ForeignWindowSession.swift in Sources */,
-				C13985000000000000000014 /* ForeignWindowSurface.swift in Sources */,
-				C13985000000000000000031 /* ForeignWindowYieldCoordinator.swift in Sources */,
 				C13985000000000000000034 /* ForeignWindowYieldTriggers.swift in Sources */,
 				85510001A1B2C3D4E5F60001 /* GhosttyApp+ChildExitPolicy.swift in Sources */,
 				A10557070000000000000001 /* GhosttyApp+ConfigurationApply.swift in Sources */,
@@ -16745,7 +16717,6 @@
 				C0DE86540000000000000002 /* FocusHistoryScopeTests.swift in Sources */,
 				C0DEFB300000000000000001 /* FocusSurfaceBroadcasterTests.swift in Sources */,
 				AA5269A0C0DE0004FACE0004 /* ForeignFirstResponderPolicyTests.swift in Sources */,
-				2949DF2A37CCAA126B6FD997 /* ForeignWindowProfileRegistryTests.swift in Sources */,
 				F0F0CF0F0000000000000001 /* ForkParentFallbackGeneralizationTests.swift in Sources */,
 				F76550030000000000000001 /* ForkParentFallbackResidualTests.swift in Sources */,
 				F0F0CF0D0000000000000001 /* ForkParentFallbackSessionIndexTests.swift in Sources */,
@@ -18036,6 +18007,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/macOS/CmuxCloudImagePaste;
 		};
+		C13985000000000000000041 /* XCLocalSwiftPackageReference "CmuxForeignWindows" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/macOS/CmuxForeignWindows;
+		};
 		D0F4A0000000000000000001 /* XCLocalSwiftPackageReference "CmuxCloudTunnelCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/macOS/CmuxCloudTunnelCore;
@@ -18369,6 +18344,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = D0F3A0000000000000000001 /* XCLocalSwiftPackageReference "CmuxCloudImagePaste" */;
 			productName = CmuxCloudImagePaste;
+		};
+		C13985000000000000000042 /* CmuxForeignWindows */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C13985000000000000000041 /* XCLocalSwiftPackageReference "CmuxForeignWindows" */;
+			productName = CmuxForeignWindows;
 		};
 		CE57E10000000000000000B2 /* CmuxSentryReporting */ = {
 			isa = XCSwiftPackageProductDependency;

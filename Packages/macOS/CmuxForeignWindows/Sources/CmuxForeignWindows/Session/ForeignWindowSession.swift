@@ -1,42 +1,56 @@
 import AppKit
 import ApplicationServices
-import Foundation
-
-// AXObserver requires a C callback. The refcon is a +1 reference the session
-// takes when it installs the observer and drops only after removing the
-// observer's run loop source, so the pointer is always valid here.
-private func foreignWindowAXObserverCallback(
-    _ observer: AXObserver,
-    _ element: AXUIElement,
-    _ notification: CFString,
-    _ refcon: UnsafeMutableRawPointer?
-) {
-    _ = observer
-    _ = element
-    guard let refcon else { return }
-    let session = Unmanaged<ForeignWindowSession>
-        .fromOpaque(refcon)
-        .takeUnretainedValue()
-    let name = notification as String
-    if Thread.isMainThread {
-        // The source is added to the main run loop, so this is the usual path.
-        MainActor.assumeIsolated {
-            session.handleAccessibilityNotification(name)
-        }
-    } else {
-        Task { @MainActor in
-            session.handleAccessibilityNotification(name)
-        }
-    }
-}
+public import Foundation
 
 /// Owns one external application process (one per profile) and glues its
 /// main window over whichever host rect the registry says is presenting.
 ///
 /// AX writes are cross-process IPC, so presentation updates are coalesced to
 /// one apply per main run loop turn and skipped when the target is unchanged.
+///
+/// The session launches its app lazily on the first visible presentation,
+/// keeps it hidden while ``ForeignWindowAccessibility`` is untrusted or the
+/// ``ForeignWindowYieldCoordinator`` is yielding, and terminates it in
+/// ``invalidate()``. Build one per profile from a
+/// ``ForeignWindowProfileRegistry`` session factory:
+///
+/// ```swift
+/// let registry = ForeignWindowProfileRegistry { profile in
+///     ForeignWindowSession(
+///         identifier: "claude:\(profile)",
+///         launchConfiguration: store.launchConfiguration(profile: profile),
+///         accessibility: accessibility,
+///         yieldCoordinator: yieldCoordinator,
+///         processLedger: ledger
+///     )
+/// }
+/// ```
 @MainActor
-final class ForeignWindowSession: ForeignWindowProfileSession {
+public final class ForeignWindowSession: ForeignWindowProfileSession {
+    /// Forwards AX notifications to the session passed as the refcon.
+    ///
+    /// The refcon is a +1 reference the session takes when it installs the
+    /// observer and drops only after removing the observer's run loop source,
+    /// so the pointer is always valid here. A non-capturing closure converts
+    /// to the `@convention(c)` callback AXObserver requires.
+    private static let accessibilityCallback: AXObserverCallback = { _, _, notification, refcon in
+        guard let refcon else { return }
+        let session = Unmanaged<ForeignWindowSession>
+            .fromOpaque(refcon)
+            .takeUnretainedValue()
+        let name = notification as String
+        if Thread.isMainThread {
+            // The source is added to the main run loop, so this is the usual path.
+            MainActor.assumeIsolated {
+                session.handleAccessibilityNotification(name)
+            }
+        } else {
+            Task { @MainActor in
+                session.handleAccessibilityNotification(name)
+            }
+        }
+    }
+
     private static let frameTolerance: CGFloat = 1
     /// Snap-back attempts per target rect, so an app that enforces its own
     /// minimum size cannot put us in a set/notify loop.
@@ -49,22 +63,20 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
 
     private let identifier: String
     private let launchConfiguration: ForeignWindowLaunchConfiguration
+    private let accessibility: ForeignWindowAccessibility
+    private let yieldCoordinator: ForeignWindowYieldCoordinator
+    private let processLedger: ForeignWindowProcessLedger?
+    private let logger: ForeignWindowLogger
     private var launchTask: Task<Void, Never>?
     private var isLaunchAllowed = true
     private var isInvalidated = false
-    /// Processes cmux launched for foreign-window surfaces. The Claude link
-    /// router uses this to tell pane-owned Claude instances from the user's own.
-    private(set) static var ownedProcessIdentifiers: Set<pid_t> = []
 
     private var runningApplication: NSRunningApplication? {
         didSet {
-            if let oldValue { Self.ownedProcessIdentifiers.remove(oldValue.processIdentifier) }
-            if let runningApplication {
-                Self.ownedProcessIdentifiers.insert(runningApplication.processIdentifier)
-                ClaudeDesktopLinkRouter.shared.claimSchemeIfNeeded()
-            } else {
-                ClaudeDesktopLinkRouter.shared.releaseSchemeIfUnused()
-            }
+            processLedger?.replace(
+                oldValue?.processIdentifier,
+                with: runningApplication?.processIdentifier
+            )
         }
     }
     private var applicationElement: AXUIElement?
@@ -72,7 +84,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private var observedWindow: AXUIElement?
     private var accessibilityObserver: AXObserver?
     private var observerRefcon: Unmanaged<ForeignWindowSession>?
-    private var accessibilityObserverToken: NSObjectProtocol?
+    private var accessibilityObserverToken: (any NSObjectProtocol)?
 
     private var targetFrame: CGRect?
     private var shouldBeVisible = false
@@ -83,22 +95,38 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private var pendingRaise = false
     private var isApplyScheduled = false
 
-    private var yieldObserver: NSObjectProtocol?
+    private var yieldObserver: (any NSObjectProtocol)?
     private var isHiddenForYield = false
     /// `NSRunningApplication.isHidden` updates asynchronously, so remember
     /// that we asked for a hide and always pair it with an unhide.
     private var didRequestHide = false
 
-    init(
+    /// Creates a session. Nothing launches until a visible presentation.
+    ///
+    /// - Parameter identifier: Diagnostic name, for example `claude:work`.
+    /// - Parameter launchConfiguration: How to find and launch the app.
+    /// - Parameter accessibility: Trust gate shared by every session.
+    /// - Parameter yieldCoordinator: Hides the window while host UI floats.
+    /// - Parameter processLedger: Records the launched process, when given.
+    /// - Parameter logger: Receives lifecycle diagnostics.
+    public init(
         identifier: String,
-        launchConfiguration: ForeignWindowLaunchConfiguration
+        launchConfiguration: ForeignWindowLaunchConfiguration,
+        accessibility: ForeignWindowAccessibility,
+        yieldCoordinator: ForeignWindowYieldCoordinator,
+        processLedger: ForeignWindowProcessLedger? = nil,
+        logger: ForeignWindowLogger = .disabled
     ) {
         self.identifier = identifier
         self.launchConfiguration = launchConfiguration
-        ForeignWindowAccessibility.shared.beginInterest()
+        self.accessibility = accessibility
+        self.yieldCoordinator = yieldCoordinator
+        self.processLedger = processLedger
+        self.logger = logger
+        accessibility.beginInterest()
         accessibilityObserverToken = NotificationCenter.default.addObserver(
             forName: ForeignWindowAccessibility.didChangeNotification,
-            object: nil,
+            object: accessibility,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -111,7 +139,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         }
         yieldObserver = NotificationCenter.default.addObserver(
             forName: ForeignWindowYieldCoordinator.didChangeNotification,
-            object: nil,
+            object: yieldCoordinator,
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -120,16 +148,23 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         }
     }
 
-    var isRunning: Bool {
+    /// Whether the launched app is still running.
+    public var isRunning: Bool {
         guard let runningApplication else { return false }
         return !runningApplication.isTerminated
     }
 
     private var isYielding: Bool {
-        ForeignWindowYieldCoordinator.shared.isYielding
+        yieldCoordinator.isYielding
     }
 
-    func updatePresentation(
+    /// Records the presenting host's state and schedules one coalesced apply.
+    ///
+    /// - Parameter targetFrame: Screen rect in Accessibility coordinates.
+    /// - Parameter isVisible: Whether the window should be shown.
+    /// - Parameter isFocused: Whether the app should be activated.
+    /// - Parameter raiseWindow: Whether to raise the window.
+    public func updatePresentation(
         targetFrame: CGRect?,
         isVisible: Bool,
         isFocused: Bool,
@@ -153,7 +188,8 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         scheduleApply()
     }
 
-    func invalidate() {
+    /// Removes observers and terminates the launched app. Idempotent.
+    public func invalidate() {
         guard !isInvalidated else { return }
         isInvalidated = true
         launchTask?.cancel()
@@ -164,7 +200,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         yieldObserver = nil
         if let accessibilityObserverToken {
             NotificationCenter.default.removeObserver(accessibilityObserverToken)
-            ForeignWindowAccessibility.shared.endInterest()
+            accessibility.endInterest()
         }
         accessibilityObserverToken = nil
         removeAccessibilityObserver()
@@ -177,7 +213,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         runningApplication = nil
     }
 
-    func handleAccessibilityNotification(_ name: String) {
+    fileprivate func handleAccessibilityNotification(_ name: String) {
         guard !isInvalidated else { return }
         switch name {
         case kAXWindowCreatedNotification:
@@ -206,8 +242,9 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private func scheduleApply() {
         guard !isApplyScheduled, !isInvalidated else { return }
         isApplyScheduled = true
-        // The main queue drains in common modes, including event tracking,
-        // so this also runs once per turn during divider drags.
+        // Coalesces AX writes to one per main run loop turn. The main queue
+        // drains in common modes, including event tracking, so this also runs
+        // once per turn during divider drags; a Task would not.
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
                 self?.flushPresentation()
@@ -262,12 +299,10 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         isLaunchAllowed = false
 
         guard let applicationURL = resolveApplicationURL() else {
-#if DEBUG
-            cmuxDebugLog(
+            logger(
                 "foreignWindow.appMissing id=\(identifier) "
                     + "bundle=\(launchConfiguration.bundleIdentifier)"
             )
-#endif
             return
         }
         guard prepareLaunchDirectories() else { return }
@@ -302,21 +337,17 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
                 self.pendingActivate = self.shouldBeFocused
                 self.scheduleApply()
             } catch {
-#if DEBUG
-                cmuxDebugLog(
+                logger(
                     "foreignWindow.launchFailed id=\(self.identifier) "
                         + "bundle=\(self.launchConfiguration.bundleIdentifier) "
                         + "error=\(error.localizedDescription)"
                 )
-#endif
             }
         }
     }
 
     private func handleApplicationTerminated() {
-#if DEBUG
-        cmuxDebugLog("foreignWindow.appTerminated id=\(identifier)")
-#endif
+        logger("foreignWindow.appTerminated id=\(identifier)")
         removeAccessibilityObserver()
         externalWindow = nil
         applicationElement = nil
@@ -352,12 +383,10 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
                     withIntermediateDirectories: true
                 )
             } catch {
-#if DEBUG
-                cmuxDebugLog(
+                logger(
                     "foreignWindow.directoryCreateFailed id=\(identifier) "
                         + "path=\(directoryURL.path) error=\(error.localizedDescription)"
                 )
-#endif
                 return false
             }
         }
@@ -369,10 +398,10 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private func ensureAccessibilityBinding() {
         guard let runningApplication, !runningApplication.isTerminated else { return }
 
-        guard ForeignWindowAccessibility.shared.isTrusted else {
+        guard accessibility.isTrusted else {
             // Shows the system prompt once per launch; later requests come
             // from the pane's "Open Accessibility Settings" button.
-            ForeignWindowAccessibility.shared.requestAccess()
+            accessibility.requestAccess()
             return
         }
 
@@ -398,16 +427,14 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         var observer: AXObserver?
         let createResult = AXObserverCreate(
             runningApplication.processIdentifier,
-            foreignWindowAXObserverCallback,
+            Self.accessibilityCallback,
             &observer
         )
         guard createResult == .success, let observer else {
-#if DEBUG
-            cmuxDebugLog(
+            logger(
                 "foreignWindow.axObserverCreateFailed id=\(identifier) "
                     + "code=\(createResult.rawValue)"
             )
-#endif
             return
         }
 
@@ -421,12 +448,10 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         guard notificationResult == .success
                 || notificationResult == .notificationAlreadyRegistered else {
             refcon.release()
-#if DEBUG
-            cmuxDebugLog(
+            logger(
                 "foreignWindow.axObserverAddFailed id=\(identifier) "
                     + "code=\(notificationResult.rawValue)"
             )
-#endif
             return
         }
 
@@ -471,16 +496,12 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
                 name as CFString,
                 observerRefcon.toOpaque()
             )
-#if DEBUG
             if result != .success, result != .notificationAlreadyRegistered {
-                cmuxDebugLog(
+                logger(
                     "foreignWindow.axWindowObserveFailed id=\(identifier) "
                         + "name=\(name) code=\(result.rawValue)"
                 )
             }
-#else
-            _ = result
-#endif
         }
         observedWindow = window
     }
@@ -538,7 +559,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
 
         // Without Accessibility the window cannot be placed over the pane, so
         // keep the app hidden instead of letting it float over cmux.
-        guard ForeignWindowAccessibility.shared.isTrusted else {
+        guard accessibility.isTrusted else {
             hideApplication(runningApplication)
             return
         }
@@ -626,12 +647,10 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         }
         guard correctionsForTarget < Self.maximumCorrectionsPerTarget else { return }
         correctionsForTarget += 1
-#if DEBUG
-        cmuxDebugLog(
+        logger(
             "foreignWindow.snapBack id=\(identifier) attempt=\(correctionsForTarget) "
                 + "current=\(currentFrame) target=\(targetFrame)"
         )
-#endif
         lastAppliedFrame = nil
         scheduleApply()
     }
@@ -714,7 +733,7 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         }
         var size = CGSize.zero
         AXValueGetValue(
-            unsafeBitCast(value, to: AXValue.self),
+            unsafeDowncast(value, to: AXValue.self),
             .cgSize,
             &size
         )
@@ -734,11 +753,11 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
         var position = CGPoint.zero
         var size = CGSize.zero
         guard AXValueGetValue(
-            unsafeBitCast(positionValue, to: AXValue.self),
+            unsafeDowncast(positionValue, to: AXValue.self),
             .cgPoint,
             &position
         ), AXValueGetValue(
-            unsafeBitCast(sizeValue, to: AXValue.self),
+            unsafeDowncast(sizeValue, to: AXValue.self),
             .cgSize,
             &size
         ) else {

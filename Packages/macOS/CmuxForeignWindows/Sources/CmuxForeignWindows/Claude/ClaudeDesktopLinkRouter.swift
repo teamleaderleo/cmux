@@ -1,6 +1,6 @@
 import AppKit
 import CoreServices
-import Foundation
+public import Foundation
 
 /// Routes `claude://` links while cmux hosts Claude Desktop instances.
 ///
@@ -17,23 +17,40 @@ import Foundation
 ///   started that sign-in accepts it.
 /// - Any other link goes to the user's own (non-cmux) Claude instance, or
 ///   launches Claude with it when none is running.
+///
 /// The previous handler is restored when cmux quits, and on the next launch if
-/// cmux quit without restoring it.
+/// cmux quit without restoring it. ``ClaudeDesktopHosting`` wires the router
+/// to its ``ForeignWindowProcessLedger`` so claims follow owned processes.
 @MainActor
-final class ClaudeDesktopLinkRouter {
-    static let shared = ClaudeDesktopLinkRouter()
+public final class ClaudeDesktopLinkRouter {
+    /// The URL scheme this router handles.
+    public static let scheme = "claude"
 
-    static let scheme = "claude"
-    nonisolated static let claudeBundleIdentifier = "com.anthropic.claudefordesktop"
-
+    private let handlerApplicationURL: URL
+    private let processLedger: ForeignWindowProcessLedger
+    private let logger: ForeignWindowLogger
     private var claimed = false
-    private var terminationObserver: NSObjectProtocol?
+    private var terminationObserver: (any NSObjectProtocol)?
 
-    private init() {}
+    /// Creates a router.
+    ///
+    /// - Parameter handlerApplicationURL: The app bundle that becomes the
+    ///   `claude` handler while it owns Claude processes (the host app).
+    /// - Parameter processLedger: Which Claude processes the host launched.
+    /// - Parameter logger: Receives routing diagnostics.
+    public init(
+        handlerApplicationURL: URL,
+        processLedger: ForeignWindowProcessLedger,
+        logger: ForeignWindowLogger = .disabled
+    ) {
+        self.handlerApplicationURL = handlerApplicationURL
+        self.processLedger = processLedger
+        self.logger = logger
+    }
 
     /// Called at launch: gives the scheme back to Claude if a previous cmux run
     /// claimed it and quit (or crashed) before restoring it.
-    func restoreIfOrphaned() {
+    public func restoreIfOrphaned() {
         guard !claimed, currentHandlerIsCmux else { return }
         restoreClaudeHandler(waitForCompletion: false)
     }
@@ -41,50 +58,50 @@ final class ClaudeDesktopLinkRouter {
     /// Makes cmux the `claude` handler while cmux owns Claude processes.
     /// Idempotent; called whenever cmux launches a Claude process for a pane.
     /// macOS may ask the user to confirm the change once.
-    func claimSchemeIfNeeded() {
+    public func claimSchemeIfNeeded() {
         guard !claimed else { return }
         claimed = true
-        setHandler(Bundle.main.bundleURL) { error in
-#if DEBUG
-            cmuxDebugLog("claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none")")
-#endif
+        let logger = logger
+        setHandler(handlerApplicationURL) { error in
+            logger("claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none")")
         }
         guard terminationObserver == nil else { return }
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
-        ) { _ in
+        ) { [weak self] _ in
             MainActor.assumeIsolated {
-                ClaudeDesktopLinkRouter.shared.restoreClaudeHandler(waitForCompletion: true)
+                self?.restoreClaudeHandler(waitForCompletion: true)
             }
         }
     }
 
     /// Called when a cmux-owned Claude process goes away; hands the scheme back
     /// once none are left.
-    func releaseSchemeIfUnused() {
-        guard claimed, ForeignWindowSession.ownedProcessIdentifiers.isEmpty else { return }
+    public func releaseSchemeIfUnused() {
+        guard claimed, processLedger.ownedProcessIdentifiers.isEmpty else { return }
         restoreClaudeHandler(waitForCompletion: false)
     }
 
-    /// Returns true when `url` is a `claude://` link this router handled.
-    func route(_ url: URL) -> Bool {
+    /// Forwards a `claude://` link to the right Claude instance.
+    ///
+    /// - Parameter url: A URL the host app was asked to open.
+    /// - Returns: `true` when `url` is a `claude://` link this router handled.
+    public func route(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == Self.scheme else { return false }
         let instances = NSRunningApplication
-            .runningApplications(withBundleIdentifier: Self.claudeBundleIdentifier)
+            .runningApplications(withBundleIdentifier: ClaudeDesktopProfileStore.bundleIdentifier)
             .filter { !$0.isTerminated && $0.activationPolicy == .regular }
-        let owned = ForeignWindowSession.ownedProcessIdentifiers
+        let owned = processLedger.ownedProcessIdentifiers
         let isSignInCallback = url.host?.lowercased() == "login"
         let targets = isSignInCallback
             ? instances
             : instances.filter { !owned.contains($0.processIdentifier) }.prefix(1).map { $0 }
-#if DEBUG
-        cmuxDebugLog(
+        logger(
             "claudeLinkRouter.route signIn=\(isSignInCallback) path=\(url.host ?? "")\(url.path) "
                 + "targets=\(targets.map(\.processIdentifier)) owned=\(owned.sorted())"
         )
-#endif
         if targets.isEmpty {
             openInNewClaudeInstance(url)
             return true
@@ -100,20 +117,21 @@ final class ClaudeDesktopLinkRouter {
               let handlerURL = NSWorkspace.shared.urlForApplication(toOpen: probe) else {
             return false
         }
-        return handlerURL.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+        return handlerURL.standardizedFileURL == handlerApplicationURL.standardizedFileURL
     }
 
     private func restoreClaudeHandler(waitForCompletion: Bool) {
         claimed = false
         guard let claudeURL = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: Self.claudeBundleIdentifier
+            withBundleIdentifier: ClaudeDesktopProfileStore.bundleIdentifier
         ) else { return }
-        // At quit the process may exit before the change lands; wait briefly.
+        // At quit the process may exit before the change lands, and
+        // willTerminate cannot suspend, so a bounded semaphore wait is the only
+        // way to hold the process until Launch Services answers.
         let done = DispatchSemaphore(value: 0)
+        let logger = logger
         setHandler(claudeURL) { error in
-#if DEBUG
-            cmuxDebugLog("claudeLinkRouter.restore error=\(error?.localizedDescription ?? "none")")
-#endif
+            logger("claudeLinkRouter.restore error=\(error?.localizedDescription ?? "none")")
             done.signal()
         }
         if waitForCompletion {
@@ -121,7 +139,7 @@ final class ClaudeDesktopLinkRouter {
         }
     }
 
-    private func setHandler(_ applicationURL: URL, completion: @escaping @Sendable (Error?) -> Void) {
+    private func setHandler(_ applicationURL: URL, completion: @escaping @Sendable ((any Error)?) -> Void) {
         NSWorkspace.shared.setDefaultApplication(
             at: applicationURL,
             toOpenURLsWithScheme: Self.scheme,
@@ -147,23 +165,21 @@ final class ClaudeDesktopLinkRouter {
         do {
             _ = try event.sendEvent(options: [.noReply], timeout: 5)
         } catch {
-#if DEBUG
-            cmuxDebugLog(
+            logger(
                 "claudeLinkRouter.sendFailed pid=\(processIdentifier) "
                     + "error=\(error.localizedDescription)"
             )
-#endif
         }
     }
 
     private func openInNewClaudeInstance(_ url: URL) {
         guard let applicationURL = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: Self.claudeBundleIdentifier
+            withBundleIdentifier: ClaudeDesktopProfileStore.bundleIdentifier
         ) else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         // Pane instances are running; a fresh instance is the user's own.
         configuration.createsNewApplicationInstance =
-            !ForeignWindowSession.ownedProcessIdentifiers.isEmpty
+            !processLedger.ownedProcessIdentifiers.isEmpty
         NSWorkspace.shared.open(
             [url],
             withApplicationAt: applicationURL,

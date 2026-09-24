@@ -30,6 +30,7 @@ import WebKit
 import Combine
 import ObjectiveC.runtime
 import Darwin
+import CmuxForeignWindows
 import CmuxFoundation
 import CmuxSentryReporting
 import CmuxSidebar
@@ -1509,7 +1510,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func application(_ application: NSApplication, open incomingURLs: [URL]) {
         // Claude Desktop links go to the right Claude instance while cmux hosts
         // Claude panes; everything else keeps the normal path.
-        let urls = incomingURLs.filter { !ClaudeDesktopLinkRouter.shared.route($0) }
+        let linkRouter = ClaudeDesktopAppRuntime.hosting.linkRouter
+        let urls = incomingURLs.filter { linkRouter?.route($0) != true }
         guard !urls.isEmpty else { return }
         #if DEBUG
         AuthDebugLog().log("auth.openURLs.received count=\(urls.count) summaries=\(urls.map(Self.authURLDebugSummary).joined(separator: "|"))")
@@ -1626,7 +1628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         systemAppearanceObserver.startObserving()
         BrowserSystemProxyWatcher.shared.startObserving()
         ForeignWindowYieldTriggers.shared.start()
-        ClaudeDesktopLinkRouter.shared.restoreIfOrphaned()
+        ClaudeDesktopAppRuntime.hosting.linkRouter?.restoreIfOrphaned()
         if isRunningUnderXCTest {
             NSApp.setActivationPolicy(.regular)
         } else {

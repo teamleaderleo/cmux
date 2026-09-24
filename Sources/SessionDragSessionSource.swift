@@ -1,5 +1,6 @@
 import AppKit
 import Bonsplit
+import CmuxForeignWindows
 
 /// Retained native source whose terminal callback owns Vault drag completion.
 @MainActor
@@ -32,7 +33,7 @@ final class SessionDragSessionSource: NSObject, NSDraggingSource {
         self.transferRegistration = transferRegistration
         self.transferRegistry = transferRegistry
         self.onFinish = onFinish
-        self.foreignWindowYield = ForeignWindowYieldCoordinator.shared.beginYield(reason: "session-drag")
+        self.foreignWindowYield = ClaudeDesktopAppRuntime.hosting.yieldCoordinator.beginYield(reason: "session-drag")
     }
 
     func draggingSession(
@@ -74,7 +75,7 @@ final class SessionDragSessionSource: NSObject, NSDraggingSource {
         guard case .active = phase else { return }
         phase = .finished
         if let foreignWindowYield {
-            ForeignWindowYieldCoordinator.shared.endYield(foreignWindowYield)
+            ClaudeDesktopAppRuntime.hosting.yieldCoordinator.endYield(foreignWindowYield)
             self.foreignWindowYield = nil
         }
         transferRegistry.end(transferRegistration)

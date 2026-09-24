@@ -178,6 +178,9 @@
          location = "group:CmuxFilePreviewCore">
       </FileRef>
       <FileRef
+         location = "group:CmuxForeignWindows">
+      </FileRef>
+      <FileRef
          location = "group:CmuxFoundation">
       </FileRef>
       <FileRef
