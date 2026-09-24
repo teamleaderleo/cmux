@@ -2,8 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CI_FILE="$ROOT_DIR/.github/workflows/ci-macos.yml"
-RELEASE_FILE="$ROOT_DIR/.github/workflows/release.yml"
+# Pin upstream routing: read the workflows with each owner-gated fork fallback
+# collapsed to the Blacksmith literal an upstream run evaluates. The gate itself
+# is pinned by tests/test_ci_fork_runner_fallbacks.py.
+COLLAPSED_WORKFLOWS="$(mktemp -d)"
+trap 'rm -rf -- "$COLLAPSED_WORKFLOWS"' EXIT
+python3 "$ROOT_DIR/scripts/ci/runner_fallback.py" collapse-tree "$ROOT_DIR/.github/workflows" "$COLLAPSED_WORKFLOWS"
+CI_FILE="$COLLAPSED_WORKFLOWS/ci-macos.yml"
+RELEASE_FILE="$COLLAPSED_WORKFLOWS/release.yml"
 
 # nightly.yml is intentionally not covered here. It has its own helper-build
 # model and guards via test_ci_nightly_xcode_selection.sh plus

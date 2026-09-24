@@ -11,17 +11,27 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CI_FILE="$ROOT_DIR/.github/workflows/ci.yml"
-CI_MACOS_FILE="$ROOT_DIR/.github/workflows/ci-macos.yml"
-CI_WEB_FILE="$ROOT_DIR/.github/workflows/ci-web.yml"
-PERSISTENT_COMPILE_FILE="$ROOT_DIR/.github/workflows/persistent-macos-compile.yml"
-PERSISTENT_ROUTER_FILE="$ROOT_DIR/.github/workflows/persistent-macos-router.yml"
-GHOSTTYKIT_FILE="$ROOT_DIR/.github/workflows/build-ghosttykit.yml"
-COMPAT_FILE="$ROOT_DIR/.github/workflows/ci-macos-compat.yml"
-E2E_FILE="$ROOT_DIR/.github/workflows/test-e2e.yml"
-TMUX_CORPUS_FILE="$ROOT_DIR/.github/workflows/tmux-corpus.yml"
-IOS_FILE="$ROOT_DIR/.github/workflows/test-ios.yml"
-CLA_GUARD_FILE="$ROOT_DIR/.github/workflows/cla-policy-guard.yml"
+# The runner checks below pin upstream routing. Every Blacksmith literal a
+# workflow falls back to is gated on the manaflow-ai owner so a fork's own runs
+# get the GitHub-hosted equivalent instead of queueing forever. Read the
+# workflows with those gates collapsed back to the Blacksmith literal, which is
+# what an upstream run evaluates; tests/test_ci_fork_runner_fallbacks.py pins
+# the gate itself (scripts/ci/runner_fallback.py).
+COLLAPSED_ROOT="$(mktemp -d)"
+trap 'rm -rf -- "$COLLAPSED_ROOT"' EXIT
+WORKFLOWS_DIR="$COLLAPSED_ROOT/.github/workflows"
+python3 "$ROOT_DIR/scripts/ci/runner_fallback.py" collapse-tree "$ROOT_DIR/.github/workflows" "$WORKFLOWS_DIR"
+CI_FILE="$WORKFLOWS_DIR/ci.yml"
+CI_MACOS_FILE="$WORKFLOWS_DIR/ci-macos.yml"
+CI_WEB_FILE="$WORKFLOWS_DIR/ci-web.yml"
+PERSISTENT_COMPILE_FILE="$WORKFLOWS_DIR/persistent-macos-compile.yml"
+PERSISTENT_ROUTER_FILE="$WORKFLOWS_DIR/persistent-macos-router.yml"
+GHOSTTYKIT_FILE="$WORKFLOWS_DIR/build-ghosttykit.yml"
+COMPAT_FILE="$WORKFLOWS_DIR/ci-macos-compat.yml"
+E2E_FILE="$WORKFLOWS_DIR/test-e2e.yml"
+TMUX_CORPUS_FILE="$WORKFLOWS_DIR/tmux-corpus.yml"
+IOS_FILE="$WORKFLOWS_DIR/test-ios.yml"
+CLA_GUARD_FILE="$WORKFLOWS_DIR/cla-policy-guard.yml"
 
 check_cla_guard_runner() {
   if ! grep -Fqx '    runs-on: ubuntu-24.04' "$CLA_GUARD_FILE"; then
@@ -257,7 +267,7 @@ check_ios_tart_canary() {
 }
 
 check_xcode_selection() {
-  if grep -R -n "ls -d /Applications/Xcode" "$ROOT_DIR/.github/workflows"; then
+  if grep -R -n "ls -d /Applications/Xcode" "$WORKFLOWS_DIR"; then
     echo "FAIL: workflow Xcode selection must use find/sort/tail fallback, not ls/glob ordering"
     exit 1
   fi
@@ -443,7 +453,7 @@ check_signing_intermediate_imports() {
     exit 1
   fi
 
-  for file in "$ROOT_DIR/.github/workflows/nightly.yml" "$ROOT_DIR/.github/workflows/release.yml"; do
+  for file in "$WORKFLOWS_DIR/nightly.yml" "$WORKFLOWS_DIR/release.yml"; do
     if ! awk '
       /- name: Import signing cert/ { in_step=1; next }
       in_step && /^[[:space:]]*- name:/ { in_step=0 }
@@ -606,7 +616,7 @@ check_sentry_cli_install_portability() {
     exit 1
   fi
 
-  for file in "$ROOT_DIR/.github/workflows/nightly.yml" "$ROOT_DIR/.github/workflows/release.yml"; do
+  for file in "$WORKFLOWS_DIR/nightly.yml" "$WORKFLOWS_DIR/release.yml"; do
     if grep -Fq 'brew install getsentry/tools/sentry-cli' "$file"; then
       echo "FAIL: $(basename "$file") must not require Homebrew for sentry-cli on self-hosted signing runners"
       exit 1
@@ -706,9 +716,9 @@ EOF
 }
 
 check_dmg_signing_uses_build_keychain() {
-  local nightly_workflow="$ROOT_DIR/.github/workflows/nightly.yml"
+  local nightly_workflow="$WORKFLOWS_DIR/nightly.yml"
   local nightly_helper="$ROOT_DIR/scripts/ci/notarize-nightly-dmg.sh"
-  local release_workflow="$ROOT_DIR/.github/workflows/release.yml"
+  local release_workflow="$WORKFLOWS_DIR/release.yml"
 
   if ! grep -Fq './scripts/ci/notarize-nightly-dmg.sh \' "$nightly_workflow"; then
     echo "FAIL: nightly workflow must invoke the guarded notarization helper"
@@ -748,7 +758,7 @@ check_dmg_signing_uses_build_keychain() {
 }
 
 check_create_dmg_uses_run_local_npm_prefix() {
-  for file in "$ROOT_DIR/.github/workflows/nightly.yml" "$ROOT_DIR/.github/workflows/release.yml"; do
+  for file in "$WORKFLOWS_DIR/nightly.yml" "$WORKFLOWS_DIR/release.yml"; do
     if ! awk '
       /- name: Install build deps/ { in_step=1; next }
       in_step && /^[[:space:]]*- name:/ { in_step=0 }
@@ -789,12 +799,12 @@ check_gui_smoke_unsupported_launch_handling() {
     /scripts\/smoke-launch-macos-app\.sh/ && /CMUX_SMOKE_ALLOW_UNSUPPORTED_GUI=1/ { saw_launchservices=1 }
     /scripts\/smoke-launch-macos-app\.sh/ && /CMUX_SMOKE_DIRECT_EXEC=1/ { saw_direct_exec=1 }
     END { exit !(saw_launchservices && saw_direct_exec) }
-  ' "$ROOT_DIR/.github/workflows/release.yml"; then
+  ' "$WORKFLOWS_DIR/release.yml"; then
     echo "FAIL: release signing smoke must run LaunchServices smoke before direct exec CI launch mode"
     exit 1
   fi
 
-  local nightly_workflow="$ROOT_DIR/.github/workflows/nightly.yml"
+  local nightly_workflow="$WORKFLOWS_DIR/nightly.yml"
   local nightly_helper="$ROOT_DIR/scripts/ci/notarize-nightly-dmg.sh"
   if ! grep -Fq './scripts/ci/notarize-nightly-dmg.sh \' "$nightly_workflow"; then
     echo "FAIL: nightly workflow must invoke the helper that owns launch smokes"
@@ -810,7 +820,7 @@ check_gui_smoke_unsupported_launch_handling() {
     fi
   done
 
-  if ! grep -Fq 'scripts/smoke-launch-macos-app.sh' "$ROOT_DIR/.github/workflows/release.yml"; then
+  if ! grep -Fq 'scripts/smoke-launch-macos-app.sh' "$WORKFLOWS_DIR/release.yml"; then
     echo "FAIL: release.yml signing workflow must run launch smoke"
     exit 1
   fi
@@ -870,7 +880,7 @@ check_web_db_behavior_tests() {
 check_web_test_runner_behavior() {
   local fixture_dir fixture_runner args_log expected_args live_mode
   fixture_dir="$(mktemp -d)"
-  trap 'rm -rf -- "$fixture_dir"' EXIT
+  trap 'rm -rf -- "$fixture_dir" "$COLLAPSED_ROOT"' EXIT
   fixture_runner="$fixture_dir/web/scripts/run-tests.sh"
   args_log="$fixture_dir/bun-args.log"
   mkdir -p \
@@ -1109,7 +1119,7 @@ EOF
   fi
 
   rm -rf "$fixture_dir"
-  trap - EXIT
+  trap 'rm -rf -- "$COLLAPSED_ROOT"' EXIT
   echo "PASS: shared web test runner sorts recursive discovery and fails closed when empty"
 }
 
@@ -1152,7 +1162,7 @@ check_no_bare_github_hosted_runners() {
   # deliberately run on GitHub-hosted ephemeral runners so untrusted
   # policy/source bytes cannot redirect execution to a persistent or
   # contributor-controlled machine. Exempt those files here instead.
-  hits="$(grep -rnE "runs-on:[[:space:]]*(ubuntu-[a-z0-9.]+|macos-[a-z0-9]+)([[:space:]]*$|[[:space:]]+#)" "$ROOT_DIR/.github/workflows" | grep -v "github-hosted-required" | grep -v "/cla-policy-guard.yml:" | grep -v "/web-complexity-trusted.yml:" | grep -v "/merge-group-policy-checks.yml:" || true)"
+  hits="$(grep -rnE "runs-on:[[:space:]]*(ubuntu-[a-z0-9.]+|macos-[a-z0-9]+)([[:space:]]*$|[[:space:]]+#)" "$WORKFLOWS_DIR" | grep -v "github-hosted-required" | grep -v "/cla-policy-guard.yml:" | grep -v "/web-complexity-trusted.yml:" | grep -v "/merge-group-policy-checks.yml:" || true)"
   if [[ -n "$hits" ]]; then
     echo "FAIL: these jobs use a bare GitHub-hosted runner; route them through vars.LINUX_RUNNER / vars.MACOS_RUNNER_IOS so Blacksmith<->overflow stays a repo-variable flip:"
     echo "$hits"
@@ -1270,7 +1280,7 @@ check_no_self_hosted_fleet_runners() {
       continue
     fi
     hits+="$line"$'\n'
-  done < <(grep -rnE "(runs-on:|^[[:space:]]+(labels|group):|[[:space:]]os:[[:space:]]|^[[:space:]]*-[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$)" "$ROOT_DIR/.github/workflows")
+  done < <(grep -rnE "(runs-on:|^[[:space:]]+(labels|group):|[[:space:]]os:[[:space:]]|^[[:space:]]*-[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$)" "$WORKFLOWS_DIR")
   if [[ -n "$hits" ]]; then
     echo "FAIL: workflow references a self-hosted mac fleet label or bare self-hosted runner in a runner-selection position."
     echo "      Use a cloud label so required jobs never land on a mini that can't foreground a GUI app:"
@@ -1802,7 +1812,7 @@ on:\n  pull_request:\n  pull_request_target:~ci-${{ github.ref }}~${{ github.eve
 CASES
   rm -f "$probe"
 
-  for file in "$ROOT_DIR"/.github/workflows/*.yml "$ROOT_DIR"/.github/workflows/*.yaml; do
+  for file in "$WORKFLOWS_DIR"/*.yml "$WORKFLOWS_DIR"/*.yaml; do
     [ -f "$file" ] || continue
     grep -qE 'runs-on:.*(macos|MACOS_RUNNER)' "$file" || continue
     if [ -z "$(pr_workflow_events "$file")" ]; then
@@ -1839,7 +1849,7 @@ check_macos_xcode_pin_tracks_pull_request_lane() {
   # pull-request variant, unless its exact (file, job, key) is exempted below
   # with a reason. A macOS job added next month inherits the rule for free.
   local violations
-  violations="$(python3 - "$ROOT_DIR/.github/workflows" <<'PYTHON'
+  violations="$(python3 - "$WORKFLOWS_DIR" <<'PYTHON'
 import sys
 from pathlib import Path
 
@@ -1969,10 +1979,10 @@ check_no_paid_overflow_fallbacks() {
   # the paid overflow provider: allowed as an explicit workflow_dispatch choice,
   # never as a default.
   local hits
-  hits="$(grep -rnE "\\|\\|[[:space:]]*'warp-" "$ROOT_DIR/.github/workflows" || true)"
+  hits="$(grep -rnE "\\|\\|[[:space:]]*'warp-" "$WORKFLOWS_DIR" || true)"
   if [ -n "$hits" ]; then
     echo "FAIL: workflows must not fall back to a Warp runner; use the Blacksmith label the rest of CI falls back to"
-    echo "$hits" | sed "s|$ROOT_DIR/||" | cut -c1-160
+    echo "$hits" | sed -e "s|$COLLAPSED_ROOT/||" -e "s|$ROOT_DIR/||" | cut -c1-160
     exit 1
   fi
   echo "PASS: no workflow falls back to a Warp runner"
@@ -2059,10 +2069,10 @@ check_background_macos_lane() {
       if [[ "$rel:$content" == "$exception" ]]; then allowed=1; break; fi
     done
     [[ "$allowed" -eq 1 ]] && continue
-    echo "FAIL: GitHub-hosted macOS label outside the background lane: ${line#"$ROOT_DIR"/}"
+    echo "FAIL: GitHub-hosted macOS label outside the background lane: ${line#"$COLLAPSED_ROOT"/}"
     echo "      Use \${{ $lane_expr }} for non-urgent work, or a MACOS_RUNNER_* variable with a Blacksmith fallback."
     failed=1
-  done < <(grep -rnE "(runs-on:|[[:space:]](os|runner|macos_runner):[[:space:]]|^[[:space:]]*-[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$)" "$ROOT_DIR/.github/workflows")
+  done < <(grep -rnE "(runs-on:|[[:space:]](os|runner|macos_runner):[[:space:]]|^[[:space:]]*-[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$)" "$WORKFLOWS_DIR")
 
   # 2. Every reference carries exactly the hosted fallback, so an unset
   #    variable (and every fork) lands on free capacity, never Warp.
@@ -2087,7 +2097,7 @@ check_background_macos_lane() {
       echo "      The background lane is for dispatch-only, scheduled and post-merge work."
       failed=1
     fi
-  done < <(grep -rlF 'vars.MACOS_RUNNER_BACKGROUND' "$ROOT_DIR/.github/workflows" || true)
+  done < <(grep -rlF 'vars.MACOS_RUNNER_BACKGROUND' "$WORKFLOWS_DIR" || true)
 
   [ "$failed" -eq 0 ] || exit 1
   echo "PASS: GitHub-hosted macOS labels appear only as the MACOS_RUNNER_BACKGROUND fallback on non-blocking workflows"

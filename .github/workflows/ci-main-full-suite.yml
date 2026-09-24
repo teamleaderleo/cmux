@@ -35,7 +35,7 @@ jobs:
   dispatch:
     name: Dispatch full-suite CI on main
     if: ${{ github.event_name != 'workflow_run' && github.ref == 'refs/heads/main' }}
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || (github.repository_owner == 'manaflow-ai' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     # Never cancel: a queued tick waits for the previous one. Dispatched CI
     # runs share ci.yml's main concurrency group, which does not cancel
@@ -87,7 +87,7 @@ jobs:
     # scheduled tick re-syncs from the newest green or red run, so a missed
     # workflow_run event is caught within one tick. Reports are idempotent.
     if: ${{ (github.event_name != 'workflow_run' && github.ref == 'refs/heads/main') || (github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.path == '.github/workflows/ci.yml') }}
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || (github.repository_owner == 'manaflow-ai' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     concurrency:
       group: ci-main-full-suite-report

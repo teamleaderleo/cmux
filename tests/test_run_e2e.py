@@ -15,7 +15,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNNER = re.search(
-    r"vars\.MACOS_RUNNER_TESTS \|\| '([^']+)'",
+    r"vars\.MACOS_RUNNER_TESTS \|\| "
+    r"(?:\(github\.repository_owner == 'manaflow-ai' && )?'([^']+)'",
     (ROOT / ".github/workflows/test-e2e.yml").read_text(),
 ).group(1)
 HEAD = "a" * 40

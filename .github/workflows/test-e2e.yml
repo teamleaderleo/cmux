@@ -1,5 +1,5 @@
 name: E2E test with video recording
-run-name: ${{ inputs.test_filter }} on ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }} @ ${{ inputs.ref || github.ref_name }}${{ inputs.dispatch_id != '' && format(' [{0}]', inputs.dispatch_id) || '' }}
+run-name: ${{ inputs.test_filter }} on ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }} @ ${{ inputs.ref || github.ref_name }}${{ inputs.dispatch_id != '' && format(' [{0}]', inputs.dispatch_id) || '' }}
 
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ on:
           - tart-small
 
 concurrency:
-  group: e2e-${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}-${{ inputs.ref || github.ref_name }}-${{ inputs.test_filter }}
+  group: e2e-${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}-${{ inputs.ref || github.ref_name }}-${{ inputs.test_filter }}
   cancel-in-progress: true
 
 # This lane checks out and compiles a dispatcher-chosen ref, so it should hold
@@ -63,7 +63,7 @@ jobs:
     # Seconds on Linux, and it rejects a malformed selector before either
     # macOS job is scheduled. After the build/test split a bad filter would
     # otherwise surface only once a full compile had already been paid for.
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.LINUX_RUNNER || (github.repository_owner == 'manaflow-ai' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     outputs:
       target: ${{ steps.filter.outputs.target }}
       filter: ${{ steps.filter.outputs.filter }}
@@ -190,7 +190,7 @@ jobs:
 
   build:
     needs: [resolve-ref, filter]
-    runs-on: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}
+    runs-on: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}
     # Reuse lists this contract's artifacts and downloads one from an earlier
     # run. Nothing else in this lane reads the Actions API, and nothing writes.
     permissions:
@@ -213,13 +213,13 @@ jobs:
       # to close that gap; the intra-run handoff uses the artifact id, not the
       # name, so nothing here depends on it.
       CMUX_SKIP_ZIG_BUILD: "1"
-      CMUX_PRODUCT_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}
+      CMUX_PRODUCT_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}
     steps:
 
       - name: Validate Tart canary identity
-        if: ${{ startsWith((!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner, 'tart-') }}
+        if: ${{ startsWith((!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner, 'tart-') }}
         env:
-          REQUESTED_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}
+          REQUESTED_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}
           RUNNER_CONTEXT_NAME: ${{ runner.name }}
         run: |
           set -euo pipefail
@@ -606,7 +606,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}
+    runs-on: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}
     timeout-minutes: ${{ fromJSON(inputs.job_timeout || '45') }}
     env:
       CMUX_CI_MAX_MACOS_SDK_MAJOR: "26"
@@ -624,9 +624,9 @@ jobs:
     steps:
 
       - name: Validate Tart canary identity
-        if: ${{ startsWith((!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner, 'tart-') }}
+        if: ${{ startsWith((!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner, 'tart-') }}
         env:
-          REQUESTED_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || 'blacksmith-6vcpu-macos-26') || inputs.runner }}
+          REQUESTED_RUNNER: ${{ (!inputs.runner || inputs.runner == 'auto') && (vars.MACOS_RUNNER_TESTS || (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26')) || inputs.runner }}
           RUNNER_CONTEXT_NAME: ${{ runner.name }}
         run: |
           set -euo pipefail

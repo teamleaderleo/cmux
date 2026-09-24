@@ -152,6 +152,37 @@ fallback, never on paid capacity. `test-e2e.yml` is `workflow_dispatch`-only,
 so a fork never reaches its fallback at all; for the lanes a fork does reach,
 the fallback is still the runner they used before these variables existed.
 
+## Outside manaflow-ai
+
+Blacksmith runners exist only in the manaflow-ai organization. A fork's own
+runs (a push, dispatch or schedule in `someone/cmux`) that fell back to a
+Blacksmith label would queue forever, and the stuck run would hold its
+concurrency group so later runs on the same ref queued behind it. So every
+Blacksmith fallback is written owner-gated:
+
+```yaml
+runs-on: ${{ vars.LINUX_RUNNER || (github.repository_owner == 'manaflow-ai' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+```
+
+In manaflow-ai the parenthesised token is exactly the old literal, so routing
+there is unchanged, including for pull requests from forks, which run in the
+upstream repository. Anywhere else it is the GitHub-hosted image with the same
+OS: `ubuntu-24.04` for every Linux size, `macos-15` and `macos-26` for the
+macOS pools. A fork needs no repository variables to run CI; a variable it does
+set still wins, exactly as upstream.
+
+Two dispatch inputs default to a Blacksmith label (`cloud-command-deadlines.yml`
+and `reload-build.yml`); their `runs-on` reads translate that default the same
+way. Choosing a Blacksmith option by hand on a fork dispatch still requests
+Blacksmith. The Blacksmith Testbox broker (`cmux-tui-testbox-warmup.yml`) has
+no hosted equivalent, so it is skipped outside manaflow-ai instead.
+
+`scripts/ci/runner_fallback.py` defines the shapes.
+`tests/test_ci_fork_runner_fallbacks.py` fails on any Blacksmith label a
+zero-configuration run outside manaflow-ai could select. The guards that pin
+upstream routing read the workflows with the gate collapsed back to the
+Blacksmith literal.
+
 ## Background lane
 
 `MACOS_RUNNER_BACKGROUND` moves macOS work that nobody is waiting on off the

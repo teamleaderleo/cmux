@@ -28,6 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
+sys.path.insert(0, str(ROOT / "scripts" / "ci"))
+from runner_fallback import collapse  # noqa: E402
+
+sys.path.pop(0)
+
 # variable -> the literal the repository sets, which an unset read must use.
 # Each is cheap: the compile-only suite over the full macOS suite, and the
 # cache the repository actually populates over no cache at all.
@@ -111,6 +116,17 @@ def workflow_files() -> list[Path]:
     return sorted(WORKFLOWS.glob("*.y*ml"))
 
 
+def upstream_text(path: Path) -> str:
+    """The workflow as manaflow-ai evaluates it.
+
+    A Blacksmith fallback is written owner-gated so a fork's own runs get the
+    GitHub-hosted equivalent (scripts/ci/runner_fallback.py). Upstream the gate
+    evaluates to the Blacksmith literal, so the rules here read that literal;
+    tests/test_ci_fork_runner_fallbacks.py pins the gate.
+    """
+    return collapse(path.read_text(encoding="utf-8"))
+
+
 def follows_with_literal_default(text: str, end: int) -> bool:
     """True when `... || 'literal'` immediately follows the variable read."""
     return re.match(r"\s*\|\|\s*'[^']+'", text[end:]) is not None
@@ -136,7 +152,7 @@ def default_chain_reaches_literal(text: str, end: int) -> bool:
 
 
 def check_runs_on(path: Path, errors: list[str]) -> None:
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for number, line in enumerate(upstream_text(path).splitlines(), start=1):
         matched = RUNS_ON.match(line)
         if matched is None:
             continue
@@ -154,7 +170,7 @@ def check_runs_on(path: Path, errors: list[str]) -> None:
 
 
 def check_cheap_defaults(path: Path, errors: list[str]) -> None:
-    text = path.read_text(encoding="utf-8")
+    text = upstream_text(path)
     offset = 0
     for number, line in enumerate(text.splitlines(), start=1):
         if not line.lstrip().startswith("#"):
@@ -196,7 +212,7 @@ def check_paid_overflow_gate(path: Path, errors: list[str]) -> None:
     both an admin-set runner variable and CI_PAID_MACOS_OVERFLOW=1. Unset, the
     literal Blacksmith fallback wins, which is the cheap path.
     """
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = upstream_text(path).splitlines()
     for number, line in enumerate(lines, start=1):
         if line.lstrip().startswith("#"):
             continue

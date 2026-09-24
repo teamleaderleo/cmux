@@ -3,7 +3,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-WORKFLOW_FILE="$ROOT_DIR/.github/workflows/nightly.yml"
+# Pin upstream routing: read the workflows with each owner-gated fork fallback
+# collapsed to the Blacksmith literal an upstream run evaluates. The gate itself
+# is pinned by tests/test_ci_fork_runner_fallbacks.py.
+COLLAPSED_WORKFLOWS="$(mktemp -d)"
+trap 'rm -rf -- "$COLLAPSED_WORKFLOWS"' EXIT
+python3 "$ROOT_DIR/scripts/ci/runner_fallback.py" collapse-tree "$ROOT_DIR/.github/workflows" "$COLLAPSED_WORKFLOWS"
+WORKFLOW_FILE="$COLLAPSED_WORKFLOWS/nightly.yml"
 
 if ! awk '
   /^      - name: Build nightly app \(Release\)/ { in_build=1; next }
@@ -151,7 +157,7 @@ if ! awk '
   exit 1
 fi
 
-CI_WORKFLOW_FILE="$ROOT_DIR/.github/workflows/ci-macos.yml"
+CI_WORKFLOW_FILE="$COLLAPSED_WORKFLOWS/ci-macos.yml"
 # A cache saved from a pull request is readable only by that pull request, and
 # each save pushes the main seeds out of a size-capped store. Pull request
 # Release builds read the cache warmed from main and never write one.
@@ -328,7 +334,7 @@ if ! awk '
   exit 1
 fi
 
-RELEASE_WORKFLOW_FILE="$ROOT_DIR/.github/workflows/release.yml"
+RELEASE_WORKFLOW_FILE="$COLLAPSED_WORKFLOWS/release.yml"
 if ! awk '
   /^      - name: Strip release binaries/ { strip_line=NR }
   /^      - name: Verify Cloud tunnel engine before signing/ { verify_line=NR }

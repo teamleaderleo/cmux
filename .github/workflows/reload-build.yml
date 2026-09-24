@@ -78,7 +78,7 @@ jobs:
   build:
     needs: resolve-ref
     # Depot is retired for cmux builds. Legacy Depot requests use Blacksmith.
-    runs-on: ${{ startsWith(inputs.runner, 'depot-') && 'blacksmith-6vcpu-macos-26' || inputs.runner }}
+    runs-on: ${{ startsWith(inputs.runner, 'depot-') && (github.repository_owner == 'manaflow-ai' && 'blacksmith-6vcpu-macos-26' || 'macos-26') || (github.repository_owner == 'manaflow-ai' && inputs.runner || inputs.runner == 'blacksmith-6vcpu-macos-26' && 'macos-26' || inputs.runner) }}
     timeout-minutes: 60
     env:
       # The ghostty CLI helper zig build is skipped; GhosttyKit comes prebuilt.

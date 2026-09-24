@@ -203,8 +203,12 @@ def default_runner() -> str | None:
         workflow = (ROOT / ".github/workflows" / WORKFLOW).read_text()
     except OSError:
         return None
+    # REPO is manaflow-ai/cmux, so the literal is the Blacksmith label inside
+    # the owner-gated fork fallback (scripts/ci/runner_fallback.py).
     literal = re.search(
-        r"vars\.MACOS_RUNNER_TESTS \|\| '([^']+)'", workflow
+        r"vars\.MACOS_RUNNER_TESTS \|\| "
+        r"(?:\(github\.repository_owner == 'manaflow-ai' && )?'([^']+)'",
+        workflow,
     )
     return literal.group(1) if literal else None
 

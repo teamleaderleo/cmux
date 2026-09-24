@@ -503,7 +503,11 @@ class WorkflowShapeTests(unittest.TestCase):
         self.assertIn("dry_run:", text)
         self.assertNotIn("pull_request", text.split("jobs:")[0].replace("pull-requests: read", ""))
         self.assertIn("permissions:\n  actions: write\n  pull-requests: read\n  contents: read\n", text)
-        self.assertIn("runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}", text)
+        self.assertIn(
+            "runs-on: ${{ vars.LINUX_RUNNER || "
+            "(github.repository_owner == 'manaflow-ai' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+            text,
+        )
         self.assertIn("concurrency:\n  group: ci-queue-janitor\n  cancel-in-progress: false\n", text)
         self.assertIn("vars.CI_JANITOR_QUEUE_THRESHOLD", text)
         self.assertIn("run: python3 scripts/ci/queue_janitor.py", text)

@@ -12,6 +12,10 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts' / 'ci'))
+from runner_fallback import collapse  # noqa: E402
+
+sys.path.pop(0)
 WORKFLOW = yaml.safe_load((ROOT / '.github/workflows/test-e2e.yml').read_text())
 JOBS = {name: spec['steps'] for name, spec in WORKFLOW['jobs'].items() if 'steps' in spec}
 
@@ -321,7 +325,9 @@ exit 97
         start = guard.index('check_e2e_runner_fallbacks() {')
         end = guard.index('\ncheck_ios_tart_canary()', start)
         invoke = guard[start:end] + '\ncheck_e2e_runner_fallbacks\n'
-        workflow = (ROOT / '.github/workflows/test-e2e.yml').read_text()
+        # The guard reads workflows with the owner-gated fork fallback collapsed
+        # to the upstream Blacksmith literal; feed it the same text.
+        workflow = collapse((ROOT / '.github/workflows/test-e2e.yml').read_text())
         candidate = self.root / 'workflow.yml'
         for text, succeeds in (
             (workflow, True),
