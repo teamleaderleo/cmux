@@ -1,5 +1,6 @@
 import Foundation
 
+/// An error the cmux CLI reports to its caller.
 struct CLIError: Error, CustomStringConvertible {
     enum SocketFailureKind: Equatable {
         case pathMissing
