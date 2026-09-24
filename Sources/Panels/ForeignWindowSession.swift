@@ -52,7 +52,19 @@ final class ForeignWindowSession: ForeignWindowProfileSession {
     private var launchTask: Task<Void, Never>?
     private var isLaunchAllowed = true
     private var isInvalidated = false
-    private var runningApplication: NSRunningApplication?
+    /// Processes cmux launched for foreign-window surfaces. The Claude link
+    /// router uses this to tell pane-owned Claude instances from the user's own.
+    private(set) static var ownedProcessIdentifiers: Set<pid_t> = []
+
+    private var runningApplication: NSRunningApplication? {
+        didSet {
+            if let oldValue { Self.ownedProcessIdentifiers.remove(oldValue.processIdentifier) }
+            if let runningApplication {
+                Self.ownedProcessIdentifiers.insert(runningApplication.processIdentifier)
+                ClaudeDesktopLinkRouter.shared.claimSchemeIfNeeded()
+            }
+        }
+    }
     private var applicationElement: AXUIElement?
     private var externalWindow: AXUIElement?
     private var observedWindow: AXUIElement?

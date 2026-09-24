@@ -1506,7 +1506,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    func application(_ application: NSApplication, open urls: [URL]) {
+    func application(_ application: NSApplication, open incomingURLs: [URL]) {
+        // Claude Desktop links go to the right Claude instance while cmux hosts
+        // Claude panes; everything else keeps the normal path.
+        let urls = incomingURLs.filter { !ClaudeDesktopLinkRouter.shared.route($0) }
+        guard !urls.isEmpty else { return }
         #if DEBUG
         AuthDebugLog().log("auth.openURLs.received count=\(urls.count) summaries=\(urls.map(Self.authURLDebugSummary).joined(separator: "|"))")
         #endif
@@ -1622,6 +1626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         systemAppearanceObserver.startObserving()
         BrowserSystemProxyWatcher.shared.startObserving()
         ForeignWindowYieldTriggers.shared.start()
+        ClaudeDesktopLinkRouter.shared.restoreIfOrphaned()
         if isRunningUnderXCTest {
             NSApp.setActivationPolicy(.regular)
         } else {
