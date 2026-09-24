@@ -45,7 +45,10 @@ permissions:
 jobs:
   resolve:
     name: Resolve runner capabilities
-    runs-on: ${{ vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
+    # This job cannot use the map it produces, so it picks its own runner by
+    # owner. A fork does not inherit LINUX_RUNNER, and a Blacksmith label there
+    # queues forever, holding every caller that `needs: runners`.
+    runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' || vars.LINUX_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       map: ${{ steps.resolve.outputs.map }}

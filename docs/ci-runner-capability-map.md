@@ -30,12 +30,13 @@ resolve_runners: fleet=hosted (owner some-personal-account is not a mapped owner
 Zero configuration. `owners` lists `manaflow-ai: blacksmith`; every other owner
 falls to `default_fleet`, which is the free GitHub-hosted fleet.
 
-The hosted fleet is a working fleet, not an identical one. GitHub publishes no
-macOS 26 image, so `macos_26`, `macos_26_ios` and `macos_26_large` all resolve
-to `macos-15` there. A fork gets a runner that starts and an older OS, which is
-the trade this makes deliberately. `macos-26` is never used as a hosted
-fallback: the self-hosted mini fleet carries that label and GitHub prefers a
-matching self-hosted runner.
+The hosted fleet is a working fleet, not an identical one: `macos_26`,
+`macos_26_ios` and `macos_26_large` all resolve to `macos-15` there. GitHub does
+offer a hosted `macos-26` label, but the hosted fleet can also be forced inside
+`manaflow-ai` with `CMUX_CI_RUNNER_FLEET=hosted`, where the self-hosted mini
+fleet carries `macos-26` and GitHub prefers a matching self-hosted runner. A
+fork therefore gets a runner that starts and an older OS, which is the trade
+this makes deliberately.
 
 ## Capability keys
 

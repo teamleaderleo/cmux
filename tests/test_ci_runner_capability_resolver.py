@@ -254,6 +254,24 @@ class WiringTests(unittest.TestCase):
                     "fromJSON() on an unset repository variable fails the whole workflow",
                 )
 
+    def test_the_resolver_job_itself_runs_on_hosted_capacity_in_a_fork(self) -> None:
+        # The resolve job cannot consume its own map. If its runs-on fell back
+        # to a Blacksmith label in a fork, it would queue forever and every
+        # caller's `needs: runners` would wait on it.
+        text = REUSABLE_WORKFLOW.read_text(encoding="utf-8")
+        runs_on = [
+            line.split("runs-on:", 1)[1].strip()
+            for line in text.splitlines()
+            if line.strip().startswith("runs-on:")
+        ]
+        self.assertEqual(len(runs_on), 1, runs_on)
+        self.assertTrue(
+            runs_on[0].startswith(
+                "${{ github.repository_owner != 'manaflow-ai' && 'ubuntu-24.04' ||"
+            ),
+            runs_on[0],
+        )
+
     def test_the_reusable_workflow_keeps_read_only_permissions(self) -> None:
         text = REUSABLE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("permissions:\n  contents: read\n", text)
