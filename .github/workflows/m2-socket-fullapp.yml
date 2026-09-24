@@ -13,20 +13,6 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        label: [macos-26, xcode-27]
-    runs-on: ${{ matrix.label }}
-    timeout-minutes: 10
-    steps:
-      - run: |
-          sw_vers; uname -m; sysctl -n hw.ncpu hw.memsize
-          ls -la /Applications | grep -i xcode || true
-          xcodebuild -version || true
-          df -h / "$HOME"
-
   measure:
     strategy:
       fail-fast: false
@@ -49,7 +35,8 @@ jobs:
           set -euo pipefail
           ls -la /Applications | grep -i xcode || true
           XC=""
-          for c in /Applications/Xcode_27*.app /Applications/Xcode.app; do
+          for c in /Applications/Xcode_27.app /Applications/Xcode_27*.app /Applications/Xcode.app; do
+            c=$(cd "$c" 2>/dev/null && pwd -P) || continue
             [ -d "$c" ] || continue
             v=$(DEVELOPER_DIR="$c/Contents/Developer" xcodebuild -version | head -1 | awk '{print $2}')
             case "$v" in 27*) XC="$c"; break ;; esac
@@ -57,7 +44,7 @@ jobs:
           if [ -z "$XC" ]; then echo "NO_XCODE_27 on this image"; exit 1; fi
           echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$XC/Contents/Developer" xcodebuild -version
-          ls -la "$XC/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libToolchainCASPlugin.dylib"
+          find "$XC/Contents/Developer" -maxdepth 6 -name "libToolchainCASPlugin*" 2>/dev/null || true
           sw_vers; sysctl -n hw.ncpu hw.memsize; df -h /
           echo "workspace real path: $(pwd -P) (logical $(pwd))"
 
