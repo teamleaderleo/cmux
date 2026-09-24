@@ -627,7 +627,7 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
         pendingRaise = false
 
         if lastAppliedFrame != targetFrame {
-            if setExternalWindowFrame(targetFrame, window: window) {
+            if setExternalWindowFrame(targetFrame, window: window, previous: lastAppliedFrame) {
                 lastAppliedFrame = targetFrame
             } else {
                 // The window may have been replaced; rebind and retry once.
@@ -635,7 +635,7 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
                 externalWindow = nil
                 guard refreshExternalWindow(),
                       let replacementWindow = externalWindow,
-                      setExternalWindowFrame(targetFrame, window: replacementWindow) else {
+                      setExternalWindowFrame(targetFrame, window: replacementWindow, previous: nil) else {
                     return
                 }
                 lastAppliedFrame = targetFrame
@@ -707,28 +707,34 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
             && abs(lhs.height - rhs.height) <= frameTolerance
     }
 
+    /// Writes only the parts of the frame that changed. A move (host window
+    /// dragged) is then one cheap position write; only a real size change
+    /// makes the hosted app lay out and redraw.
     private func setExternalWindowFrame(
         _ frame: CGRect,
-        window: AXUIElement
+        window: AXUIElement,
+        previous: CGRect?
     ) -> Bool {
-        var position = frame.origin
-        var size = frame.size
-        guard let positionValue = AXValueCreate(.cgPoint, &position),
-              let sizeValue = AXValueCreate(.cgSize, &size) else {
-            return false
+        var result = true
+        if previous?.size != frame.size {
+            var size = frame.size
+            guard let sizeValue = AXValueCreate(.cgSize, &size) else { return false }
+            result = AXUIElementSetAttributeValue(
+                window,
+                kAXSizeAttribute as CFString,
+                sizeValue
+            ) == .success && result
         }
-
-        let positionResult = AXUIElementSetAttributeValue(
-            window,
-            kAXPositionAttribute as CFString,
-            positionValue
-        )
-        let sizeResult = AXUIElementSetAttributeValue(
-            window,
-            kAXSizeAttribute as CFString,
-            sizeValue
-        )
-        return positionResult == .success && sizeResult == .success
+        if previous?.origin != frame.origin {
+            var position = frame.origin
+            guard let positionValue = AXValueCreate(.cgPoint, &position) else { return false }
+            result = AXUIElementSetAttributeValue(
+                window,
+                kAXPositionAttribute as CFString,
+                positionValue
+            ) == .success && result
+        }
+        return result
     }
 
     // MARK: AX reads

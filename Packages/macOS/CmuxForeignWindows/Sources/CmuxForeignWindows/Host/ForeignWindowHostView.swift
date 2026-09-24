@@ -386,11 +386,31 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         let shouldRaise = notification.name == NSWindow.didBecomeKeyNotification
             || notification.name == NSWindow.didDeminiaturizeNotification
         syncPresentation(raiseExternalWindow: shouldRaise)
+        if notification.name == NSWindow.didBecomeKeyNotification {
+            orderHostWindowBelowHostedWindows()
+        }
     }
 
     @objc private func cmuxApplicationBecameActive(_ notification: Notification) {
         _ = notification
         syncPresentation(raiseExternalWindow: true)
+        orderHostWindowBelowHostedWindows()
+    }
+
+    /// Activating the host app stacks its window above the hosted apps'
+    /// windows, covering them. Push the host window back underneath each one.
+    /// Ordering below each window in turn only ever moves the host window
+    /// down, so it ends below all of them. Deferred one turn so it runs after
+    /// AppKit finishes the activation's own ordering.
+    private func orderHostWindowBelowHostedWindows() {
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.isDetached, let window = self.window else { return }
+                for number in self.registry.presentedForeignWindowNumbers() {
+                    window.order(.below, relativeTo: number)
+                }
+            }
+        }
     }
 
     private func syncPresentation(raiseExternalWindow: Bool) {

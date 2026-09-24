@@ -80,6 +80,30 @@ public final class ForeignWindowProfileRegistry {
     ///
     /// - Parameter profile: The profile key.
     /// - Returns: The session's process identifier, or `nil` when none runs.
+    /// Window-server numbers of the hosted apps' on-screen windows for every
+    /// profile that is presented in a pane. Host windows order themselves
+    /// below these after coming forward, so a click on cmux chrome never
+    /// buries the hosted windows.
+    public func presentedForeignWindowNumbers() -> [Int] {
+        let pids = Set(presenters.keys.compactMap { sessions[$0]?.processIdentifier })
+        guard !pids.isEmpty,
+              let list = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements],
+                kCGNullWindowID
+              ) as? [[String: Any]] else {
+            return []
+        }
+        return list.compactMap { info in
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int,
+                  pids.contains(pid_t(pid)),
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let number = info[kCGWindowNumber as String] as? Int else {
+                return nil
+            }
+            return number
+        }
+    }
+
     public func processIdentifier(forProfile profile: String) -> pid_t? {
         sessions[profile]?.processIdentifier
     }
