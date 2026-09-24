@@ -44,7 +44,7 @@ concurrency:
 jobs:
   build:
     name: Nightly mini app build
-    runs-on: ${{ github.repository_owner != 'manaflow-ai' && 'macos-26' || fromJSON('{"group":"cmux-nightly-mini","labels":["self-hosted","macOS","ARM64","cmux-nightly-mini-build"]}') }}
+    runs-on: ${{ github.repository_owner != 'manaflow-ai' && fromJSON('["self-hosted","macOS","ARM64","cmux-nightly-mini-build"]') || fromJSON('{"group":"cmux-nightly-mini","labels":["self-hosted","macOS","ARM64","cmux-nightly-mini-build"]}') }}
     timeout-minutes: 75
     permissions: {}
     env:
