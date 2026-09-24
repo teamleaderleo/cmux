@@ -71,7 +71,29 @@ swift run ForeignWindowLab --diagnose          # headless, opens no window
 swift run ForeignWindowLab --diagnose --json
 ```
 
-The lab is an unbundled executable, so it does not claim the `claude://`
-handler. It inherits Accessibility trust from the terminal that starts it.
+Run unbundled, the lab does not claim the `claude://` handler and inherits
+Accessibility trust from the terminal that starts it. To exercise sign-in link
+routing, build the app bundle (ad-hoc signed unless `--sign` names an identity):
+
+```bash
+scripts/build-lab-app.sh --sign "SmolRunner Local Release Signing"
+open -n .build/ForeignWindowLab.app --args --profiles work,personal --verbose
+```
+
+From the bundle the lab claims `claude://` while its Claude processes run,
+logs whether Launch Services now names it as the handler, and restores Claude
+on quit. `--no-claim` skips the claim. Launched with `open`, the app needs its
+own Accessibility grant.
+
+## Signing in
+
+Google sign-in finishes in the system browser with a
+`claude://login/google-auth?code=…&hop_nonce=…` link, which macOS may hand to
+the wrong Claude copy. Each presented pane has a bar under the Claude window:
+copy the link from the browser (right-click "Open Claude", Copy Link) and click
+"Paste Claude sign-in link", or focus the bar and press Cmd-V. The link is
+checked by `ClaudeDesktopSignInLink` (only `claude://login/…` and
+`claude://claude.ai/magic-link…` or `/login…`) and sent to that pane's process
+only.
 Menu: Lab > Toggle Yield (Cmd-Y) exercises hide and restore; Lab > Focus Next
 Pane (Cmd-]) moves focus. Quitting terminates the Claude processes it started.

@@ -45,19 +45,44 @@ if options.diagnose {
     exit(0)
 }
 
+func labLog(_ message: String) {
+    FileHandle.standardError.write(Data("[lab] \(message)\n".utf8))
+}
+
 let logger = options.verbose
     ? ForeignWindowLogger { message in
         FileHandle.standardError.write(Data("[lab] \(message)\n".utf8))
     }
     : ForeignWindowLogger.disabled
 
-// An unbundled executable cannot be the claude:// handler, so link routing
-// stays off; sign-in callbacks go wherever macOS sends them.
+// Only an app bundle can be the claude:// handler. Run from ForeignWindowLab.app
+// (scripts/build-lab-app.sh), the lab claims it while its Claude processes run
+// and routes sign-in callbacks by process id, as cmux does.
+let bundleURL = Bundle.main.bundleURL
+let isAppBundle = bundleURL.pathExtension == "app"
+let claimsHandler = isAppBundle && !options.noClaim
 let hosting = ClaudeDesktopHosting(
     store: store,
-    linkHandlerApplicationURL: nil,
+    linkHandlerApplicationURL: claimsHandler ? bundleURL : nil,
     logger: logger
 )
+if let router = hosting.linkRouter {
+    router.onClaimResult = { result in
+        let verdict = result.isHandler ? "succeeded" : "FAILED"
+        labLog(
+            "claude:// handler claim \(verdict): handler=\(result.currentHandlerURL?.path ?? "none") "
+                + "expected=\(bundleURL.path) error=\(result.errorDescription ?? "none")"
+        )
+    }
+    router.restoreIfOrphaned()
+    labLog("claude:// link routing on; the handler is claimed when the first Claude process starts.")
+} else if isAppBundle {
+    labLog("claude:// link routing off (--no-claim).")
+} else {
+    labLog("claude:// link routing off (not running from an .app bundle).")
+}
+let urlEventHandler = LabURLEventHandler(router: hosting.linkRouter)
+urlEventHandler.install()
 let profiles = options.profiles.map { ClaudeDesktopProfileName($0).rawValue }
 
 let application = NSApplication.shared

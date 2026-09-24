@@ -23,6 +23,8 @@ private final class FakeForeignWindowSession: ForeignWindowProfileSession {
 
     var isRunning: Bool { invalidateCount == 0 && !presentations.isEmpty }
 
+    var processIdentifier: pid_t? { isRunning ? 4242 : nil }
+
     func updatePresentation(
         targetFrame: CGRect?,
         isVisible: Bool,
@@ -115,6 +117,31 @@ struct ForeignWindowProfileRegistryTests {
         #expect(book.presenter(for: "work") == nil)
         #expect(book.release(panelID: panelB) == "work")
         #expect(!book.isClaimed("work"))
+    }
+
+    @Test
+    func testProcessIdentifierFollowsTheProfileSession() {
+        let harness = RegistryHarness()
+        let registry = harness.registry!
+        let panel = UUID()
+        let hostID = UUID()
+        let host = FakeForeignWindowHost()
+        registry.claim(profile: "work", panelID: panel)
+        #expect(registry.processIdentifier(forProfile: "work") == nil)
+
+        registry.attach(host: host, hostID: hostID, panelID: panel, profile: "work")
+        registry.updateHost(
+            hostID: hostID,
+            isVisible: true,
+            isFocused: true,
+            targetFrame: frameA,
+            raiseWindow: false
+        )
+        #expect(registry.processIdentifier(forProfile: "work") == 4242)
+        #expect(registry.processIdentifier(forProfile: "personal") == nil)
+
+        registry.releasePanel(panel)
+        #expect(registry.processIdentifier(forProfile: "work") == nil)
     }
 
     @Test

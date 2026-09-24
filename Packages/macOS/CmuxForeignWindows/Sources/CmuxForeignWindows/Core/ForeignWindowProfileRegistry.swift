@@ -76,6 +76,14 @@ public final class ForeignWindowProfileRegistry {
     /// Profiles that have a session object (running or launching).
     public var sessionProfiles: Set<String> { Set(sessions.keys) }
 
+    /// The running process that shows `profile`, if any.
+    ///
+    /// - Parameter profile: The profile key.
+    /// - Returns: The session's process identifier, or `nil` when none runs.
+    public func processIdentifier(forProfile profile: String) -> pid_t? {
+        sessions[profile]?.processIdentifier
+    }
+
     func isPresenting(hostID: UUID) -> Bool {
         guard let profile = book.hosts[hostID]?.profile else { return false }
         return presenters[profile] == hostID

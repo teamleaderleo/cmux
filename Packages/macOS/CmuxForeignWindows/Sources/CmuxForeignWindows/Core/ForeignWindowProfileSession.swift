@@ -10,6 +10,9 @@ public protocol ForeignWindowProfileSession: AnyObject {
     /// Whether the external process is currently running.
     var isRunning: Bool { get }
 
+    /// The external process, while it runs.
+    var processIdentifier: pid_t? { get }
+
     /// Moves, shows, hides, or focuses the external window.
     ///
     /// - Parameter targetFrame: Screen rect in Accessibility (top-left origin)

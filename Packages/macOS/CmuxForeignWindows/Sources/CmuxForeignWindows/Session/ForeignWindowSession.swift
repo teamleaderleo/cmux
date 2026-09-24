@@ -154,6 +154,12 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
         return !runningApplication.isTerminated
     }
 
+    /// The launched app's process, while it runs.
+    public var processIdentifier: pid_t? {
+        guard let runningApplication, !runningApplication.isTerminated else { return nil }
+        return runningApplication.processIdentifier
+    }
+
     private var isYielding: Bool {
         yieldCoordinator.isYielding
     }

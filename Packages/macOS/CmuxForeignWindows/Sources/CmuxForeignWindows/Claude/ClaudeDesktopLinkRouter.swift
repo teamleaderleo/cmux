@@ -1,5 +1,4 @@
 import AppKit
-import CoreServices
 public import Foundation
 
 /// Routes `claude://` links while cmux hosts Claude Desktop instances.
@@ -24,12 +23,26 @@ public import Foundation
 @MainActor
 public final class ClaudeDesktopLinkRouter {
     /// The URL scheme this router handles.
-    public static let scheme = "claude"
+    nonisolated public static let scheme = "claude"
 
     private let handlerApplicationURL: URL
     private let processLedger: ForeignWindowProcessLedger
     private let logger: ForeignWindowLogger
     private var claimed = false
+
+    /// The result of one attempt to make the host app the `claude` handler.
+    public struct ClaimResult: Sendable {
+        /// Whether Launch Services now names the host app as the handler.
+        public let isHandler: Bool
+        /// The handler Launch Services reports after the change.
+        public let currentHandlerURL: URL?
+        /// The error Launch Services returned, if any.
+        public let errorDescription: String?
+    }
+
+    /// Called on the main actor after each claim, once Launch Services
+    /// answered and the handler was read back.
+    public var onClaimResult: (@MainActor (ClaimResult) -> Void)?
     private var terminationObserver: (any NSObjectProtocol)?
 
     /// Creates a router.
@@ -61,9 +74,13 @@ public final class ClaudeDesktopLinkRouter {
     public func claimSchemeIfNeeded() {
         guard !claimed else { return }
         claimed = true
-        let logger = logger
-        setHandler(handlerApplicationURL) { error in
-            logger("claudeLinkRouter.claim error=\(error?.localizedDescription ?? "none")")
+        setHandler(handlerApplicationURL) { [weak self] error in
+            let errorDescription = error?.localizedDescription
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.verifyClaim(errorDescription: errorDescription)
+                }
+            }
         }
         guard terminationObserver == nil else { return }
         terminationObserver = NotificationCenter.default.addObserver(
@@ -112,11 +129,32 @@ public final class ClaudeDesktopLinkRouter {
         return true
     }
 
+    /// Reads the handler back: the completion reports only that Launch
+    /// Services accepted the request, not what it now resolves.
+    private func verifyClaim(errorDescription: String?) {
+        let currentHandlerURL = Self.currentHandlerURL()
+        let isHandler = currentHandlerURL?.standardizedFileURL
+            == handlerApplicationURL.standardizedFileURL
+        logger(
+            "claudeLinkRouter.claim ok=\(isHandler) handler=\(currentHandlerURL?.path ?? "none") "
+                + "error=\(errorDescription ?? "none")"
+        )
+        onClaimResult?(
+            ClaimResult(
+                isHandler: isHandler,
+                currentHandlerURL: currentHandlerURL,
+                errorDescription: errorDescription
+            )
+        )
+    }
+
+    private static func currentHandlerURL() -> URL? {
+        guard let probe = URL(string: "\(scheme)://") else { return nil }
+        return NSWorkspace.shared.urlForApplication(toOpen: probe)
+    }
+
     private var currentHandlerIsCmux: Bool {
-        guard let probe = URL(string: "\(Self.scheme)://"),
-              let handlerURL = NSWorkspace.shared.urlForApplication(toOpen: probe) else {
-            return false
-        }
+        guard let handlerURL = Self.currentHandlerURL() else { return false }
         return handlerURL.standardizedFileURL == handlerApplicationURL.standardizedFileURL
     }
 
@@ -147,23 +185,9 @@ public final class ClaudeDesktopLinkRouter {
         )
     }
 
-    /// Sends a GetURL Apple Event to one process, which is how macOS itself
-    /// delivers URL opens, so Claude handles it exactly like a normal link.
     private func send(_ url: URL, to processIdentifier: pid_t) {
-        let target = NSAppleEventDescriptor(processIdentifier: processIdentifier)
-        let event = NSAppleEventDescriptor(
-            eventClass: AEEventClass(kInternetEventClass),
-            eventID: AEEventID(kAEGetURL),
-            targetDescriptor: target,
-            returnID: AEReturnID(kAutoGenerateReturnID),
-            transactionID: AETransactionID(kAnyTransactionID)
-        )
-        event.setParam(
-            NSAppleEventDescriptor(string: url.absoluteString),
-            forKeyword: AEKeyword(keyDirectObject)
-        )
         do {
-            _ = try event.sendEvent(options: [.noReply], timeout: 5)
+            try ForeignWindowURLEvent.send(url, to: processIdentifier)
         } catch {
             logger(
                 "claudeLinkRouter.sendFailed pid=\(processIdentifier) "

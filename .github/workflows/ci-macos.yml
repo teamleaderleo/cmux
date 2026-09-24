@@ -2185,7 +2185,7 @@ jobs:
     # macOS-neutral for the app build yet still own tests this lane runs.
     # The job narrows itself to the affected packages in "Select package
     # tests", so the routed case costs one runner and a short build, not the
-    # full 33-package sweep.
+    # full 34-package sweep.
     if: ${{ (inputs.macos == 'true' && inputs.full_suite == 'true') || inputs.swift_packages == 'true' }}
     outputs:
       release_archs: ${{ steps.release-archs.outputs.archs }}
@@ -2260,6 +2260,7 @@ jobs:
             CMUXAgentLaunch
             CmuxAgentJournal
             CmuxFilePreviewCore
+            CmuxForeignWindows
             CmuxSyntaxHighlighting
           )
 

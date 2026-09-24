@@ -3,7 +3,7 @@ import Foundation
 /// Command-line options for the lab.
 struct LabOptions {
     static let usage = """
-        usage: ForeignWindowLab [--profiles a,b] [--profiles-root DIR] [--diagnose [--json]] [--verbose]
+        usage: ForeignWindowLab [--profiles a,b] [--profiles-root DIR] [--diagnose [--json]] [--no-claim] [--verbose]
 
           --profiles a,b       Claude Desktop profile per pane, left to right (default: default,lab).
                                Names are normalized the way cmux panes normalize them.
@@ -11,6 +11,8 @@ struct LabOptions {
           --diagnose           Print Accessibility trust, the claude:// handler, and running Claude
                                instances with their owners, then exit. Opens no window, launches nothing.
           --json               With --diagnose, print JSON.
+          --no-claim           When run from ForeignWindowLab.app, do not claim the claude:// handler.
+                               (An unbundled run never claims it.)
           --verbose            Log foreign-window diagnostics to stderr.
         """
 
@@ -19,6 +21,7 @@ struct LabOptions {
     var diagnose = false
     var json = false
     var verbose = false
+    var noClaim = false
 
     /// Parses `arguments` (without `argv[0]`).
     ///
@@ -41,6 +44,8 @@ struct LabOptions {
                 json = true
             case "--verbose":
                 verbose = true
+            case "--no-claim":
+                noClaim = true
             case "-h", "--help":
                 throw LabOptionsError.helpRequested
             default:

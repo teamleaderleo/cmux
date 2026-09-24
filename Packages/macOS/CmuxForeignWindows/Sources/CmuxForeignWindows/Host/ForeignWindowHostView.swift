@@ -9,6 +9,11 @@ public import Foundation
 /// external window sits over it, an Accessibility prompt, or a placeholder
 /// saying another pane shows the profile.
 ///
+/// The external window covers the view minus a thin bar along the bottom
+/// edge. While the window is presented there, the bar offers "Paste Claude
+/// sign-in link", which sends a copied `claude://` sign-in link to exactly
+/// this profile's process (see ``ClaudeDesktopSignInLinkDelivery``).
+///
 /// Call ``update(isFocused:isVisibleInUI:backgroundColor:)`` whenever pane
 /// state changes and ``detach()`` on teardown. SwiftUI callers use
 /// ``ForeignWindowSurface``, which does both.
@@ -30,6 +35,7 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
     private let accessibility: ForeignWindowAccessibility
     private let placeholderLabel: NSTextField
     private let accessStack = NSStackView()
+    private let signInLinkBar = ForeignWindowSignInLinkBar()
     private var isAttached = false
     private var isDetached = false
     private var isPresenting = false
@@ -68,6 +74,7 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         wantsLayer = true
         configurePlaceholder()
         configureAccessPrompt()
+        configureSignInLinkBar()
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(cmuxApplicationBecameActive(_:)),
@@ -228,6 +235,70 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         ])
     }
 
+    private func configureSignInLinkBar() {
+        signInLinkBar.translatesAutoresizingMaskIntoConstraints = false
+        signInLinkBar.isHidden = true
+        signInLinkBar.onPaste = { [weak self] in
+            self?.pasteSignInLink() ?? ForeignWindowSignInLinkBar.Status(message: "", isError: false)
+        }
+        addSubview(signInLinkBar)
+        NSLayoutConstraint.activate([
+            signInLinkBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            signInLinkBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            signInLinkBar.bottomAnchor.constraint(equalTo: bottomAnchor),
+            signInLinkBar.heightAnchor.constraint(
+                equalToConstant: ForeignWindowSignInLinkBar.height
+            )
+        ])
+    }
+
+    private func pasteSignInLink() -> ForeignWindowSignInLinkBar.Status {
+        let outcome = ClaudeDesktopSignInLinkDelivery.deliver(
+            text: NSPasteboard.general.string(forType: .string),
+            to: registry.processIdentifier(forProfile: profile)
+        ) { url, processIdentifier in
+            try ForeignWindowURLEvent.send(url, to: processIdentifier)
+        }
+        switch outcome {
+        case .sent:
+            return ForeignWindowSignInLinkBar.Status(
+                message: String(
+                    localized: "foreignWindow.signInLink.sent",
+                    defaultValue: "Sign-in link sent to Claude.",
+                    bundle: .module
+                ),
+                isError: false
+            )
+        case .notSignInLink:
+            return ForeignWindowSignInLinkBar.Status(
+                message: String(
+                    localized: "foreignWindow.signInLink.invalid",
+                    defaultValue: "The clipboard does not hold a Claude sign-in link.",
+                    bundle: .module
+                ),
+                isError: true
+            )
+        case .claudeNotRunning:
+            return ForeignWindowSignInLinkBar.Status(
+                message: String(
+                    localized: "foreignWindow.signInLink.notRunning",
+                    defaultValue: "Claude is not running in this pane.",
+                    bundle: .module
+                ),
+                isError: true
+            )
+        case .sendFailed:
+            return ForeignWindowSignInLinkBar.Status(
+                message: String(
+                    localized: "foreignWindow.signInLink.sendFailed",
+                    defaultValue: "Could not send the link to Claude.",
+                    bundle: .module
+                ),
+                isError: true
+            )
+        }
+    }
+
     /// One of three states while visible: the app's window sits over the
     /// pane, Accessibility is missing (prompt), or another pane shows it.
     private func updatePlaceholderVisibility() {
@@ -243,6 +314,21 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         }
         if placeholderLabel.isHidden == shouldShowPlaceholder {
             placeholderLabel.isHidden = !shouldShowPlaceholder
+        }
+        // The bar belongs to a presented window; the prompt and placeholder
+        // stand alone.
+        let shouldShowBar = lastReportedVisibility
+            && isAttached
+            && isPresenting
+            && !needsAccess
+        if signInLinkBar.isHidden == shouldShowBar {
+            signInLinkBar.isHidden = !shouldShowBar
+            if !shouldShowBar {
+                signInLinkBar.clearStatus()
+                if window?.firstResponder === signInLinkBar {
+                    window?.makeFirstResponder(nil)
+                }
+            }
         }
     }
 
@@ -324,9 +410,24 @@ public final class ForeignWindowHostView: NSView, ForeignWindowProfileHost {
         updatePlaceholderVisibility()
     }
 
+    /// The part of the view the external window covers: everything above the
+    /// sign-in link bar. Reserved even while the bar is hidden, so a host that
+    /// starts presenting never moves the window twice.
+    private var externalWindowRect: NSRect {
+        var rect = bounds
+        let barHeight = min(ForeignWindowSignInLinkBar.height, rect.height)
+        if isFlipped {
+            rect.size.height -= barHeight
+        } else {
+            rect.origin.y += barHeight
+            rect.size.height -= barHeight
+        }
+        return rect
+    }
+
     private func accessibilityScreenFrame() -> CGRect? {
         guard let window else { return nil }
-        let windowRect = convert(bounds, to: nil)
+        let windowRect = convert(externalWindowRect, to: nil)
         let appKitScreenRect = window.convertToScreen(windowRect)
         guard appKitScreenRect.width >= 1,
               appKitScreenRect.height >= 1 else {
