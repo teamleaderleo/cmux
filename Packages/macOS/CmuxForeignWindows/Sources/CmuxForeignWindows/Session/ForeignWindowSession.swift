@@ -94,6 +94,9 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
     private var pendingActivate = false
     private var pendingRaise = false
     private var isApplyScheduled = false
+    private var isBindingRetryScheduled = false
+    private var bindingRetryCount = 0
+    private static let maxBindingRetries = 120
 
     private var yieldObserver: (any NSObjectProtocol)?
     private var isHiddenForYield = false
@@ -412,14 +415,47 @@ public final class ForeignWindowSession: ForeignWindowProfileSession {
         }
 
         if applicationElement == nil {
-            applicationElement = AXUIElementCreateApplication(
+            let element = AXUIElementCreateApplication(
                 runningApplication.processIdentifier
             )
+            // Electron (Claude Desktop) builds its accessibility tree only when
+            // asked; without this, window queries can fail or come back empty.
+            _ = AXUIElementSetAttributeValue(
+                element,
+                "AXManualAccessibility" as CFString,
+                kCFBooleanTrue
+            )
+            applicationElement = element
         }
 
         installAccessibilityObserverIfNeeded()
         if externalWindow == nil {
             _ = refreshExternalWindow()
+        }
+        scheduleBindingRetryIfNeeded()
+    }
+
+    /// A freshly launched app answers Accessibility with "cannot complete"
+    /// until it is ready, and nothing else re-triggers binding after launch.
+    /// Retry every half second until the observer and a window are bound.
+    private func scheduleBindingRetryIfNeeded() {
+        let isBound = accessibilityObserver != nil && externalWindow != nil
+        if isBound {
+            bindingRetryCount = 0
+            return
+        }
+        guard !isBindingRetryScheduled,
+              bindingRetryCount < Self.maxBindingRetries else { return }
+        isBindingRetryScheduled = true
+        bindingRetryCount += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.isInvalidated else { return }
+                self.isBindingRetryScheduled = false
+                self.lastAppliedFrame = nil
+                self.pendingRaise = true
+                self.scheduleApply()
+            }
         }
     }
 
