@@ -97,7 +97,7 @@ jobs:
           set -euo pipefail
           ./scripts/install-zig-ci.sh
 
-      - name: Test Ghostty OS opener stderr reader
+      - name: Test Ghostty prompt input
         run: |
           set -euo pipefail
           cd ghostty
@@ -105,17 +105,7 @@ jobs:
             -Dapp-runtime=none \
             -Demit-macos-app=false \
             -Dsentry=false \
-            -Dtest-filter="open stderr reader exits"
-
-      - name: Test Ghostty CJK fallback sizing
-        run: |
-          set -euo pipefail
-          cd ghostty
-          zig build test \
-            -Dapp-runtime=none \
-            -Demit-macos-app=false \
-            -Dsentry=false \
-            -Dtest-filter="ideograph fallback sizing fills two primary cells" \
+            -Dtest-filter="promptInput" \
             --summary all
 
       - name: Build GhosttyKit.xcframework
@@ -136,21 +126,10 @@ jobs:
           COPYFILE_DISABLE=1 tar czf GhosttyKit.xcframework.tar.gz GhosttyKit.xcframework
           python3 scripts/validate-xcframework-archive.py GhosttyKit.xcframework.tar.gz
 
-      - name: Upload xcframework release
-        if: steps.check-release.outputs.exists == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GHOSTTY_RELEASE_TOKEN }}
+      - name: Check exported prompt-input symbols
         run: |
           set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "GHOSTTY_RELEASE_TOKEN not available (fork PR), skipping upload"
-            exit 0
-          fi
-          TAG="xcframework-${{ steps.ghostty-sha.outputs.sha }}-${GHOSTTYKIT_BUILD_FLAVOR}"
-          gh release create "$TAG" \
-            --repo manaflow-ai/ghostty \
-            --target "${{ steps.ghostty-sha.outputs.sha }}" \
-            --title "GhosttyKit xcframework (${{ steps.ghostty-sha.outputs.sha }}, ${GHOSTTYKIT_BUILD_FLAVOR})" \
-            --notes "Pre-built GhosttyKit.xcframework for commit ${{ steps.ghostty-sha.outputs.sha }} with crash-report-subdir=${GHOSTTYKIT_CRASH_REPORT_SUBDIR} and sentry=false" \
-            GhosttyKit.xcframework.tar.gz
-          echo "Published release $TAG"
+          lib="$(find GhosttyKit.xcframework -name '*.a' | head -1)"
+          echo "lib=$lib"
+          nm -gU "$lib" 2>/dev/null | grep -E '_ghostty_surface_(prompt_input|select_prompt_input)$'
+          grep -n 'ghostty_surface_prompt_input\|ghostty_surface_select_prompt_input' GhosttyKit.xcframework/*/Headers/ghostty.h
