@@ -1,77 +1,67 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Sidebar Footer Mockup</title>
 <style>
-:root{--bg:#1e1f22;--side:#26272b;--text:#e6e6e8;--sec:#9a9aa1;--sep:rgba(255,255,255,.09);--menu:rgba(44,45,50,.97);--hl:#2f6fe4;--accent:#3b82f6}
+:root{--side:#26272b;--text:#e8e8ea;--sec:#9c9ca3;--sep:rgba(255,255,255,.1);--hl:#3a6fe0}
 *{box-sizing:border-box}
-body{margin:0;background:#141416;font:13px/1.3 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--text);padding:28px}
+body{margin:0;background:#161618;font:13px/1.3 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--text);padding:28px 28px 20px}
 h2{font-size:15px;margin:0 0 4px}
-.cap{color:var(--sec);font-size:12px;margin:0 0 14px;max-width:340px}
-.row{display:flex;gap:28px;align-items:flex-start}
-.col{width:360px}
-.win{position:relative;width:360px;height:540px;background:radial-gradient(120% 80% at 90% 10%,#3b3f8f 0,#1e1f22 60%);border-radius:10px;overflow:hidden;border:1px solid #333}
-.sidebar{position:absolute;left:0;top:0;bottom:0;width:250px;background:rgba(38,39,43,.78);border-right:1px solid #333}
+.cap{color:var(--sec);font-size:12px;margin:0 0 12px;max-width:380px;min-height:64px}
+.row{display:flex;gap:28px;align-items:flex-start;margin-bottom:34px}
+.col{width:380px}
+.win{position:relative;width:380px;background:#1d1e21;border:1px solid #34353a;border-radius:10px;overflow:hidden}
+.sidebar{position:relative;width:260px;height:100%;background:var(--side);border-right:1px solid #34353a}
 .ws{margin:6px 8px;padding:7px 10px;border-radius:7px;color:var(--sec);font-size:12px}
 .ws.sel{background:rgba(255,255,255,.07);color:var(--text)}
-.footer{position:absolute;left:6px;right:10px;bottom:6px;height:22px;display:flex;align-items:center;gap:4px}
-.ib{width:22px;height:22px;border-radius:8px;display:grid;place-items:center;color:var(--sec);position:relative}
-.ib.on{background:rgba(255,255,255,.12)}
-.av{width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444)}
-.q{width:14px;height:14px;border-radius:50%;border:1.3px solid var(--sec);font-size:9.5px;display:grid;place-items:center;font-weight:500}
-.dot{position:absolute;right:3px;top:3px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
-.pro{font-size:10px;font-weight:600;padding:2px 6px;border-radius:6px;background:rgba(168,85,247,.2);color:#d8b4fe}
-.pill{font-size:10.5px;padding:3px 8px;border-radius:10px;background:rgba(59,130,246,.2);color:#93c5fd;white-space:nowrap}
-.kb{font-size:11px}
-.shift{outline:1px dashed #f87171;outline-offset:2px;border-radius:6px}
-/* old popover */
-.pop{position:absolute;left:30px;bottom:34px;width:210px;background:linear-gradient(160deg,rgba(80,82,110,.55),rgba(36,37,44,.78));border:1px solid rgba(255,255,255,.16);border-radius:18px;padding:8px;box-shadow:0 14px 36px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.12);backdrop-filter:blur(24px) saturate(1.6)}
-.pop .it{height:25px;display:flex;align-items:center;padding:0 8px;font-size:12px;gap:8px}
-.pop .it .r{margin-left:auto;color:var(--sec);font-size:10px}
-.pop .it.hover{outline:1px dashed #f87171;border-radius:4px}
-/* native menu */
-.menu{position:absolute;left:6px;bottom:32px;min-width:236px;background:linear-gradient(160deg,rgba(80,82,110,.55),rgba(36,37,44,.8));border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:6px;box-shadow:0 14px 36px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12);backdrop-filter:blur(24px) saturate(1.6)}
-.menu .it{height:24px;display:flex;align-items:center;padding:0 10px;border-radius:8px;font-size:13px}
-.menu .it .k{margin-left:auto;color:var(--sec);font-size:12.5px;letter-spacing:.5px;padding-left:24px}
-.menu .it.hl{background:var(--hl);color:#fff}.menu .it.hl .k{color:#dbe6ff}
-.menu .sep{height:1px;background:var(--sep);margin:5px 9px}
-.badge{margin-left:8px;font-size:10.5px;padding:0 6px;border-radius:9px;background:rgba(255,255,255,.14);color:var(--text);line-height:16px}
-.hdr{display:flex;gap:10px;align-items:center;padding:6px 9px}
-.hdr .av{width:28px;height:28px}
-.hdr b{display:block;font-size:13px}.hdr span{font-size:11px;color:var(--sec)}
-.sheet{position:absolute;left:6px;bottom:32px;width:320px;height:300px;background:#2b2c31;border:1px solid #3a3b40;border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden}
-.sheet .h{display:flex;align-items:baseline;padding:12px 12px 8px;border-bottom:1px solid var(--sep)}
-.sheet .h b{font-size:13px}.sheet .h a{margin-left:auto;color:#6ea8ff;font-size:12px}
-.sheet .sh{font-size:10.5px;color:var(--sec);padding:8px 12px 2px;text-transform:uppercase;letter-spacing:.4px}
-.sheet .r{display:flex;padding:4px 12px;font-size:12px}.sheet .r span{margin-left:auto;color:var(--sec)}
-.note{font-size:11.5px;color:#fca5a5;margin-top:8px}
-.good{font-size:11.5px;color:#86efac;margin-top:8px}
-.chip{flex:1;min-width:0;height:26px;display:flex;align-items:center;gap:5px;padding:0 6px 0 2px;border-radius:8px}
-.grp{display:flex;align-items:center;gap:0}
-.chip.on{background:rgba(255,255,255,.12)}
-.chip .av{width:18px;height:18px;flex:none}
-.chip .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
-.chip .p{font-size:12px;color:var(--sec);white-space:nowrap}
-.chip .cv{color:var(--sec);flex:none;margin-left:auto}
-.pill{display:inline-flex;align-items:center;gap:5px}
+.footer{position:absolute;left:6px;right:10px;bottom:5px;height:26px;display:flex;align-items:center;gap:4px;overflow:hidden}
+.ib{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;color:var(--sec);position:relative;flex:none}
+.on{background:rgba(255,255,255,.11)}
+.av{width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444);flex:none;position:relative}
+.av.sm{width:14px;height:14px}
+.q{width:14px;height:14px;border-radius:50%;border:1.3px solid var(--sec);font-size:9.5px;display:grid;place-items:center;font-weight:500;color:var(--sec)}
+.dot{position:absolute;right:-2px;top:-2px;width:6px;height:6px;border-radius:50%;background:#4b8dff;box-shadow:0 0 0 1.5px var(--side)}
+.pro{font-size:10px;font-weight:600;padding:2px 6px;border-radius:6px;background:rgba(168,85,247,.2);color:#d8b4fe;flex:none}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;padding:3px 8px;border-radius:10px;background:rgba(59,130,246,.2);color:#93c5fd;white-space:nowrap;flex:none}
 .pill.ic{padding:4px}
-.over{outline:1px dashed #f87171;outline-offset:1px}
-.hdr .pl{font-size:11px;color:var(--sec);font-weight:400;margin-left:6px}
-.footer.after{height:26px;bottom:4px}
+.chip{flex:1;min-width:0;height:26px;display:flex;align-items:center;gap:5px;padding:0 6px 0 2px;border-radius:8px}
+.chip .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.chip .cv{color:var(--sec);flex:none;margin-left:auto}
+/* macOS 26 glass: the same surface for the old popover and the new menu */
+.glass{position:absolute;background:linear-gradient(165deg,rgba(78,80,92,.72),rgba(40,41,47,.9));border:1px solid rgba(255,255,255,.15);box-shadow:0 14px 36px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.1);backdrop-filter:blur(24px) saturate(1.5)}
+.pop{left:30px;bottom:36px;width:214px;border-radius:18px;padding:8px}
+.pop .it{height:25px;display:flex;align-items:center;padding:0 10px;font-size:12.5px}
+.pop .it .r{margin-left:auto;color:var(--sec);font-size:10.5px}
+.menu{left:6px;bottom:35px;width:248px;border-radius:13px;padding:5px}
+.menu .it{height:24px;display:flex;align-items:center;padding:0 10px;border-radius:7px;font-size:13px;white-space:nowrap}
+.menu .it .k{margin-left:auto;color:var(--sec);font-size:12.5px;padding-left:20px}
+.menu .it.hl{background:var(--hl);color:#fff}.menu .it.hl .k{color:#dbe6ff}
+.menu .it.dim{color:var(--sec)}
+.menu .sep{height:1px;background:var(--sep);margin:5px 10px}
+.badge{margin-left:8px;font-size:10.5px;padding:0 6px;border-radius:9px;background:rgba(255,255,255,.15);line-height:16px}
+.hdr{display:flex;gap:10px;align-items:center;padding:6px 10px}
+.hdr .av{width:28px;height:28px}
+.hdr b{display:block;font-size:13px}.hdr b i{font-style:normal;font-weight:400;font-size:11px;color:var(--sec);margin-left:6px}
+.hdr span{font-size:11px;color:var(--sec)}
+.sub{left:258px;width:172px}
+.note{font-size:11.5px;margin-top:8px;color:var(--sec)}
+.bad{color:#fca5a5}.good{color:#86efac}
+.lbl{font-size:11.5px;color:var(--sec);margin:0 0 4px}
+.strip{height:44px;margin-bottom:10px}
 </style></head><body>
 
-<div id="help" class="row">
+<div class="row">
  <div class="col">
-  <h2>Before: Help</h2>
-  <p class="cap">Popover (glass on macOS 26), 12 flat rows. Rows have no hover highlight and no arrow-key navigation. Settings and the Pro upsell sit between people and help.</p>
-  <div class="win"><div class="sidebar">
+  <h2>Before</h2>
+  <p class="cap">Two separate buttons: an account icon and a ? button with its own popover of 12 flat rows. Rows don't highlight under the pointer and don't take arrow keys.</p>
+  <div class="win" style="height:452px"><div class="sidebar">
    <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
-   <div class="pop">
+   <div class="glass pop">
     <div class="it">Welcome to cmux!</div>
-    <div class="it">What's New <span class="dot" style="position:static;margin-left:2px"></span></div>
-    <div class="it">Upgrade to cmux Pro… <span class="r">✦</span></div>
-    <div class="it hover">Settings… <span class="r">⌘,</span></div>
+    <div class="it">What's New</div>
+    <div class="it">Upgrade to cmux Pro…</div>
+    <div class="it">Settings… <span class="r">⌘,</span></div>
     <div class="it">Keyboard Shortcuts</div>
     <div class="it">Import Browser Data…</div>
-    <div class="it">Send Feedback <span class="r">⌥⌘F 💬</span></div>
+    <div class="it">Send Feedback <span class="r">⌥⌘F</span></div>
     <div class="it">Docs <span class="r">↗</span></div>
     <div class="it">Changelog <span class="r">↗</span></div>
     <div class="it">GitHub <span class="r">↗</span></div>
@@ -79,122 +69,62 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="it">Discord <span class="r">↗</span></div>
     <div class="it">Check for Updates</div>
    </div>
-   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div><span class="pro">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
+   <div class="footer"><div class="ib"><div class="av sm"></div></div><div class="ib on"><div class="q">?</div></div><span class="pro">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
   </div></div>
-  <div class="note">Dashed row: pointer is over it, nothing lights up.</div>
  </div>
  <div class="col">
-  <h2>After: Help</h2>
-  <p class="cap">Native NSMenu (glass on macOS 26) in four groups: learn, app, feedback and community, Pro last. Highlight, arrow keys, type-select, press-drag-release, configured shortcuts.</p>
-  <div class="win"><div class="sidebar">
+  <h2>After</h2>
+  <p class="cap">One full-width button, like Claude and ChatGPT desktop: avatar, name, and a chevron marking where it ends. Its native menu holds the account, the app, help and feedback. Docs and community links sit in a Help submenu.</p>
+  <div class="win" style="height:452px;overflow:visible"><div class="sidebar">
    <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
-   <div class="menu">
-    <div class="it">What's New<span class="badge">New</span></div>
-    <div class="it">Welcome to cmux!</div>
-    <div class="it hl">Keyboard Shortcuts</div>
-    <div class="it">Docs</div>
-    <div class="it">Changelog</div>
+   <div class="glass menu">
+    <div class="hdr"><div class="av"></div><div><b>Leo Li<i>Pro</i></b><span>leo@example.com</span></div></div>
     <div class="sep"></div>
     <div class="it">Settings…<span class="k">⌘,</span></div>
+    <div class="it">Keyboard Shortcuts</div>
+    <div class="it">What's New<span class="badge">New</span></div>
+    <div class="sep"></div>
+    <div class="it">Send Feedback<span class="k">⌥⌘F</span></div>
+    <div class="it hl">Help<span class="k">›</span></div>
+    <div class="sep"></div>
     <div class="it">Import Browser Data…</div>
     <div class="it">Check for Updates</div>
     <div class="sep"></div>
-    <div class="it">Send Feedback<span class="k">⌥⌘F</span></div>
+    <div class="it">Sign Out</div>
+   </div>
+   <div class="glass menu sub" style="bottom:140px">
+    <div class="it">Welcome to cmux!</div>
+    <div class="it">Docs</div>
+    <div class="it">Changelog</div>
+    <div class="sep"></div>
     <div class="it">GitHub Issues</div>
     <div class="it">Discord</div>
     <div class="it">GitHub</div>
-    <div class="sep"></div>
-    <div class="it">Upgrade to cmux Pro…</div>
    </div>
-   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib on"><div class="q">?</div><div class="dot"></div></div></div><span class="pill">Update 0.64.26</span></div>
+   <div class="footer"><div class="chip on"><div class="av"><span class="dot"></span></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pill"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Update 0.64.26</span></div>
   </div></div>
-  <div class="good">Opens upward from the button; closes on Esc, click-away, or any other menu.</div>
+  <p class="note">The What's New dot sits on the avatar. The Pro upgrade badge is hidden for Pro accounts, and Upgrade to cmux Pro… appears above Sign Out for everyone else.</p>
  </div>
 </div>
 
-<div id="shortcuts" class="row" style="margin-top:36px">
+<div class="row">
  <div class="col">
-  <h2>Before: holding ⌘</h2>
-  <p class="cap">Every ⌘ hold mounts a keyboard button after Help, so Pro and the update pill jump right. In a terminal, ⌘ is held constantly. Help › Keyboard Shortcuts goes to a Settings pane instead.</p>
-  <div class="win" style="height:180px"><div class="sidebar">
-   <div class="ws sel">cmux · main <span style="float:right;color:var(--sec)">⌘1</span></div><div class="ws">glaeda · fleet <span style="float:right">⌘2</span></div>
-   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib"><div class="q">?</div></div><div class="ib shift"><span class="kb">⌨</span></div><span class="pro shift">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
-  </div></div>
- </div>
- <div class="col">
-  <h2>After: Help › Keyboard Shortcuts</h2>
-  <p class="cap">The footer never changes shape. ⌘ hold still shows row shortcut badges. The cheat sheet opens from Help, with Customize… for editing.</p>
-  <div class="win" style="height:400px"><div class="sidebar" style="width:360px">
-   <div class="sheet">
-    <div class="h"><b>Keyboard Shortcuts</b><a>Customize…</a></div>
-    <div class="sh">App</div>
-    <div class="r">Settings<span>⌘,</span></div><div class="r">Send Feedback<span>⌥⌘F</span></div><div class="r">Command Palette<span>⇧⌘P</span></div>
-    <div class="sh">Workspace</div>
-    <div class="r">New Workspace<span>⌘N</span></div><div class="r">Close Workspace<span>⇧⌘W</span></div><div class="r">Rename Workspace<span>⇧⌘R</span></div>
-    <div class="sh">Navigation</div>
-    <div class="r">Select Workspace 1…9<span>⌘1…9</span></div>
-   </div>
-   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib on"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
-  </div></div>
- </div>
-</div>
-
-<div id="account" class="row" style="margin-top:36px">
- <div class="col">
-  <h2>Before: account</h2>
-  <p class="cap">A custom popover with its own animation, different from Help next to it; its rows have no hover state either.</p>
-  <div class="win" style="height:260px"><div class="sidebar">
-   <div class="pop" style="left:6px;width:220px;padding:12px">
-    <div style="display:flex;gap:10px;align-items:center"><div class="av" style="width:34px;height:34px"></div><div><b style="font-size:13px">Leo Li</b><br><span style="font-size:11px;color:var(--sec)">leo@example.com</span></div></div>
-    <div style="height:1px;background:var(--sep);margin:8px 0"></div>
-    <div class="it" style="padding:0">⚙ Settings… <span class="r">⌘,</span></div>
-    <div class="it" style="padding:0">✦ Upgrade to cmux Pro…</div>
-    <div class="it" style="padding:0">⇥ Sign Out</div>
-   </div>
-   <div class="footer"><div class="ib on"><div class="av"></div></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span></div>
-  </div></div>
- </div>
- <div class="col">
-  <h2>After: account</h2>
-  <p class="cap">The chip fills the free width and all of it is one click target, like Claude and ChatGPT desktop. The chevron marks where the target ends. The menu header shows the plan; the PRO upgrade badge is hidden for Pro accounts. Sign Out sits alone at the bottom. Signed out, a click still starts sign-in directly.</p>
-  <div class="win" style="height:260px"><div class="sidebar">
-   <div class="menu" style="min-width:238px">
-    <div class="hdr"><div class="av"></div><div><b>Leo Li<span class="pl">Pro</span></b><span>leo@example.com</span></div></div>
-    <div class="sep"></div>
-    <div class="it hl">Settings…<span class="k">⌘,</span></div>
-    <div class="sep"></div>
-    <div class="it">Sign Out</div>
-   </div>
-   <div class="footer after"><div class="chip on"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div></div>
-  </div></div>
- </div>
-</div>
-
-<div id="narrow" class="row" style="margin-top:36px">
- <div class="col">
-  <h2>Before: narrow sidebar, update arrives</h2>
-  <p class="cap">Earlier revision of this PR. The row is wider than the sidebar, so the footer pushes past its edge and the sidebar shifts when the update pill appears. "Pro" shows twice.</p>
-  <div class="win" style="height:120px"><div class="sidebar" style="width:200px;overflow:visible">
-   <div class="ws sel">cmux · main</div>
-   <div class="footer after over" style="right:auto"><div class="chip" style="flex:none"><div class="av"></div><span class="n">Leo Li</span><span class="p">· Pro</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span><span class="pill">Update 0.64.26</span></div>
-  </div></div>
+  <h2>After: other states</h2>
+  <p class="cap">The same button in every state, so help is always one click from the same spot.</p>
+  <div class="lbl">Signed out: Sign In… is the first item in the menu</div>
+  <div class="win strip"><div class="sidebar"><div class="footer"><div class="chip"><div class="av" style="background:none;border:1.3px solid var(--sec)"></div><span class="n">Account</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pro">PRO</span></div></div></div>
+  <div class="lbl">Account button flag off: the button reads Help</div>
+  <div class="win strip"><div class="sidebar"><div class="footer"><div class="chip"><div class="q" style="width:16px;height:16px">?</div><span class="n">Help</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pro">PRO</span></div></div></div>
  </div>
  <div class="col">
   <h2>After: as the sidebar narrows</h2>
-  <p class="cap">The chip always fills the free width, so its target stays as big as the row allows. The footer never asks the sidebar for width: the update pill gives way first, then the chip's name.</p>
-  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Wide: everything fits</div>
-  <div class="win" style="height:64px"><div class="sidebar" style="width:280px">
-   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Update 0.64.26</span></div>
-  </div></div>
-  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Narrower: the update pill shrinks to its icon (text in the tooltip)</div>
-  <div class="win" style="height:64px"><div class="sidebar" style="width:200px">
-   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill ic" title="Update 0.64.26"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
-  </div></div>
-  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Narrowest: the chip drops the name, keeps avatar and chevron</div>
-  <div class="win" style="height:64px"><div class="sidebar" style="width:130px">
-   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill ic"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
-  </div></div>
-
+  <p class="cap">The button always fills the free width. The footer never asks the sidebar for width: the update pill shrinks to its icon first, then the name goes.</p>
+  <div class="lbl">Wide</div>
+  <div class="win strip"><div class="sidebar" style="width:300px"><div class="footer"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pill"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Update 0.64.26</span></div></div></div>
+  <div class="lbl">Narrower: the update pill shrinks to its icon</div>
+  <div class="win strip"><div class="sidebar" style="width:200px"><div class="footer"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pill ic"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div></div></div>
+  <div class="lbl">Narrowest: avatar and chevron, still the full width</div>
+  <div class="win strip"><div class="sidebar" style="width:120px"><div class="footer"><div class="chip"><div class="av"></div><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="pill ic"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div></div></div>
  </div>
 </div>
 </body></html>
