@@ -44,12 +44,15 @@ h2{font-size:15px;margin:0 0 4px}
 .sheet .r{display:flex;padding:4px 12px;font-size:12px}.sheet .r span{margin-left:auto;color:var(--sec)}
 .note{font-size:11.5px;color:#fca5a5;margin-top:8px}
 .good{font-size:11.5px;color:#86efac;margin-top:8px}
-.chip{flex:1;min-width:0;height:26px;display:flex;align-items:center;gap:6px;padding:0 6px 0 4px;border-radius:8px}
+.chip{flex:none;height:26px;display:flex;align-items:center;gap:5px;padding:0 4px 0 2px;border-radius:8px}
+.grp{display:flex;align-items:center;gap:0}
 .chip.on{background:rgba(255,255,255,.12)}
 .chip .av{width:18px;height:18px;flex:none}
-.chip .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
 .chip .p{font-size:12px;color:var(--sec);white-space:nowrap}
-.chip .cv{margin-left:auto;color:var(--sec);font-size:9px;line-height:1}
+.chip .cv{color:var(--sec);flex:none}
+.over{outline:1px dashed #f87171;outline-offset:1px}
+.hdr .pl{font-size:11px;color:var(--sec);font-weight:400;margin-left:6px}
 .footer.after{height:26px;bottom:4px}
 </style></head><body>
 
@@ -101,7 +104,7 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="sep"></div>
     <div class="it">Upgrade to cmux Pro…</div>
    </div>
-   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><span class="p">· Pro</span><span class="cv">⌃<br>⌄</span></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div><span class="pro">PRO</span><span class="pill">Update 0.64.26</span></div>
+   <div class="footer after"><div class="grp"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div></div><span class="pill">Update 0.64.26</span></div>
   </div></div>
   <div class="good">Opens upward from the button; closes on Esc, click-away, or any other menu.</div>
  </div>
@@ -129,7 +132,7 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="sh">Navigation</div>
     <div class="r">Select Workspace 1…9<span>⌘1…9</span></div>
    </div>
-   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><span class="p">· Pro</span><span class="cv">⌃<br>⌄</span></div><div class="ib on"><div class="q">?</div></div><span class="pro">PRO</span><span class="pill">Update 0.64.26</span></div>
+   <div class="footer after"><div class="grp"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib on"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
   </div></div>
  </div>
 </div>
@@ -151,18 +154,37 @@ h2{font-size:15px;margin:0 0 4px}
  </div>
  <div class="col">
   <h2>After: account</h2>
-  <p class="cap">The whole chip (avatar, name, plan, chevron) is the click target, like Claude and ChatGPT desktop; the menu matches its width. Identity header, then account actions, then Sign Out alone at the bottom. Signed out, a click still starts sign-in directly.</p>
+  <p class="cap">The whole chip (avatar, name, chevron) is one click target, like Claude and ChatGPT desktop, and is only as wide as its content. The menu header shows the plan; the PRO upgrade badge is hidden for Pro accounts. Sign Out sits alone at the bottom. Signed out, a click still starts sign-in directly.</p>
   <div class="win" style="height:260px"><div class="sidebar">
    <div class="menu" style="min-width:238px">
-    <div class="hdr"><div class="av"></div><div><b>Leo Li</b><span>leo@example.com</span></div></div>
+    <div class="hdr"><div class="av"></div><div><b>Leo Li<span class="pl">Pro</span></b><span>leo@example.com</span></div></div>
     <div class="sep"></div>
-    <div class="it">Settings…<span class="k">⌘,</span></div>
-    <div class="it hl">Upgrade to cmux Pro…</div>
+    <div class="it hl">Settings…<span class="k">⌘,</span></div>
     <div class="sep"></div>
     <div class="it">Sign Out</div>
    </div>
-   <div class="footer after"><div class="chip on"><div class="av"></div><span class="n">Leo Li</span><span class="p">· Pro</span><span class="cv">⌃<br>⌄</span></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span></div>
+   <div class="footer after"><div class="grp"><div class="chip on"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib"><div class="q">?</div></div></div></div>
   </div></div>
+ </div>
+</div>
+
+<div id="narrow" class="row" style="margin-top:36px">
+ <div class="col">
+  <h2>Before: narrow sidebar, update arrives</h2>
+  <p class="cap">Earlier revision of this PR. The row is wider than the sidebar, so the footer pushes past its edge and the sidebar shifts when the update pill appears. "Pro" shows twice.</p>
+  <div class="win" style="height:120px"><div class="sidebar" style="width:200px;overflow:visible">
+   <div class="ws sel">cmux · main</div>
+   <div class="footer after over" style="right:auto"><div class="chip" style="flex:none"><div class="av"></div><span class="n">Leo Li</span><span class="p">· Pro</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+ </div>
+ <div class="col">
+  <h2>After: narrow sidebar, update arrives</h2>
+  <p class="cap">The footer never asks the sidebar for width. When the row doesn't fit, the chip drops to avatar and chevron; anything still too wide is clipped at the trailing edge.</p>
+  <div class="win" style="height:120px"><div class="sidebar" style="width:200px">
+   <div class="ws sel">cmux · main</div>
+   <div class="footer after" style="overflow:hidden"><div class="grp"><div class="chip"><div class="av"></div><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="ib"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+  <div class="good">Wide enough again, and the name comes back.</div>
  </div>
 </div>
 </body></html>
