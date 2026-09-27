@@ -8,8 +8,8 @@ h2{font-size:15px;margin:0 0 4px}
 .cap{color:var(--sec);font-size:12px;margin:0 0 14px;max-width:340px}
 .row{display:flex;gap:28px;align-items:flex-start}
 .col{width:360px}
-.win{position:relative;width:360px;height:540px;background:var(--bg);border-radius:10px;overflow:hidden;border:1px solid #333}
-.sidebar{position:absolute;left:0;top:0;bottom:0;width:250px;background:var(--side);border-right:1px solid #333}
+.win{position:relative;width:360px;height:540px;background:radial-gradient(120% 80% at 90% 10%,#3b3f8f 0,#1e1f22 60%);border-radius:10px;overflow:hidden;border:1px solid #333}
+.sidebar{position:absolute;left:0;top:0;bottom:0;width:250px;background:rgba(38,39,43,.78);border-right:1px solid #333}
 .ws{margin:6px 8px;padding:7px 10px;border-radius:7px;color:var(--sec);font-size:12px}
 .ws.sel{background:rgba(255,255,255,.07);color:var(--text)}
 .footer{position:absolute;left:6px;right:10px;bottom:6px;height:22px;display:flex;align-items:center;gap:4px}
@@ -23,13 +23,13 @@ h2{font-size:15px;margin:0 0 4px}
 .kb{font-size:11px}
 .shift{outline:1px dashed #f87171;outline-offset:2px;border-radius:6px}
 /* old popover */
-.pop{position:absolute;left:30px;bottom:34px;width:200px;background:#2b2c31;border:1px solid #3a3b40;border-radius:10px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
-.pop .it{height:24px;display:flex;align-items:center;padding:0 8px;font-size:12px;gap:8px}
+.pop{position:absolute;left:30px;bottom:34px;width:210px;background:linear-gradient(160deg,rgba(80,82,110,.55),rgba(36,37,44,.78));border:1px solid rgba(255,255,255,.16);border-radius:18px;padding:8px;box-shadow:0 14px 36px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.12);backdrop-filter:blur(24px) saturate(1.6)}
+.pop .it{height:25px;display:flex;align-items:center;padding:0 8px;font-size:12px;gap:8px}
 .pop .it .r{margin-left:auto;color:var(--sec);font-size:10px}
 .pop .it.hover{outline:1px dashed #f87171;border-radius:4px}
 /* native menu */
-.menu{position:absolute;left:6px;bottom:32px;min-width:236px;background:var(--menu);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.55);backdrop-filter:blur(20px)}
-.menu .it{height:22px;display:flex;align-items:center;padding:0 9px;border-radius:4px;font-size:13px}
+.menu{position:absolute;left:6px;bottom:32px;min-width:236px;background:linear-gradient(160deg,rgba(80,82,110,.55),rgba(36,37,44,.8));border:1px solid rgba(255,255,255,.16);border-radius:14px;padding:6px;box-shadow:0 14px 36px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.12);backdrop-filter:blur(24px) saturate(1.6)}
+.menu .it{height:24px;display:flex;align-items:center;padding:0 10px;border-radius:8px;font-size:13px}
 .menu .it .k{margin-left:auto;color:var(--sec);font-size:12.5px;letter-spacing:.5px;padding-left:24px}
 .menu .it.hl{background:var(--hl);color:#fff}.menu .it.hl .k{color:#dbe6ff}
 .menu .sep{height:1px;background:var(--sep);margin:5px 9px}
@@ -44,14 +44,15 @@ h2{font-size:15px;margin:0 0 4px}
 .sheet .r{display:flex;padding:4px 12px;font-size:12px}.sheet .r span{margin-left:auto;color:var(--sec)}
 .note{font-size:11.5px;color:#fca5a5;margin-top:8px}
 .good{font-size:11.5px;color:#86efac;margin-top:8px}
-.chip{flex:none;height:26px;display:flex;align-items:center;gap:5px;padding:0 6px 0 2px;border-radius:8px}
-.chip.sq{padding:0 2px;height:22px}
+.chip{flex:1;min-width:0;height:26px;display:flex;align-items:center;gap:5px;padding:0 6px 0 2px;border-radius:8px}
 .grp{display:flex;align-items:center;gap:0}
 .chip.on{background:rgba(255,255,255,.12)}
 .chip .av{width:18px;height:18px;flex:none}
 .chip .n{font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
 .chip .p{font-size:12px;color:var(--sec);white-space:nowrap}
-.chip .cv{color:var(--sec);flex:none}
+.chip .cv{color:var(--sec);flex:none;margin-left:auto}
+.pill{display:inline-flex;align-items:center;gap:5px}
+.pill.ic{padding:4px}
 .over{outline:1px dashed #f87171;outline-offset:1px}
 .hdr .pl{font-size:11px;color:var(--sec);font-weight:400;margin-left:6px}
 .footer.after{height:26px;bottom:4px}
@@ -60,7 +61,7 @@ h2{font-size:15px;margin:0 0 4px}
 <div id="help" class="row">
  <div class="col">
   <h2>Before: Help</h2>
-  <p class="cap">Custom popover, 12 flat rows. Rows have no hover highlight and no arrow-key navigation. Settings and the Pro upsell sit between people and help.</p>
+  <p class="cap">Popover (glass on macOS 26), 12 flat rows. Rows have no hover highlight and no arrow-key navigation. Settings and the Pro upsell sit between people and help.</p>
   <div class="win"><div class="sidebar">
    <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
    <div class="pop">
@@ -84,7 +85,7 @@ h2{font-size:15px;margin:0 0 4px}
  </div>
  <div class="col">
   <h2>After: Help</h2>
-  <p class="cap">Native NSMenu in four groups: learn, app, feedback and community, Pro last. Highlight, arrow keys, type-select, press-drag-release, configured shortcuts.</p>
+  <p class="cap">Native NSMenu (glass on macOS 26) in four groups: learn, app, feedback and community, Pro last. Highlight, arrow keys, type-select, press-drag-release, configured shortcuts.</p>
   <div class="win"><div class="sidebar">
    <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
    <div class="menu">
@@ -105,7 +106,7 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="sep"></div>
     <div class="it">Upgrade to cmux Pro…</div>
    </div>
-   <div class="footer after"><div class="grp"><div class="chip"><div class="av"></div><span class="n">Leo Li</span></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div></div><span class="pill">Update 0.64.26</span></div>
+   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib on"><div class="q">?</div><div class="dot"></div></div></div><span class="pill">Update 0.64.26</span></div>
   </div></div>
   <div class="good">Opens upward from the button; closes on Esc, click-away, or any other menu.</div>
  </div>
@@ -133,7 +134,7 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="sh">Navigation</div>
     <div class="r">Select Workspace 1…9<span>⌘1…9</span></div>
    </div>
-   <div class="footer after"><div class="grp"><div class="chip"><div class="av"></div><span class="n">Leo Li</span></div><div class="ib on"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
+   <div class="footer after"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib on"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
   </div></div>
  </div>
 </div>
@@ -155,7 +156,7 @@ h2{font-size:15px;margin:0 0 4px}
  </div>
  <div class="col">
   <h2>After: account</h2>
-  <p class="cap">The whole chip (avatar and name) is one click target, with no chevron, as in ChatGPT and Codex desktop, and is only as wide as its content. The menu header shows the plan; the PRO upgrade badge is hidden for Pro accounts. Sign Out sits alone at the bottom. Signed out, a click still starts sign-in directly.</p>
+  <p class="cap">The chip fills the free width and all of it is one click target, like Claude and ChatGPT desktop. The chevron marks where the target ends. The menu header shows the plan; the PRO upgrade badge is hidden for Pro accounts. Sign Out sits alone at the bottom. Signed out, a click still starts sign-in directly.</p>
   <div class="win" style="height:260px"><div class="sidebar">
    <div class="menu" style="min-width:238px">
     <div class="hdr"><div class="av"></div><div><b>Leo Li<span class="pl">Pro</span></b><span>leo@example.com</span></div></div>
@@ -164,7 +165,7 @@ h2{font-size:15px;margin:0 0 4px}
     <div class="sep"></div>
     <div class="it">Sign Out</div>
    </div>
-   <div class="footer after"><div class="grp"><div class="chip on"><div class="av"></div><span class="n">Leo Li</span></div><div class="ib"><div class="q">?</div></div></div></div>
+   <div class="footer after"><div class="chip on"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div></div>
   </div></div>
  </div>
 </div>
@@ -179,13 +180,21 @@ h2{font-size:15px;margin:0 0 4px}
   </div></div>
  </div>
  <div class="col">
-  <h2>After: narrow sidebar, update arrives</h2>
-  <p class="cap">The footer never asks the sidebar for width. When the row doesn't fit, the chip drops to the avatar alone, a square like the other icons; anything still too wide is clipped at the trailing edge.</p>
-  <div class="win" style="height:120px"><div class="sidebar" style="width:200px">
-   <div class="ws sel">cmux · main</div>
-   <div class="footer after" style="overflow:hidden"><div class="grp"><div class="chip sq"><div class="av"></div></div><div class="ib"><div class="q">?</div></div></div><span class="pill">Update 0.64.26</span></div>
+  <h2>After: as the sidebar narrows</h2>
+  <p class="cap">The chip always fills the free width, so its target stays as big as the row allows. The footer never asks the sidebar for width: the update pill gives way first, then the chip's name.</p>
+  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Wide: everything fits</div>
+  <div class="win" style="height:64px"><div class="sidebar" style="width:280px">
+   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Update 0.64.26</span></div>
   </div></div>
-  <div class="good">Wide enough again, and the name comes back.</div>
+  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Narrower: the update pill shrinks to its icon (text in the tooltip)</div>
+  <div class="win" style="height:64px"><div class="sidebar" style="width:200px">
+   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><span class="n">Leo Li</span><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill ic" title="Update 0.64.26"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+  </div></div>
+  <div style="font-size:11.5px;color:var(--sec);margin:10px 0 4px">Narrowest: the chip drops the name, keeps avatar and chevron</div>
+  <div class="win" style="height:64px"><div class="sidebar" style="width:130px">
+   <div class="footer after" style="overflow:hidden"><div class="chip"><div class="av"></div><svg class="cv" width="8" height="12" viewBox="0 0 8 12"><path d="M1.2 4.4 4 1.6l2.8 2.8M1.2 7.6 4 10.4l2.8-2.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="grp"><div class="ib"><div class="q">?</div></div></div><span class="pill ic"><svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6 3.2v4.6M3.9 5.9 6 8l2.1-2.1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+  </div></div>
+
  </div>
 </div>
 </body></html>
