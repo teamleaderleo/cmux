@@ -1,0 +1,161 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sidebar Footer Mockup</title>
+<style>
+:root{--bg:#1e1f22;--side:#26272b;--text:#e6e6e8;--sec:#9a9aa1;--sep:rgba(255,255,255,.09);--menu:rgba(44,45,50,.97);--hl:#2f6fe4;--accent:#3b82f6}
+*{box-sizing:border-box}
+body{margin:0;background:#141416;font:13px/1.3 -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:var(--text);padding:28px}
+h2{font-size:15px;margin:0 0 4px}
+.cap{color:var(--sec);font-size:12px;margin:0 0 14px;max-width:340px}
+.row{display:flex;gap:28px;align-items:flex-start}
+.col{width:360px}
+.win{position:relative;width:360px;height:540px;background:var(--bg);border-radius:10px;overflow:hidden;border:1px solid #333}
+.sidebar{position:absolute;left:0;top:0;bottom:0;width:250px;background:var(--side);border-right:1px solid #333}
+.ws{margin:6px 8px;padding:7px 10px;border-radius:7px;color:var(--sec);font-size:12px}
+.ws.sel{background:rgba(255,255,255,.07);color:var(--text)}
+.footer{position:absolute;left:6px;right:10px;bottom:6px;height:22px;display:flex;align-items:center;gap:4px}
+.ib{width:22px;height:22px;border-radius:8px;display:grid;place-items:center;color:var(--sec);position:relative}
+.ib.on{background:rgba(255,255,255,.12)}
+.av{width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#ef4444)}
+.q{width:14px;height:14px;border-radius:50%;border:1.3px solid var(--sec);font-size:9.5px;display:grid;place-items:center;font-weight:500}
+.dot{position:absolute;right:3px;top:3px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.pro{font-size:10px;font-weight:600;padding:2px 6px;border-radius:6px;background:rgba(168,85,247,.2);color:#d8b4fe}
+.pill{font-size:10.5px;padding:3px 8px;border-radius:10px;background:rgba(59,130,246,.2);color:#93c5fd;white-space:nowrap}
+.kb{font-size:11px}
+.shift{outline:1px dashed #f87171;outline-offset:2px;border-radius:6px}
+/* old popover */
+.pop{position:absolute;left:30px;bottom:34px;width:200px;background:#2b2c31;border:1px solid #3a3b40;border-radius:10px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.pop .it{height:24px;display:flex;align-items:center;padding:0 8px;font-size:12px;gap:8px}
+.pop .it .r{margin-left:auto;color:var(--sec);font-size:10px}
+.pop .it.hover{outline:1px dashed #f87171;border-radius:4px}
+/* native menu */
+.menu{position:absolute;left:6px;bottom:32px;min-width:236px;background:var(--menu);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px;box-shadow:0 12px 34px rgba(0,0,0,.55);backdrop-filter:blur(20px)}
+.menu .it{height:22px;display:flex;align-items:center;padding:0 9px;border-radius:4px;font-size:13px}
+.menu .it .k{margin-left:auto;color:var(--sec);font-size:12.5px;letter-spacing:.5px;padding-left:24px}
+.menu .it.hl{background:var(--hl);color:#fff}.menu .it.hl .k{color:#dbe6ff}
+.menu .sep{height:1px;background:var(--sep);margin:5px 9px}
+.badge{margin-left:8px;font-size:10.5px;padding:0 6px;border-radius:9px;background:rgba(255,255,255,.14);color:var(--text);line-height:16px}
+.hdr{display:flex;gap:10px;align-items:center;padding:6px 9px}
+.hdr .av{width:28px;height:28px}
+.hdr b{display:block;font-size:13px}.hdr span{font-size:11px;color:var(--sec)}
+.sheet{position:absolute;left:6px;bottom:32px;width:320px;height:300px;background:#2b2c31;border:1px solid #3a3b40;border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.55);overflow:hidden}
+.sheet .h{display:flex;align-items:baseline;padding:12px 12px 8px;border-bottom:1px solid var(--sep)}
+.sheet .h b{font-size:13px}.sheet .h a{margin-left:auto;color:#6ea8ff;font-size:12px}
+.sheet .sh{font-size:10.5px;color:var(--sec);padding:8px 12px 2px;text-transform:uppercase;letter-spacing:.4px}
+.sheet .r{display:flex;padding:4px 12px;font-size:12px}.sheet .r span{margin-left:auto;color:var(--sec)}
+.note{font-size:11.5px;color:#fca5a5;margin-top:8px}
+.good{font-size:11.5px;color:#86efac;margin-top:8px}
+</style></head><body>
+
+<div id="help" class="row">
+ <div class="col">
+  <h2>Before: Help</h2>
+  <p class="cap">Custom popover, 12 flat rows. Rows have no hover highlight and no arrow-key navigation. Settings and the Pro upsell sit between people and help.</p>
+  <div class="win"><div class="sidebar">
+   <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
+   <div class="pop">
+    <div class="it">Welcome to cmux!</div>
+    <div class="it">What's New <span class="dot" style="position:static;margin-left:2px"></span></div>
+    <div class="it">Upgrade to cmux Pro… <span class="r">✦</span></div>
+    <div class="it hover">Settings… <span class="r">⌘,</span></div>
+    <div class="it">Keyboard Shortcuts</div>
+    <div class="it">Import Browser Data…</div>
+    <div class="it">Send Feedback <span class="r">⌥⌘F 💬</span></div>
+    <div class="it">Docs <span class="r">↗</span></div>
+    <div class="it">Changelog <span class="r">↗</span></div>
+    <div class="it">GitHub <span class="r">↗</span></div>
+    <div class="it">GitHub Issues <span class="r">↗</span></div>
+    <div class="it">Discord <span class="r">↗</span></div>
+    <div class="it">Check for Updates</div>
+   </div>
+   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div><span class="pro">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+  <div class="note">Dashed row: pointer is over it, nothing lights up.</div>
+ </div>
+ <div class="col">
+  <h2>After: Help</h2>
+  <p class="cap">Native NSMenu in four groups: learn, app, feedback and community, Pro last. Highlight, arrow keys, type-select, press-drag-release, configured shortcuts.</p>
+  <div class="win"><div class="sidebar">
+   <div class="ws sel">cmux · main</div><div class="ws">glaeda · fleet</div><div class="ws">tact · notes</div>
+   <div class="menu">
+    <div class="it">What's New<span class="badge">New</span></div>
+    <div class="it">Welcome to cmux!</div>
+    <div class="it hl">Keyboard Shortcuts</div>
+    <div class="it">Docs</div>
+    <div class="it">Changelog</div>
+    <div class="sep"></div>
+    <div class="it">Settings…<span class="k">⌘,</span></div>
+    <div class="it">Import Browser Data…</div>
+    <div class="it">Check for Updates</div>
+    <div class="sep"></div>
+    <div class="it">Send Feedback<span class="k">⌥⌘F</span></div>
+    <div class="it">GitHub Issues</div>
+    <div class="it">Discord</div>
+    <div class="it">GitHub</div>
+    <div class="sep"></div>
+    <div class="it">Upgrade to cmux Pro…</div>
+   </div>
+   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib on"><div class="q">?</div><div class="dot"></div></div><span class="pro">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+  <div class="good">Opens upward from the button; closes on Esc, click-away, or any other menu.</div>
+ </div>
+</div>
+
+<div id="shortcuts" class="row" style="margin-top:36px">
+ <div class="col">
+  <h2>Before: holding ⌘</h2>
+  <p class="cap">Every ⌘ hold mounts a keyboard button after Help, so Pro and the update pill jump right. In a terminal, ⌘ is held constantly. Help › Keyboard Shortcuts goes to a Settings pane instead.</p>
+  <div class="win" style="height:180px"><div class="sidebar">
+   <div class="ws sel">cmux · main <span style="float:right;color:var(--sec)">⌘1</span></div><div class="ws">glaeda · fleet <span style="float:right">⌘2</span></div>
+   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib"><div class="q">?</div></div><div class="ib shift"><span class="kb">⌨</span></div><span class="pro shift">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+ </div>
+ <div class="col">
+  <h2>After: Help › Keyboard Shortcuts</h2>
+  <p class="cap">The footer never changes shape. ⌘ hold still shows row shortcut badges. The cheat sheet opens from Help, with Customize… for editing.</p>
+  <div class="win" style="height:400px"><div class="sidebar" style="width:360px">
+   <div class="sheet">
+    <div class="h"><b>Keyboard Shortcuts</b><a>Customize…</a></div>
+    <div class="sh">App</div>
+    <div class="r">Settings<span>⌘,</span></div><div class="r">Send Feedback<span>⌥⌘F</span></div><div class="r">Command Palette<span>⇧⌘P</span></div>
+    <div class="sh">Workspace</div>
+    <div class="r">New Workspace<span>⌘N</span></div><div class="r">Close Workspace<span>⇧⌘W</span></div><div class="r">Rename Workspace<span>⇧⌘R</span></div>
+    <div class="sh">Navigation</div>
+    <div class="r">Select Workspace 1…9<span>⌘1…9</span></div>
+   </div>
+   <div class="footer"><div class="ib"><div class="av"></div></div><div class="ib on"><div class="q">?</div></div><span class="pro">PRO</span><span style="flex:1"></span><span class="pill">Update 0.64.26</span></div>
+  </div></div>
+ </div>
+</div>
+
+<div id="account" class="row" style="margin-top:36px">
+ <div class="col">
+  <h2>Before: account</h2>
+  <p class="cap">A custom popover with its own animation, different from Help next to it; its rows have no hover state either.</p>
+  <div class="win" style="height:260px"><div class="sidebar">
+   <div class="pop" style="left:6px;width:220px;padding:12px">
+    <div style="display:flex;gap:10px;align-items:center"><div class="av" style="width:34px;height:34px"></div><div><b style="font-size:13px">Leo Li</b><br><span style="font-size:11px;color:var(--sec)">leo@example.com</span></div></div>
+    <div style="height:1px;background:var(--sep);margin:8px 0"></div>
+    <div class="it" style="padding:0">⚙ Settings… <span class="r">⌘,</span></div>
+    <div class="it" style="padding:0">✦ Upgrade to cmux Pro…</div>
+    <div class="it" style="padding:0">⇥ Sign Out</div>
+   </div>
+   <div class="footer"><div class="ib on"><div class="av"></div></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span></div>
+  </div></div>
+ </div>
+ <div class="col">
+  <h2>After: account</h2>
+  <p class="cap">Same native menu as Help. Identity header, then account actions, then Sign Out alone at the bottom. Signed out, a click still starts sign-in directly.</p>
+  <div class="win" style="height:260px"><div class="sidebar">
+   <div class="menu">
+    <div class="hdr"><div class="av"></div><div><b>Leo Li</b><span>leo@example.com</span></div></div>
+    <div class="sep"></div>
+    <div class="it">Settings…<span class="k">⌘,</span></div>
+    <div class="it hl">Upgrade to cmux Pro…</div>
+    <div class="sep"></div>
+    <div class="it">Sign Out</div>
+   </div>
+   <div class="footer"><div class="ib on"><div class="av"></div></div><div class="ib"><div class="q">?</div></div><span class="pro">PRO</span></div>
+  </div></div>
+ </div>
+</div>
+</body></html>
