@@ -79,3 +79,9 @@ tmux-*.log
 # Remote-only Blacksmith cmux-tui benchmark output
 /testbox-benchmark/
 /.cmux-scratch/
+
+# Tuist spike: generated project and Tuist dependency checkouts
+/CmuxTuist.xcodeproj/
+/CmuxTuist.xcworkspace/
+/Tuist/.build/
+/Derived/
