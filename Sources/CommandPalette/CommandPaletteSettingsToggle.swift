@@ -1,3 +1,4 @@
+import CmuxMarkdownUI
 import CmuxCommandPalette
 import Foundation
 import CmuxSettings

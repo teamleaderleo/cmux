@@ -1,3 +1,4 @@
+import CmuxMarkdownUI
 import SwiftUI
 
 /// Header popover control for the markdown viewer's typography: a native font

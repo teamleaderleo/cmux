@@ -1,4 +1,4 @@
-import Foundation
+public import Foundation
 
 /// Writes the markdown viewer typography defaults (size, font, and width).
 ///
@@ -8,8 +8,8 @@ import Foundation
 /// `markdown.*` change from `cmux.json` (the config file store writes the managed
 /// values to `UserDefaults.standard`), so `cmux reload-config` refreshes open
 /// viewers too.
-enum MarkdownTypographyDefaults {
-    static func setDefault(
+public enum MarkdownTypographyDefaults {
+    public static func setDefault(
         fontSize: Double,
         fontFamily: String,
         maxContentWidth: Double,
@@ -20,7 +20,7 @@ enum MarkdownTypographyDefaults {
         MarkdownMaxWidthSettings.setDefault(maxContentWidth, defaults: defaults)
     }
 
-    static func resetToBuiltInDefaults(defaults: UserDefaults = .standard) {
+    public static func resetToBuiltInDefaults(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: MarkdownFontSizeSettings.key)
         MarkdownFontFamily.setDefault(MarkdownFontFamily.systemDefault, defaults: defaults)
         MarkdownMaxWidthSettings.resetDefault(defaults: defaults)
