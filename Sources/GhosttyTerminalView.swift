@@ -9584,6 +9584,30 @@ class GhosttyNSView: NSView, NSUserInterfaceValidations {
             x *= 2
             y *= 2
         }
+
+        // Keyboard Copy Mode owns the wheel just like its key bindings do.
+        // Do not pass the gesture through Ghostty's application mouse-report
+        // path: DECSET 1003 can otherwise leave a queued SGR report behind
+        // while the copy-mode cursor is being reconciled. Use the same local
+        // viewport operation as Page Up/Down and publish the authoritative
+        // row-space snapshot before returning.
+        if keyboardCopyModeActive, y != 0 {
+            let handled = performKeyboardCopyModeViewportScroll(
+                surface: surface,
+                action: GHOSTTY_KEYBOARD_COPY_SCROLL_LINES,
+                amount: y > 0 ? -1 : 1
+            )
+            if handled {
+                if let authoritativeScrollbar = authoritativeScrollbarSnapshot() {
+                    discardPendingScrollbar()
+                    publishScrollbarUpdate(
+                        authoritativeScrollbar,
+                        isAuthoritativeWheelResponse: true
+                    )
+                }
+                return
+            }
+        }
         scrollSpeedAccumulator.apply(x: &x, y: &y, precision: precision)
         var mods: Int32 = 0
         if precision {
