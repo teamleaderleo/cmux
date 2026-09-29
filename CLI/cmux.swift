@@ -30602,13 +30602,6 @@ struct CMUXCLI {
             if isCodexMonitorLeaseRetired(path: leasePath) {
                 return
             }
-            let now = Date()
-            if now >= nextOwnerCheck {
-                nextOwnerCheck = now.addingTimeInterval(Self.codexMonitorOwnerCheckIntervalSeconds)
-                if codexMonitorOwnerState(workspaceId: workspaceId, surfaceId: surfaceId, client: client) == .gone {
-                    return
-                }
-            }
 
             if transcriptPath == nil {
                 transcriptPath = findCodexTranscriptPath(sessionId: sessionId, env: env)
@@ -30665,6 +30658,19 @@ struct CMUXCLI {
                             continue
                         }
                     }
+                }
+            }
+
+            // Read the transcript before checking pane ownership. A completed
+            // turn is authoritative even when the pane is briefly absent from
+            // surface.list during restore or a workspace projection refresh;
+            // checking ownership first would abandon the monitor and strand
+            // the sidebar's Running status forever.
+            let now = Date()
+            if now >= nextOwnerCheck {
+                nextOwnerCheck = now.addingTimeInterval(Self.codexMonitorOwnerCheckIntervalSeconds)
+                if codexMonitorOwnerState(workspaceId: workspaceId, surfaceId: surfaceId, client: client) == .gone {
+                    return
                 }
             }
 
