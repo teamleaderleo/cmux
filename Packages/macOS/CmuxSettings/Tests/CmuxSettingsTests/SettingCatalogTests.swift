@@ -96,6 +96,7 @@ struct SettingCatalogTests {
         #expect(ids.contains("mobile.artifactFolderAccess"))
         #expect(ids.contains("automation.socketControlMode"))
         #expect(ids.contains("automation.socketPassword"))
+        #expect(ids.contains("automation.canonicalAgentScratch"))
     }
 
     @Test func browserCatalogIncludesDefaultZoomLevel() {
