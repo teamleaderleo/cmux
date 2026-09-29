@@ -140,6 +140,11 @@ extension MobileHostAuthorizationTests {
             await MobileHostService.acceptTransport(
                 first,
                 authorization: authorization,
+                // Keep this lifecycle test independent of the machine's MDM
+                // profile. The production default reads the real managed
+                // policy, which can be disabled on a CI host and would close
+                // the scripted transport before it is admitted.
+                remoteControlDisabledByPolicy: { false },
                 isCurrent: { true }
             )
         }
@@ -151,6 +156,7 @@ extension MobileHostAuthorizationTests {
             await MobileHostService.acceptTransport(
                 second,
                 authorization: authorization,
+                remoteControlDisabledByPolicy: { false },
                 isCurrent: { true }
             )
         }
@@ -206,6 +212,7 @@ extension MobileHostAuthorizationTests {
             await MobileHostService.acceptTransport(
                 persistentTransport,
                 authorization: authorization,
+                remoteControlDisabledByPolicy: { false },
                 isCurrent: { true }
             )
         }
@@ -245,6 +252,7 @@ extension MobileHostAuthorizationTests {
                 transport,
                 authorization: authorization,
                 firstFrameTimeoutNanoseconds: 0,
+                remoteControlDisabledByPolicy: { false },
                 isCurrent: { true }
             )
         }
@@ -258,6 +266,7 @@ extension MobileHostAuthorizationTests {
                 expiringTransport,
                 authorization: .stackBearer,
                 firstFrameTimeoutNanoseconds: 1_000_000,
+                remoteControlDisabledByPolicy: { false },
                 isCurrent: { true }
             )
         }
