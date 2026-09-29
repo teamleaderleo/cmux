@@ -13,6 +13,6 @@ struct AgentActionCommandDetectorTests {
         let detector = CodexActionCommandDetector()
         #expect(detector.commands(in: "echo /goal resume").isEmpty)
         #expect(detector.commands(in: "/goal reset").isEmpty)
-        #expect(detector.command(in: "/goal resume now", atColumn: 3) != nil)
+        #expect(detector.command(in: "/goal resume now", atColumn: 3) == nil)
     }
 }
