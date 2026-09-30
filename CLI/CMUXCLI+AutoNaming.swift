@@ -234,7 +234,7 @@ struct CodexAutoNamingArguments: Sendable {
         if includeProviderEntries {
             result.append(contentsOf: providerEntries
                 .filter { $0.section.hasPrefix("model_providers.\(providerName)") }
-                .filter { !isCredentialBearingKey($0.key) }
+                .filter { !isCredentialBearingKey(section: $0.section, key: $0.key) }
                 .map {
                     let prefix = "model_providers.\(providerName)"
                     let nestedPath = String($0.section.dropFirst(prefix.count))
@@ -246,7 +246,11 @@ struct CodexAutoNamingArguments: Sendable {
         return result
     }
 
-    private static func isCredentialBearingKey(_ key: String) -> Bool {
+    private static func isCredentialBearingKey(section: String, key: String) -> Bool {
+        let normalizedSection = section.lowercased().replacingOccurrences(of: "-", with: "_")
+        if normalizedSection.split(separator: ".").contains(where: { $0 == "headers" || $0 == "http_headers" }) {
+            return true
+        }
         let normalized = key.lowercased().replacingOccurrences(of: "-", with: "_")
         return normalized.contains("token")
             || normalized.contains("secret")
