@@ -358,6 +358,17 @@ def test_delete_versus_modify_resolves_to_each_side_as_valid_json():
         assert set(resolved["strings"]) == ({"a", "b"} if side == "ours" else {"b"})
 
 
+def test_delete_versus_modify_last_key_resolves_to_each_side_as_valid_json():
+    base = catalog({"a": unit("A"), "b": unit("B")})
+    ours = catalog({"a": unit("A"), "b": unit("changed")})
+    theirs = catalog({"a": unit("A")})
+    code, merged, stderr = run(base, ours, theirs)
+    assert code == 1, stderr
+    for side in ("ours", "theirs"):
+        resolved = json.loads(resolve_conflict(merged, side))
+        assert set(resolved["strings"]) == ({"a", "b"} if side == "ours" else {"a"})
+
+
 def test_non_canonical_input_merges_without_reformatting():
     """Branches routinely carry a different catalog style from main. The driver
     must merge them anyway, and must not rewrite either side's formatting."""
@@ -643,7 +654,7 @@ def test_two_conflict_keys_on_one_line_stay_balanced_and_lossless():
     # The shares-a-line refusal keeps this compacted input in one lossless
     # whole-file conflict instead of attempting per-key replacements.
     assert len(conflict_regions(merged)) == 1, merged
-    # Ours' value for the second key was truncated to ',: "O2" }'.
+    # A per-key replacement would have truncated the second key to ',: "O2" }'.
     assert '"b": { "v": "O2" }' in merged, merged
     assert_conflict_preserves(merged, "O1", "O2", "T1", "T2", "B1", "B2")
 
