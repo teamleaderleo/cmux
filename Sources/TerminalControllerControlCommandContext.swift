@@ -39,6 +39,15 @@ extension TerminalController: ControlCommandContext {
 /// already runs on the main actor inside the socket-command policy scope, so each
 /// hop would re-apply the identical thread-local focus-allowance stack — a no-op.
 extension TerminalController: ControlWindowContext {
+    func controlWindowCloseStrings() -> ControlWindowCloseStrings {
+        ControlWindowCloseStrings(
+            confirmationRequired: String(
+                localized: "cli.socket.error.windowCloseConfirmationRequired",
+                defaultValue: "One or more workspaces or Dock surfaces have a running process; retry with --force"
+            )
+        )
+    }
+
     func controlWindowSummaries() -> [ControlWindowSummary] {
         (AppDelegate.shared?.listMainWindowSummaries() ?? []).map { summary in
             ControlWindowSummary(
@@ -81,6 +90,21 @@ extension TerminalController: ControlWindowContext {
         AppDelegate.shared?.closeMainWindow(windowId: id) ?? false
     }
 
+    func controlCloseWindow(id: UUID, force: Bool) -> ControlWindowCloseResolution {
+        guard let app = AppDelegate.shared,
+              let manager = app.tabManagerFor(windowId: id) else {
+            return .notFound
+        }
+        let activeWorkspaceIDs = manager.tabs
+            .filter { $0.needsConfirmClose() }
+            .map(\.id)
+        let dockNeedsConfirmation = app.existingWindowDock(for: manager)?.needsConfirmClose() == true
+        guard force || (activeWorkspaceIDs.isEmpty && !dockNeedsConfirmation) else {
+            return .confirmationRequired(workspaceIDs: activeWorkspaceIDs)
+        }
+        return app.closeMainWindow(windowId: id) ? .resolved : .notFound
+    }
+
     func controlAvailableDisplays() -> [ControlDisplayInfo] {
         (AppDelegate.shared?.availableDisplays() ?? []).map { display in
             ControlDisplayInfo(
@@ -111,4 +135,3 @@ extension TerminalController: ControlWindowContext {
         return ControlMoveAllWindowsResult(display: result.display, windowIDs: result.windowIds)
     }
 }
-

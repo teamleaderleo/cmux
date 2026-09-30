@@ -26,7 +26,32 @@ export CMUX_XCODEBUILD_NONINTERACTIVE_IDLE_TIMEOUT_SECONDS="${CMUX_XCODEBUILD_NO
 # the wrapper aborts it (https://github.com/manaflow-ai/cmux/issues/13707).
 export CMUX_XCODEBUILD_NONINTERACTIVE_RESTART_BUDGET="${CMUX_XCODEBUILD_NONINTERACTIVE_RESTART_BUDGET:-2}"
 restart_budget_exit_code=123
-echo "App-host xcodebuild idle timeout: ${CMUX_XCODEBUILD_NONINTERACTIVE_IDLE_TIMEOUT_SECONDS}s, attempts: ${max_attempts}, restart budget: ${CMUX_XCODEBUILD_NONINTERACTIVE_RESTART_BUDGET}"
+# A test runner that never connects used to cost xcodebuild's own ~700s per
+# attempt, three attempts in a row, before the job failed. Normal runs print
+# their first test line seconds after "Testing started", so bound that gap.
+export CMUX_XCODEBUILD_NONINTERACTIVE_STARTUP_TIMEOUT_SECONDS="${CMUX_XCODEBUILD_NONINTERACTIVE_STARTUP_TIMEOUT_SECONDS:-180}"
+startup_hang_exit_code=122
+startup_hangs=0
+# testmanagerd is this user's on-demand launchd agent; launchd starts a fresh
+# one for the next session. The app-host lock keeps other app-host runs away,
+# but other XCTest clients of this user (E2E UI tests, tmux-corpus, compat
+# lanes) are not under it, and a restart would drop their sessions. This
+# attempt's own xcodebuild has exited by now, so any live one belongs to them.
+restart_testmanagerd() {
+  local pid args
+  for pid in $(pgrep -x -U "$(id -u)" xcodebuild 2>/dev/null || true); do
+    args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+    case " $args " in
+      *" test "*|*" test-without-building "*)
+        echo "Not restarting testmanagerd: xcodebuild $pid is running tests on this Mac" >&2
+        return 0
+        ;;
+    esac
+  done
+  launchctl kickstart -k "gui/$(id -u)/com.apple.testmanagerd" >&2 \
+    || echo "warning: could not restart testmanagerd before retrying" >&2
+}
+echo "App-host xcodebuild idle timeout: ${CMUX_XCODEBUILD_NONINTERACTIVE_IDLE_TIMEOUT_SECONDS}s, startup timeout: ${CMUX_XCODEBUILD_NONINTERACTIVE_STARTUP_TIMEOUT_SECONDS}s, attempts: ${max_attempts}, restart budget: ${CMUX_XCODEBUILD_NONINTERACTIVE_RESTART_BUDGET}"
 
 # Principled serialization (the actual fix; the retry below is only a backstop).
 # Invariant: a GUI test host owns the Mac's single login session + testmanagerd
@@ -128,13 +153,20 @@ fi
 
 app_host_xcodebuild_arguments=("$@")
 caller_has_result_bundle=0
+caller_result_bundle_path=""
 caller_has_test_timeouts_enabled=0
 caller_has_default_test_timeout=0
 caller_has_maximum_test_timeout=0
-for app_host_argument in "${app_host_xcodebuild_arguments[@]}"; do
+for ((app_host_argument_index = 0; app_host_argument_index < ${#app_host_xcodebuild_arguments[@]}; app_host_argument_index++)); do
+  app_host_argument="${app_host_xcodebuild_arguments[$app_host_argument_index]}"
   case "$app_host_argument" in
     -resultBundlePath)
       caller_has_result_bundle=1
+      # Keep the path separate so every retry starts with a fresh result
+      # bundle. Xcode refuses to write into an existing .xcresult directory,
+      # and a stale first-attempt bundle would otherwise turn a safe retry
+      # into a deterministic failure.
+      caller_result_bundle_path="${app_host_xcodebuild_arguments[$((app_host_argument_index + 1))]:-}"
       ;;
     -test-timeouts-enabled)
       caller_has_test_timeouts_enabled=1
@@ -300,6 +332,18 @@ while [ "$attempt" -le "$max_attempts" ]; do
     rm -rf -- "$result_bundle_path"
     attempt_xcodebuild_arguments+=("-resultBundlePath" "$result_bundle_path")
   fi
+  if [ "$caller_has_result_bundle" -eq 1 ] && [ -n "$caller_result_bundle_path" ]; then
+    # A caller-owned path is intentionally reused in the log/summary. Remove
+    # the prior attempt before each invocation so a bounded retry can write a
+    # fresh xcresult instead of failing on Xcode's existing-directory check.
+    case "$caller_result_bundle_path" in
+      "${RUNNER_TEMP:-/tmp}"/*|/tmp/*) rm -rf -- "$caller_result_bundle_path" ;;
+      *)
+        echo "FAIL: caller result bundle must be under RUNNER_TEMP or /tmp for retry cleanup" >&2
+        exit 2
+        ;;
+    esac
+  fi
   {
     echo "shard=${CMUX_APP_HOST_SHARD:-unknown}"
     echo "tag=$log_tag"
@@ -362,16 +406,33 @@ while [ "$attempt" -le "$max_attempts" ]; do
       exit "$status"
     fi
     retry_reason=""
-    if [ "$status" -eq 124 ]; then
+    startup_hang=0
+    if [ "$status" -eq "$startup_hang_exit_code" ]; then
+      retry_reason="XCTest startup hang (no test within ${CMUX_XCODEBUILD_NONINTERACTIVE_STARTUP_TIMEOUT_SECONDS}s)"
+      startup_hang=1
+    elif [ "$status" -eq 124 ]; then
       retry_reason="${CMUX_XCODEBUILD_NONINTERACTIVE_IDLE_TIMEOUT_SECONDS}s idle timeout"
     elif grep -Fq 'The test runner hung before establishing connection.' "$log_path"; then
       retry_reason="XCTest startup hang"
+      startup_hang=1
     elif grep -Fq 'Failed to establish communication with the test runner' "$log_path"; then
       retry_reason="test runner communication failure"
     elif grep -Fq 'com.apple.testmanagerd.control was invalidated' "$log_path"; then
       retry_reason="testmanagerd connection invalidated"
     elif grep -Fq "Couldn't communicate with a helper application" "$log_path"; then
       retry_reason="test helper communication failure"
+    fi
+
+    if [ "$startup_hang" -eq 1 ]; then
+      startup_hangs=$((startup_hangs + 1))
+      # Two startup hangs in one invocation mean this Mac's testmanagerd
+      # refuses the IDE channel; every further attempt hangs the same way.
+      # Stop and say so, so the rerun lands on another runner. A single-attempt
+      # caller gets the same annotation on its only hang.
+      if [ "$startup_hangs" -ge 2 ] || [ "$attempt" -ge "$max_attempts" ]; then
+        echo "::error title=App-host runner fault::${RUNNER_NAME:-this runner}: the XCTest runner never connected in $startup_hangs launch(es) (testmanagerd refused xcodebuild). Runner fault, not a test verdict; rerun the job." >&2
+        exit "$status"
+      fi
     fi
 
     if [ -n "$retry_reason" ] && [ "$attempt" -lt "$max_attempts" ]; then
@@ -381,6 +442,9 @@ while [ "$attempt" -le "$max_attempts" ]; do
       fi
       echo "Retrying app-host xcodebuild after ${retry_reason} (attempt $attempt/$max_attempts)" >&2
       kill_stale_app_host
+      if [ "$startup_hang" -eq 1 ]; then
+        restart_testmanagerd
+      fi
       attempt=$((attempt + 1))
       continue
     fi

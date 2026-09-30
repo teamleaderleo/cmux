@@ -13,8 +13,13 @@ import time
 archive = Path(os.environ["RUNNER_TEMP"]) / "app-host-products/app-host-products.tar.gz"
 layer_hit = os.environ.get("CMUX_LAYER_RESTORED") == "true"
 elapsed = max(0.0, (time.monotonic_ns() - int(os.environ["CMUX_RESTORE_STARTED_NS"])) / 1_000_000_000)
+# Compile admission restoring the archive it just packaged, for the changed
+# suites it runs itself: no transport was involved.
+producer_hit = os.environ.get("CMUX_PRODUCT_FROM_PRODUCER") == "true"
 local_hit = os.environ.get("CMUX_NODE_PRODUCT_CACHE_HIT") == "true"
 peer_hit = os.environ.get("CMUX_PEER_PRODUCT_HIT") == "true"
+# "lan": another PR mini through glaeda's LAN helper; "peer": a trusted HTTPS peer.
+peer_source = os.environ.get("CMUX_PEER_PRODUCT_SOURCE") or ("peer" if peer_hit else "")
 r2_hit = os.environ.get("CMUX_R2_PRODUCT_HIT") == "true"
 parallel_hit = os.environ.get("CMUX_PARALLEL_PRODUCT_HIT") == "true"
 record = {
@@ -22,8 +27,10 @@ record = {
     "r2_result": os.environ.get("CMUX_ARTIFACT_R2_RESULT") or "disabled",
     "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
     "repository": os.environ["GITHUB_REPOSITORY"],
-    "artifact_id": int(os.environ["ARTIFACT_ID"]),
-    "provider_digest": os.environ["ARTIFACT_PROVIDER_DIGEST"],
+    # test-e2e.yml's build job on an owned Mac restores its own archive
+    # before it uploads it, so there is no artifact yet.
+    "artifact_id": int(os.environ["ARTIFACT_ID"]) if os.environ.get("ARTIFACT_ID") else None,
+    "provider_digest": os.environ.get("ARTIFACT_PROVIDER_DIGEST") or None,
     "archive_sha256": os.environ["EXPECTED_SHA256"],
     "product_contract": os.environ["CMUX_PRODUCT_CONTRACT"],
     "source_revision": os.environ["CMUX_PRODUCT_SOURCE_REVISION"],
@@ -33,8 +40,9 @@ record = {
     "layer_hit": layer_hit,
     "elapsed_seconds": round(elapsed, 6),
     "lookup_source": (
+        "producer" if producer_hit else
         "local" if local_hit else
-        "peer" if peer_hit else
+        ("lan" if peer_source == "lan" else "peer") if peer_hit else
         "layers-github" if layer_hit else
         "r2" if r2_hit else
         "github-parallel" if parallel_hit else
@@ -43,6 +51,7 @@ record = {
     "local_hit": local_hit,
     "lookup_seconds": float(os.environ.get("CMUX_NODE_PRODUCT_CACHE_LOOKUP_SECONDS") or 0),
     "peer_hit": peer_hit,
+    "peer_source": peer_source,
     "peer_lookup_seconds": float(os.environ.get("CMUX_PEER_PRODUCT_LOOKUP_SECONDS") or 0),
     "peer_transfer_seconds": float(os.environ.get("CMUX_PEER_PRODUCT_TRANSFER_SECONDS") or 0),
     "peer_bytes_transferred": int(os.environ.get("CMUX_PEER_PRODUCT_BYTES") or 0),
@@ -52,6 +61,7 @@ record = {
     "job": os.environ.get("GITHUB_JOB"),
     "shard": os.environ.get("CMUX_APP_HOST_SHARD"),
     "runner_name": os.environ.get("RUNNER_NAME"),
+    "canonical_root_lock_skipped": os.environ.get("CMUX_CI_ROOT_LOCK_SKIPPED") == "true",
 }
 record["route"] = record["lookup_source"]
 print("CMUX_TEST_PRODUCT_RESTORE " + json.dumps(record, sort_keys=True))
@@ -71,6 +81,11 @@ if [ "${CMUX_LAYER_RESTORED:-}" != "true" ]; then
   tar -xzf "$archive" -C "$CMUX_DERIVED_DATA_PATH"
 fi
 products="$CMUX_DERIVED_DATA_PATH/Build/Products/Debug"
+# The product's Mach-O files look for package frameworks first at the
+# DerivedData they were compiled in. On an owned Mac that path can hold the
+# canonical root's kept build of another commit, so point them at this
+# product's own frameworks before anything below copies them.
+python3 scripts/ci/relocate_package_framework_rpaths.py "$products"
 stable="$RUNNER_TEMP/cmux-app-host-package-frameworks"
 stable_system="/private/tmp/cmux-app-host-package-frameworks"
 mkdir -p "$stable"
@@ -90,4 +105,45 @@ test -f "$products/PackageFrameworks/CmuxAgentJournal_27B6EF8727F6C277_PackagePr
 python3 scripts/ci/app_host_test_products.py restore "$CMUX_DERIVED_DATA_PATH"
 # Tests also read fixtures via compiled #filePath; manifest relocation alone
 # cannot repair those strings when the product was built at the canonical root.
-scripts/ci/canonical-build-root.sh --runtime-source "$PWD"
+# The receipt's `derived` is the DerivedData the product was compiled into,
+# <root>/derived-data-compile-admission, at /private/tmp/cmux-ci or, for an
+# owned Mac's second compile slot, /private/tmp/cmux-ci-<n>. Packaging
+# re-stamps the receipt from the job's workspace, so its `checkout` never
+# names the root, but `derived` is the same path at both stamps. The
+# product's #filePath strings point at that root, so alias this checkout
+# there rather than at this runner's own.
+producer_derived="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("derived", ""))' \
+  "$CMUX_DERIVED_DATA_PATH/Build/Products/cmux-test-products.json")"
+case "$producer_derived" in
+  /private/tmp/cmux-ci/derived-data-compile-admission \
+  | /private/tmp/cmux-ci-[0-9]/derived-data-compile-admission \
+  | /private/tmp/cmux-ci-[0-9][0-9]/derived-data-compile-admission)
+    export CMUX_CI_CANONICAL_ROOT="${producer_derived%/derived-data-compile-admission}"
+    ;;
+esac
+# On an owned Mac several jobs share the canonical roots, and the alias below
+# replaces <root>/src. glaeda's helper holds that root's lock for the rest of
+# this job (released when it ends), so a consumer never swaps the tree of a
+# compile running there. Ephemeral runners have no helper and no neighbours.
+root_lock=/Users/Shared/cmux-build-fleet/bin/glaeda-canonical-root
+canonical_root_ready=true
+if [ -x "$root_lock" ]; then
+  if "$root_lock" take "${CMUX_CI_CANONICAL_ROOT:-/private/tmp/cmux-ci}" --wait 0 >/dev/null; then
+    :
+  else
+    status=$?
+    if [ "$status" -ne 1 ]; then
+      echo "restore-app-host-test-product: canonical root helper failed (exit $status)" >&2
+      exit "$status"
+    fi
+    canonical_root_ready=false
+    export CMUX_CI_ROOT_LOCK_SKIPPED=true
+    unset CMUX_CI_CANONICAL_ROOT
+    echo "restore-app-host-test-product: canonical root is busy; running tests from this job's DerivedData" >&2
+  fi
+fi
+if [ "$canonical_root_ready" = true ]; then
+  scripts/ci/canonical-build-root.sh --runtime-source "$PWD"
+else
+  echo "restore-app-host-test-product: skipped canonical source alias until root-independent file paths land" >&2
+fi

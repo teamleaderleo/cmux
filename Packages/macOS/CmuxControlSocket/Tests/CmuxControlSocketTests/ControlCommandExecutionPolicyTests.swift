@@ -51,6 +51,9 @@ struct ControlCommandExecutionPolicyTests {
             "debug.sidebar.simulate_drag", "debug.mobile.transport.disconnect", "debug.mobile.transport.reconnect_loop",
             "debug.window.screenshot", "mobile.attach_ticket.create",
             "mobile.terminal.set_font", "mobile.task.models.list",
+            "terminal.size_state", "terminal.size_policy.set", "terminal.size_to_me",
+            "terminal.size_counts.set", "terminal.participant.disconnect",
+            "terminal.participants.disconnect_others",
             // Vault session-index verbs scan transcript stores on disk and
             // must never hold the main actor (see socketWorkerMethods).
             "vault.sessions", "vault.search", "vault.checkpoints",
@@ -60,7 +63,7 @@ struct ControlCommandExecutionPolicyTests {
             // JavaScript-evaluating browser methods block on page JS and must
             // not hold the main actor (see socketWorkerMethods rationale).
             "browser.eval", "browser.wait", "browser.snapshot", "browser.click",
-            "browser.fill", "browser.navigate", "browser.get.text",
+            "browser.fill", "browser.set_input_files", "browser.navigate", "browser.get.text",
             "browser.find.text", "browser.highlight",
             // Adjacent WebKit/page-state methods wait on JS, cookie, or
             // capture callbacks and follow the same worker-lane contract.
@@ -106,8 +109,6 @@ struct ControlCommandExecutionPolicyTests {
         for method in [
             "remote.tmux.test_exec", "remote.tmux.test_set_frame",
             "remote.tmux.test_perturb_divider",
-            // window is a DEBUG-only alias of mirror; it must share the worker lane.
-            "remote.tmux.window",
         ] {
             let policy = ControlCommandExecutionPolicy(forMethod: method)
 #if DEBUG
@@ -116,6 +117,14 @@ struct ControlCommandExecutionPolicyTests {
             #expect(policy == .mainActor, "\(method)")
 #endif
         }
+    }
+
+    @Test func remoteTmuxWindowRunsOnTheReleaseWorkerLane() {
+        #expect(ControlCommandExecutionPolicy.socketWorkerMethods.contains("remote.tmux.window"))
+        #expect(
+            ControlCommandExecutionPolicy(forMethod: "remote.tmux.window")
+                == .socketWorker(mainThreadCallable: false)
+        )
     }
 
     @Test func v2ResolutionReadsRunOnTheWorkerAndAreMainThreadCallable() {

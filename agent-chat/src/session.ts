@@ -1,6 +1,8 @@
 // Client-side session state: one WebSocket, one session per page.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyThemeVars } from "./theme";
+import { openSessionConnection } from "./connection";
+import type { HarnessRecommendation, HarnessCatalogs } from "../harness-contract";
 import { latestRouteStatus, normalizeRouteStatus, type RouteHealth, type RoutePhase, type RouteStatus } from "../route-status";
 
 export type AgentEvent =
@@ -25,6 +27,7 @@ export type AgentEvent =
   | { kind: "commands"; trigger: CommandTrigger; commands: CommandEntry[] }
   | { kind: "user"; text: string }
   | { kind: "status"; text: string }
+  | { kind: "plan"; entries: AgentPlanEntry[] }
   | { kind: "delta"; text: string }
   | { kind: "assistant"; text: string }
   | { kind: "thinking"; text: string }
@@ -32,7 +35,7 @@ export type AgentEvent =
   | { kind: "tool-end"; toolId: string; name?: string; detail?: string; ok?: boolean }
   | { kind: "done"; stats?: string }
   | { kind: "files-changed"; files: ChangedFile[] }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; prompt?: string };
 
 export type OptionKind = "select" | "toggle";
 export type OptionValue = string | boolean;
@@ -61,6 +64,8 @@ export interface CommandGroup { trigger: CommandTrigger; commands: CommandEntry[
 export interface ProviderCapabilities { options: SessionOption[]; triggers: CommandTrigger[]; }
 export interface SessionActions { fork?: boolean; handoff?: boolean; }
 export interface ChangedFile { path: string; adds: number; dels: number; status: string; }
+export type AgentPlanStatus = "pending" | "in_progress" | "completed" | "unknown";
+export interface AgentPlanEntry { text: string; status: AgentPlanStatus; priority?: string; }
 
 const diffKeySeparator = "\0";
 
@@ -88,11 +93,62 @@ export type Block =
   | { kind: "thinking"; text: string; open: boolean }
   | { kind: "tool"; toolId: string; name: string; detail?: string; status: "running" | "ok" | "fail"; out?: string }
   | { kind: "status"; text: string }
+  | { kind: "plan"; entries: AgentPlanEntry[] }
   | { kind: "error"; text: string }
   | { kind: "footer"; text: string }
   | { kind: "files"; files: ChangedFile[]; revision?: string };
 
 export interface Provider { id: string; label: string; iconUrl?: string; iconDarkUrl?: string; installed?: boolean; installCommand?: string; }
+export type { HarnessRecommendation } from "../harness-contract";
+
+export interface CwdHarnessRequest {
+  requestId: string;
+  cwd: string;
+  connectionEpoch: number;
+}
+
+export interface CwdHarnessResponse {
+  requestId?: unknown;
+  cwd?: unknown;
+  connectionEpoch?: unknown;
+}
+
+/** Only the latest request on the current WebSocket may update visible harnesses. */
+export function acceptsCwdHarnessResponse(
+  active: CwdHarnessRequest | null,
+  response: CwdHarnessResponse,
+): boolean {
+  return Boolean(
+    active
+    && response.requestId === active.requestId
+    && response.cwd === active.cwd
+    && response.connectionEpoch === active.connectionEpoch,
+  );
+}
+
+/** Harness recommendations and the cwd they were discovered for. */
+export interface HarnessSnapshot {
+  cwd: string;
+  harnesses: HarnessRecommendation[];
+}
+
+const EMPTY_HARNESS_SNAPSHOT: HarnessSnapshot = { cwd: "", harnesses: [] };
+
+/** The server discovers hello harnesses for the default cwd it also sends. */
+export function helloHarnessSnapshot(hello: { defaultCwd: string; harnesses?: HarnessRecommendation[] }): HarnessSnapshot {
+  return { cwd: hello.defaultCwd, harnesses: hello.harnesses ?? [] };
+}
+
+/** Keep recommendations already known for the checked cwd; drop any for another cwd. */
+export function harnessSnapshotForCwdCheck(current: HarnessSnapshot, cwd: string): HarnessSnapshot {
+  return current.cwd === cwd ? current : EMPTY_HARNESS_SNAPSHOT;
+}
+
+export function visibleWorkflowHarnesses(snapshot: HarnessSnapshot, cwd: string): HarnessRecommendation[] {
+  if (!cwd || snapshot.cwd !== cwd) return [];
+  return snapshot.harnesses.filter((h) => h.kind === "workflow" && h.installed).slice(0, 2);
+}
+
 export interface SessionSummary {
   id: string;
   provider: string;
@@ -104,6 +160,10 @@ export interface SessionSummary {
   parentSessionId?: string;
   parentConversationId?: string;
   startRequestId?: string;
+  /** "transcript": a chat view of an agent running in a cmux terminal. */
+  mode?: "transcript";
+  /** What that agent is waiting on in the terminal (permission, question). */
+  attention?: string | null;
 }
 export type CtrlJMode = "newline" | "menu";
 
@@ -153,17 +213,33 @@ export function foldEvent(blocks: Block[], evt: AgentEvent): Block[] {
       return [...closeStreaming(blocks), { kind: "error", text: evt.message }];
     case "status":
       return [...closeStreaming(blocks), { kind: "status", text: evt.text }];
+    case "plan": {
+      const closed = closeStreaming(blocks);
+      let currentTurnStart = 0;
+      for (let index = closed.length - 1; index >= 0; index -= 1) {
+        if (closed[index]?.kind === "user") {
+          currentTurnStart = index + 1;
+          break;
+        }
+      }
+      const existingIndex = closed.findIndex((block, index) => index >= currentTurnStart && block.kind === "plan");
+      const plan = { kind: "plan" as const, entries: evt.entries };
+      if (existingIndex < 0) return [...closed, plan];
+      return closed.map((block, index) => (index === existingIndex ? plan : block));
+    }
     default:
       return blocks;
   }
 }
 
-interface Hello { providers: Provider[]; defaultCwd: string; keys?: { ctrlJ?: CtrlJMode }; }
+interface Hello { providers: Provider[]; harnesses?: HarnessRecommendation[]; harnessCatalogs?: HarnessCatalogs; defaultCwd: string; keys?: { ctrlJ?: CtrlJMode }; }
 
 export interface SessionState {
   ready: boolean;
   connectionEpoch: number;
   providers: Provider[];
+  harnessSnapshot: HarnessSnapshot;
+  harnessCatalogs: HarnessCatalogs;
   capabilities: Record<string, ProviderCapabilities>;
   defaultCwd: string;
   ctrlJ: CtrlJMode;
@@ -177,15 +253,18 @@ export interface SessionState {
   providerOptions: Record<string, SessionOption[]>;
   providerCommands: Record<string, CommandGroup[]>;
   filesByCwd: Record<string, string[]>;
-  cwdChecks: Record<string, { ok: boolean; message?: string }>;
+  cwdChecks: Record<string, { ok: boolean; message?: string; repositorySlug?: string }>;
   fileDiffs: Record<string, string>;
   lastError: string;
   forkPending: boolean;
   handoffPending: boolean;
   start(opts: { provider: string; cwd: string; prompt: string; options?: Record<string, OptionValue> }): boolean;
   compose(): void;
-  reply(text: string): void;
+  /** Sends a reply, returning false when the WebSocket is not ready. */
+  reply(text: string): boolean;
   stop(): void;
+  /** Focuses the terminal pane behind a terminal chat view. */
+  focusTerminal(): void;
   setOption(id: string, value: OptionValue): void;
   fork(): void;
   handoff(): void;
@@ -220,6 +299,8 @@ function appPath(path: string): string {
 }
 
 const routedSessionId = (routePath().match(/^\/s\/([\w-]+)/) || [])[1] || null;
+/** Transcript views use `t-<agent session id>`; known before history arrives. */
+export const routedToTranscript = routedSessionId?.startsWith("t-") ?? false;
 export const composerDraftKey = "agentui.draft";
 const PENDING_START_TIMEOUT_MS = 30_000;
 
@@ -231,9 +312,12 @@ export function restoreComposerDraft(storage: Pick<Storage, "setItem">, prompt: 
   storage.setItem(composerDraftKey, prompt);
 }
 
+// An echo matches anywhere in the queue: one that never lands (a failed send)
+// or lands rewritten (`!ls` recorded as a bash input) must not block the rest.
 export function consumeOptimisticUserEcho(queue: string[], text: string): boolean {
-  if (queue[0] !== text) return false;
-  queue.shift();
+  const index = queue.indexOf(text);
+  if (index < 0) return false;
+  queue.splice(index, 1);
   return true;
 }
 
@@ -253,6 +337,8 @@ export function useSession(): SessionState {
   const [ready, setReady] = useState(false);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [harnessSnapshot, setHarnessSnapshot] = useState<HarnessSnapshot>(EMPTY_HARNESS_SNAPSHOT);
+  const [harnessCatalogs, setHarnessCatalogs] = useState<HarnessCatalogs>({});
   const [capabilities, setCapabilities] = useState<Record<string, ProviderCapabilities>>({});
   const [defaultCwd, setDefaultCwd] = useState("");
   const [ctrlJ, setCtrlJ] = useState<CtrlJMode>("newline");
@@ -265,8 +351,9 @@ export function useSession(): SessionState {
   const [commands, setCommands] = useState<CommandGroup[]>([]);
   const [providerOptions, setProviderOptions] = useState<Record<string, SessionOption[]>>({});
   const [providerCommands, setProviderCommands] = useState<Record<string, CommandGroup[]>>({});
+  const latestCommandRequestsRef = useRef(new Map<string, { requestId: string; cwd: string; pending: boolean }>());
   const [filesByCwd, setFilesByCwd] = useState<Record<string, string[]>>({});
-  const [cwdChecks, setCwdChecks] = useState<Record<string, { ok: boolean; message?: string }>>({});
+  const [cwdChecks, setCwdChecks] = useState<Record<string, { ok: boolean; message?: string; repositorySlug?: string }>>({});
   const [fileDiffs, setFileDiffs] = useState<Record<string, string>>({});
   const [lastError, setLastError] = useState("");
   const [forkPending, setForkPending] = useState(false);
@@ -292,6 +379,14 @@ export function useSession(): SessionState {
   } | null>(null);
   const pendingStartTimeoutRef = useRef<number | null>(null);
   const optimisticUsersRef = useRef<string[]>([]);
+  // The last status the server sent: reply() shows "running" before the server
+  // knows, and a send that fails puts this back.
+  const serverStatusRef = useRef<string | null>(null);
+  const sessionModeRef = useRef<SessionSummary["mode"]>(routedToTranscript ? "transcript" : undefined);
+  useEffect(() => {
+    if (session) sessionModeRef.current = session.mode;
+  }, [session]);
+  const latestCwdRequestRef = useRef<CwdHarnessRequest | null>(null);
 
   const closeHandoffWindow = useCallback(() => {
     const popup = handoffWindowRef.current;
@@ -344,24 +439,29 @@ export function useSession(): SessionState {
   }, []);
 
   useEffect(() => {
-    let closed = false;
-    const connect = () => {
-      const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + appPath("/ws"));
-      wsRef.current = ws;
-      ws.onopen = () => {
+    const disconnect = openSessionConnection({
+      createSocket: () => new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + appPath("/ws")),
+      onSocket: (ws) => {
+        wsRef.current = ws;
+        if (!ws) latestCommandRequestsRef.current.clear();
+      },
+      onOpen: () => {
         const pending = pendingStartRef.current;
         if (sessionIdRef.current) sendRaw({ op: "subscribe", sessionId: sessionIdRef.current });
         else if (pending && !pending.failed) {
           sendRaw({ op: "start", requestId: pending.requestId, conversationId: pending.conversationId, provider: pending.provider, cwd: pending.cwd, prompt: pending.prompt, options: pending.options });
           armPendingStartTimeout();
         }
-      };
-      ws.onmessage = (e) => {
+      },
+      onMessage: (e) => {
         const msg = JSON.parse(e.data);
         switch (msg.kind) {
           case "hello": {
             const h = msg as Hello & { kind: string; capabilities?: Record<string, ProviderCapabilities> };
             setProviders(h.providers);
+            setHarnessCatalogs(h.harnessCatalogs ?? {});
+            latestCwdRequestRef.current = null;
+            setHarnessSnapshot(helloHarnessSnapshot(h));
             setCapabilities(h.capabilities ?? {});
             setDefaultCwd(h.defaultCwd);
             setCtrlJ(h.keys?.ctrlJ === "menu" ? "menu" : "newline");
@@ -390,6 +490,7 @@ export function useSession(): SessionState {
                 sendRaw({ op: "send", sessionId: msg.session.id, requestId: queued.requestId, prompt: queued.prompt });
               }
             } else {
+              serverStatusRef.current = msg.session.status;
               setSession(msg.session);
               setRouting(msg.routing?.kind === "routing" ? normalizeRouteStatus(msg.routing) : null);
               setBlocks([]);
@@ -412,6 +513,7 @@ export function useSession(): SessionState {
             }
             sessionIdRef.current = msg.session.id;
             document.title = msg.session.title || "cmux agent";
+            serverStatusRef.current = msg.session.status;
             setSession(msg.session);
             setRouting(latestRouteStatus(msg.events as AgentEvent[]));
             setBlocks((msg.events as AgentEvent[]).reduce(foldEvent, [] as Block[]));
@@ -440,7 +542,19 @@ export function useSession(): SessionState {
             break;
           case "session-status":
             if (msg.sessionId === sessionIdRef.current) {
+              serverStatusRef.current = msg.status;
               setSession((s) => (s ? { ...s, status: msg.status } : s));
+            }
+            break;
+          case "session-attention":
+            if (msg.sessionId === sessionIdRef.current) {
+              setSession((s) => (s ? { ...s, attention: typeof msg.attention === "string" ? msg.attention : null } : s));
+            }
+            break;
+          case "session-title":
+            if (msg.sessionId === sessionIdRef.current && typeof msg.title === "string") {
+              document.title = msg.title || "cmux agent";
+              setSession((s) => (s ? { ...s, title: msg.title } : s));
             }
             break;
           case "event":
@@ -455,6 +569,13 @@ export function useSession(): SessionState {
               if (evt.kind === "options") setActions(evt.actions ?? {});
               if (evt.kind === "commands") setCommands((gs) => upsertCommands(gs, evt));
               if (evt.kind === "error") setForkPending(false);
+              if (evt.kind === "error" && evt.prompt !== undefined) {
+                // The prompt never reached the terminal: its echo will not
+                // come, and the agent is as busy as the server last said.
+                consumeOptimisticUserEcho(optimisticUsersRef.current, evt.prompt);
+                const status = serverStatusRef.current ?? "idle";
+                setSession((s) => (s ? { ...s, status } : s));
+              }
             }
             break;
           case "session-forked":
@@ -496,14 +617,21 @@ export function useSession(): SessionState {
               setProviderOptions((current) => ({ ...current, ...msg.options }));
             }
             break;
-          case "commands-list":
+          case "commands-list": {
+            const request = latestCommandRequestsRef.current.get(msg.provider);
+            if (!request?.pending || request.requestId !== msg.requestId || request.cwd !== msg.cwd) break;
+            request.pending = false;
             setProviderCommands((m) => ({ ...m, [msg.provider]: msg.groups ?? [] }));
             break;
+          }
           case "files-list":
             setFilesByCwd((m) => ({ ...m, [msg.cwd]: msg.files ?? [] }));
             break;
           case "cwd-check":
-            setCwdChecks((m) => ({ ...m, [msg.cwd]: { ok: Boolean(msg.ok), message: msg.message } }));
+            setCwdChecks((m) => ({ ...m, [msg.cwd]: { ok: Boolean(msg.ok), message: msg.message, repositorySlug: typeof msg.repositorySlug === "string" ? msg.repositorySlug : undefined } }));
+            if (Array.isArray(msg.harnesses) && acceptsCwdHarnessResponse(latestCwdRequestRef.current, msg)) {
+              setHarnessSnapshot({ cwd: String(msg.cwd), harnesses: msg.harnesses as HarnessRecommendation[] });
+            }
             break;
           case "theme":
             if (msg.vars && typeof msg.vars === "object") applyThemeVars(msg.vars, msg.theme);
@@ -518,6 +646,11 @@ export function useSession(): SessionState {
             }
             break;
           case "error":
+            if (msg.op === "list-commands") {
+              for (const request of latestCommandRequestsRef.current.values()) {
+                if (request.requestId === msg.requestId && request.cwd === msg.cwd) request.pending = false;
+              }
+            }
             if (msg.op === "start") {
               const message = String(msg.message ?? "");
               const pending = pendingStartRef.current;
@@ -541,15 +674,12 @@ export function useSession(): SessionState {
             }
             break;
         }
-      };
-      ws.onclose = () => { if (!closed) setTimeout(connect, 800); };
-    };
-    connect();
+      },
+    });
     return () => {
-      closed = true;
+      disconnect();
       clearPendingStartTimeout();
       closeHandoffWindow();
-      wsRef.current?.close();
     };
   }, [armPendingStartTimeout, clearPendingStartTimeout, closeHandoffWindow, failPendingStart, sendRaw]);
 
@@ -607,21 +737,31 @@ export function useSession(): SessionState {
   const reply = useCallback((text: string) => {
     const pending = pendingStartRef.current;
     if (!sessionIdRef.current && pending?.failed) {
-      start({ provider: pending.provider, cwd: pending.cwd, prompt: text, options: pending.options });
-      return;
+      return start({ provider: pending.provider, cwd: pending.cwd, prompt: text, options: pending.options });
     }
     if (!sessionIdRef.current && pending && !pending.failed) {
       pending.queuedReplies.push({ requestId: newClientRequestId("turn"), prompt: text });
       optimisticUsersRef.current.push(text);
       setBlocks((bs) => [...closeStreaming(bs), { kind: "user", text }]);
-      return;
+      return true;
     }
     if (sessionIdRef.current) {
-      if (sendRaw({ op: "send", sessionId: sessionIdRef.current, requestId: newClientRequestId("turn"), prompt: text })) {
-        setSession((s) => (s ? { ...s, status: "running" } : s));
+      const sent = sendRaw({ op: "send", sessionId: sessionIdRef.current, requestId: newClientRequestId("turn"), prompt: text });
+      if (!sent) return false;
+      setSession((s) => (s ? { ...s, status: "running" } : s));
+      // A terminal view's prompt only reaches the event log when the agent's
+      // transcript records it; show it now and drop that echo when it lands.
+      if (sessionModeRef.current === "transcript") {
+        optimisticUsersRef.current.push(text);
+        setBlocks((bs) => [...closeStreaming(bs), { kind: "user", text }]);
       }
+      return true;
     }
+    return false;
   }, [sendRaw, start]);
+  const focusTerminal = useCallback(() => {
+    if (sessionIdRef.current) sendRaw({ op: "focus-terminal", sessionId: sessionIdRef.current });
+  }, [sendRaw]);
   const stop = useCallback(() => {
     if (sessionIdRef.current) sendRaw({ op: "stop", sessionId: sessionIdRef.current });
   }, [sendRaw]);
@@ -651,7 +791,13 @@ export function useSession(): SessionState {
     sendRaw({ op: "list-options", provider, cwd });
   }, [sendRaw]);
   const requestProviderCommands = useCallback((provider: string, cwd: string) => {
-    sendRaw({ op: "list-commands", provider, cwd });
+    const previous = latestCommandRequestsRef.current.get(provider);
+    const request = { requestId: newClientRequestId("commands"), cwd, pending: true };
+    latestCommandRequestsRef.current.set(provider, request);
+    // Commands are discovered per cwd, but the menu is stored per provider.
+    // Never show the old project's commands while a new discovery is pending.
+    if (previous?.cwd !== cwd) setProviderCommands((m) => ({ ...m, [provider]: [] }));
+    if (!sendRaw({ op: "list-commands", provider, cwd, requestId: request.requestId })) request.pending = false;
   }, [sendRaw]);
   const requestFiles = useCallback((cwd: string, query?: string) => {
     sendRaw({ op: "list-files", cwd, query });
@@ -663,14 +809,20 @@ export function useSession(): SessionState {
     }
   }, [sendRaw]);
   const checkCwd = useCallback((cwd: string) => {
-    sendRaw({ op: "check-cwd", cwd });
-  }, [sendRaw]);
+    const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const request: CwdHarnessRequest = { requestId, cwd, connectionEpoch };
+    latestCwdRequestRef.current = request;
+    setHarnessSnapshot((current) => harnessSnapshotForCwdCheck(current, cwd));
+    sendRaw({ op: "check-cwd", ...request });
+  }, [connectionEpoch, sendRaw]);
   const clearError = useCallback(() => setLastError(""), []);
 
   return {
     ready,
     connectionEpoch,
     providers,
+    harnessSnapshot,
+    harnessCatalogs,
     capabilities,
     defaultCwd,
     ctrlJ,
@@ -693,6 +845,7 @@ export function useSession(): SessionState {
     compose,
     reply,
     stop,
+    focusTerminal,
     setOption,
     fork,
     handoff,

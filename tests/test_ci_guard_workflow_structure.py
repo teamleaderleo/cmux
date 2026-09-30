@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Structural contracts for the reusable Linux guard workflow."""
 
+import json
+import re
 from pathlib import Path
 
 import yaml
@@ -13,7 +15,12 @@ REUSABLE_GUARD_COMMANDS = [
     "python3 tests/test_ci_guard_workflow_structure.py",
     "python3 tests/test_app_host_test_products.py",
     "python3 tests/test_reuse_app_host_products.py",
+    "python3 tests/test_e2e_warm_derived_data.py",
+    "python3 tests/test_e2e_sibling_build.py",
+    "python3 tests/test_seed_derived_data.py",
+    "python3 tests/test_seed_decide.py",
     "python3 tests/test_ci_product_publication.py",
+    "python3 tests/test_ci_cli_product_routing.py",
 ]
 
 
@@ -61,6 +68,26 @@ def test_cli_guard_matrix_runs_independent_slow_contracts_in_parallel() -> None:
         "- name: Validate cmux profiling support scripts\n"
         "        if: ${{ matrix.group == 'profiling' }}"
     ) in block
+
+
+def test_agent_chat_uses_a_pinned_local_compiler_and_runs_tests_once() -> None:
+    workflow = yaml.safe_load(GUARD_WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["workflow-guard-tests"]["steps"]
+    chat_steps = [step for step in steps if step.get("working-directory") == "agent-chat"]
+    assert [step["name"] for step in chat_steps] == [
+        "Type-check agent-chat",
+        "Run agent-chat unit tests",
+    ]
+    assert all(step["if"] == "${{ matrix.group == 'preflight' }}" for step in chat_steps)
+    assert chat_steps[0]["run"].splitlines() == [
+        "bun install --frozen-lockfile",
+        "./node_modules/.bin/tsc --noEmit",
+    ]
+    assert chat_steps[1]["run"] == "bun run test"
+
+    package = json.loads((ROOT / "agent-chat/package.json").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"\d+\.\d+\.\d+", package["devDependencies"]["typescript"])
+    assert package["scripts"]["check"] == "./node_modules/.bin/tsc --noEmit && bun run test"
 
 
 if __name__ == "__main__":

@@ -163,8 +163,32 @@ def parse_xcresult_tests(data: Any) -> dict[str, str]:
 
 
 def load_json(path: Path) -> Any:
-    """Read one UTF-8 JSON document."""
-    return json.loads(path.read_text(encoding="utf-8"))
+    """Read one UTF-8 JSON document, naming the file whenever it cannot be read.
+
+    An aborted app-host batch leaves a partial typed result behind, and a bare
+    decoder message ("Expecting value: line 1 column 1 (char 0)") is the last
+    line the step prints before its exit code. Name the file for every way the
+    read can fail: empty, not JSON, and not UTF-8. A write cut inside a
+    multi-byte character fails as the third rather than the second.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{path}: not valid UTF-8 ({error})") from error
+    if not text.strip():
+        raise ValueError(f"{path}: empty file, expected a JSON document")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path}: not valid JSON ({error})") from error
+
+
+def read_text_file(path: Path) -> str:
+    """Read one UTF-8 text file, naming it when the bytes are not UTF-8."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"{path}: not valid UTF-8 ({error})") from error
 
 
 def load_inventory(path: Path) -> set[str]:
@@ -178,7 +202,7 @@ def load_inventory(path: Path) -> set[str]:
 def load_selectors(path: Path) -> list[str]:
     """Load normalized non-empty selectors from a line-oriented file."""
     selectors = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_text_file(path).splitlines():
         line = line.strip()
         if line:
             selectors.append(selector_value(line))
@@ -285,6 +309,35 @@ def run_is_complete(log_text: str) -> tuple[bool, str]:
     return True, "no interruption marker"
 
 
+def recorded_failure_diagnostics(
+    results: dict[str, str],
+    known: dict[str, dict[str, Any]],
+) -> list[str]:
+    """Name every recorded failure without deciding the run's verdict.
+
+    The ratchet below fails fast: it reports new failures and returns without
+    mentioning known ones, because the verdict is already decided. A run that
+    is being reported for some other reason wants the opposite -- the complete
+    picture, since its verdict does not depend on what this finds.
+    """
+    failures = {
+        identifier for identifier, result in results.items() if result == "Failed"
+    }
+    new_failures = sorted(failures - set(known))
+    known_failures = sorted(failures & set(known))
+    messages = [f"RATCHET_NEW_FAILURE {identifier}" for identifier in new_failures]
+    messages += [f"RATCHET_KNOWN_FAILURE {identifier}" for identifier in known_failures]
+    if messages:
+        # Mirror the summary the complete path prints. Without it, a reader
+        # scanning shard output for "the accounting ran" sees the same silence
+        # here that the missing verdicts themselves used to produce.
+        messages.append(
+            f"recorded verdicts: {len(new_failures)} new, "
+            f"{len(known_failures)} known-main; typed test cases: {len(results)}"
+        )
+    return messages
+
+
 def check_run(
     *,
     inventory: set[str],
@@ -293,8 +346,15 @@ def check_run(
     known: dict[str, dict[str, Any]],
     log_text: str,
     xcode_status: int,
+    changed_suites: bool = False,
 ) -> tuple[bool, list[str]]:
-    """Return the fail-closed verdict and diagnostics for one app-host run."""
+    """Return the fail-closed verdict and diagnostics for one app-host run.
+
+    ``changed_suites`` marks a PR run of the suites the PR edited. There a
+    catalog entry that passes must leave the catalog in the same PR: while it
+    stays listed, the run is green whether or not the fix works, which is how
+    a fix PR can merge with its target test still failing.
+    """
     messages: list[str] = []
 
     expected_tests, missing_inventory = selected_inventory(inventory, selectors)
@@ -306,6 +366,9 @@ def check_run(
     complete, reason = run_is_complete(log_text)
     if not complete:
         messages.append(f"incomplete app-host run: {reason}")
+        # A restart or timeout ends the run, not the verdicts recorded before
+        # it; same reasoning as the missing-result gate below.
+        messages.extend(recorded_failure_diagnostics(results, known))
         return False, messages
 
     if not results:
@@ -324,6 +387,12 @@ def check_run(
             messages.append(
                 f"... {len(missing_execution) - 20} additional selected Test Case(s) missing"
             )
+        # An incomplete result set still carries a verdict for everything that
+        # did finish. Naming those costs nothing and is the only way to tell a
+        # shard whose remaining tests regressed from one whose remaining tests
+        # went green -- without it both print the same "incomplete" line, and a
+        # full suite can be red while naming no regression at all.
+        messages.extend(recorded_failure_diagnostics(results, known))
         return False, messages
 
     if xcode_status not in {0, 65}:
@@ -358,9 +427,21 @@ def check_run(
         return False, messages
 
     known_failures = sorted(failures & set(known))
+    for identifier in known_failures:
+        messages.append(f"RATCHET_KNOWN_FAILURE {identifier}")
+    now_passing = sorted(
+        identifier for identifier in known if results.get(identifier) == "Passed"
+    )
+    for identifier in now_passing:
+        messages.append(f"RATCHET_KNOWN_NOW_PASSING {identifier}")
+    if changed_suites and now_passing:
+        messages.append(
+            "this PR's selected suites pass tolerated known-main failures; remove them "
+            "from scripts/ci/app-host-known-failures.json so the run has to prove the fix"
+        )
+        return False, messages
+
     if known_failures:
-        for identifier in known_failures:
-            messages.append(f"RATCHET_KNOWN_FAILURE {identifier}")
         messages.append(
             f"known-main failures tolerated: {len(known_failures)}; "
             f"typed test cases: {len(results)}"
@@ -371,8 +452,22 @@ def check_run(
 
 
 def write_inventory(input_path: Path, output_path: Path) -> None:
-    """Write a deterministic normalized test-inventory receipt."""
-    tests = sorted(parse_enumeration(load_json(input_path)))
+    """Write a deterministic normalized test-inventory receipt.
+
+    xcodebuild -enumerate-tests exits 0 even when the test runner never
+    connected; it then writes only the plan node plus an "errors" list. An
+    inventory built from that is empty, and every later step would run against
+    a host that cannot run tests, so refuse it here.
+    """
+    data = load_json(input_path)
+    errors = data.get("errors") if isinstance(data, dict) else None
+    if errors:
+        raise ValueError(
+            "test enumeration failed on this runner: " + "; ".join(str(error) for error in errors)
+        )
+    tests = sorted(parse_enumeration(data))
+    if not tests:
+        raise ValueError(f"test enumeration found no tests in {input_path}")
     suites = sorted({identifier.split("/", 1)[0] for identifier in tests if "/" in identifier})
     payload = {
         "version": 1,
@@ -405,6 +500,7 @@ def command_check_run(args: argparse.Namespace) -> int:
         known=known,
         log_text=log_text,
         xcode_status=args.xcode_status,
+        changed_suites=args.changed_suites,
     )
     for message in messages:
         print(message, file=sys.stdout if passed else sys.stderr)
@@ -428,6 +524,14 @@ def command_catalog_diff(args: argparse.Namespace) -> int:
         return 1
 
     additions = sorted(set(new) - set(old))
+    if old_bootstrap is None and not old and new_bootstrap is not None:
+        # The one permitted growth: an empty, never-bootstrapped catalog takes
+        # its census from the main commit validate_catalog just pinned. From
+        # then on the SHA is immutable and the set may only shrink.
+        print(
+            f"known-failure catalog bootstrapped at {new_bootstrap}: {len(new)} tests"
+        )
+        return 0
     if additions:
         for identifier in additions:
             print(f"known-failure catalog may only shrink: added {identifier}", file=sys.stderr)
@@ -459,6 +563,11 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--log", type=Path, required=True)
     check.add_argument("--xcode-status", type=int, required=True)
     check.add_argument("--tests-json", nargs="+", required=True)
+    check.add_argument(
+        "--changed-suites",
+        action="store_true",
+        help="fail when a known-failure catalog entry passes (PR changed-suites runs)",
+    )
 
     catalog_diff = subparsers.add_parser("catalog-diff")
     catalog_diff.add_argument("--base", type=Path, required=True)
