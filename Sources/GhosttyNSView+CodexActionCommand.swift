@@ -1,9 +1,14 @@
 import AppKit
+import Bonsplit
 import CmuxTerminalCore
 import GhosttyKit
 
 extension GhosttyNSView {
-    private func codexActionCell(at point: NSPoint, surface: ghostty_surface_t) -> (TerminalPanel, CodexActionCommand)? {
+    private func codexActionCell(
+        at point: NSPoint,
+        surface: ghostty_surface_t,
+        requireLivePanel: Bool = false
+    ) -> (TerminalPanel, CodexActionCommand)? {
         guard let panel = codexActionPanel(), bounds.contains(point) else { return nil }
         var metrics = ghostty_surface_grid_metrics_s()
         var scrollbar = ghostty_surface_scrollbar_s()
@@ -24,7 +29,7 @@ extension GhosttyNSView {
         let row = Int((gridRect.maxY - point.y) / cellHeight)
         guard row == Int(metrics.rows) - 1 else { return nil }
         let column = Int((point.x - gridRect.minX) / cellWidth)
-        guard refreshCodexActionCache(for: panel),
+        guard refreshCodexActionCache(for: panel, requireLivePanel: requireLivePanel),
               let renderedRows = codexActionCacheRows,
               row < renderedRows.count,
               let command = CodexActionCommandDetector().command(
@@ -35,31 +40,42 @@ extension GhosttyNSView {
     }
 
     func codexActionCommand(at point: NSPoint, surface: ghostty_surface_t) -> CodexActionCommand? {
-        codexActionCell(at: point, surface: surface)?.1
+        codexActionCell(at: point, surface: surface, requireLivePanel: true)?.1
     }
 
     private func codexActionPanel() -> TerminalPanel? {
         guard let terminalSurface else { return nil }
         if let dock = DockSplitStore.liveStore(containingPanel: terminalSurface.id) {
-            return dock.panels[terminalSurface.id] as? TerminalPanel
+            let panelId = dock.surfaceIdToPanelId[TabID(uuid: terminalSurface.id)]
+            return panelId.flatMap { dock.panels[$0] as? TerminalPanel }
         }
-        return terminalSurface.owningWorkspace()?.terminalPanel(for: terminalSurface.id)
+        guard let workspace = terminalSurface.owningWorkspace(),
+              let panelId = workspace.panelId(forSurfaceId: terminalSurface.id) else {
+            return nil
+        }
+        return workspace.terminalPanel(for: panelId)
     }
 
-    private func refreshCodexActionCache(for panel: TerminalPanel) -> Bool {
+    private func refreshCodexActionCache(for panel: TerminalPanel, requireLivePanel: Bool) -> Bool {
         guard let terminalSurface else { return false }
         let surfaceID = terminalSurface.id
         let runtimeGeneration = terminalSurface.runtimeSurfaceGeneration
         let frameSequence = renderedFrameSequence
-        guard isLiveCodexPanel(panel) else {
-            codexActionCacheRows = nil
-            return false
-        }
         if surfaceID == codexActionCacheSurfaceID,
            runtimeGeneration == codexActionCacheRuntimeGeneration,
            frameSequence == codexActionCacheFrameSequence,
            codexActionCacheRows != nil {
+            if requireLivePanel {
+                guard isLiveCodexPanel(panel) else {
+                    codexActionCacheRows = nil
+                    return false
+                }
+            }
             return true
+        }
+        guard isLiveCodexPanel(panel) else {
+            codexActionCacheRows = nil
+            return false
         }
         codexActionCacheSurfaceID = surfaceID
         codexActionCacheRuntimeGeneration = runtimeGeneration
