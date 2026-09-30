@@ -153,13 +153,20 @@ fi
 
 app_host_xcodebuild_arguments=("$@")
 caller_has_result_bundle=0
+caller_result_bundle_path=""
 caller_has_test_timeouts_enabled=0
 caller_has_default_test_timeout=0
 caller_has_maximum_test_timeout=0
-for app_host_argument in "${app_host_xcodebuild_arguments[@]}"; do
+for ((app_host_argument_index = 0; app_host_argument_index < ${#app_host_xcodebuild_arguments[@]}; app_host_argument_index++)); do
+  app_host_argument="${app_host_xcodebuild_arguments[$app_host_argument_index]}"
   case "$app_host_argument" in
     -resultBundlePath)
       caller_has_result_bundle=1
+      # Keep the path separate so every retry starts with a fresh result
+      # bundle. Xcode refuses to write into an existing .xcresult directory,
+      # and a stale first-attempt bundle would otherwise turn a safe retry
+      # into a deterministic failure.
+      caller_result_bundle_path="${app_host_xcodebuild_arguments[$((app_host_argument_index + 1))]:-}"
       ;;
     -test-timeouts-enabled)
       caller_has_test_timeouts_enabled=1
@@ -324,6 +331,18 @@ while [ "$attempt" -le "$max_attempts" ]; do
     result_bundle_path="${result_bundle_root%/}/$(basename "$log_stem")-attempt-${attempt}.xcresult"
     rm -rf -- "$result_bundle_path"
     attempt_xcodebuild_arguments+=("-resultBundlePath" "$result_bundle_path")
+  fi
+  if [ "$caller_has_result_bundle" -eq 1 ] && [ -n "$caller_result_bundle_path" ]; then
+    # A caller-owned path is intentionally reused in the log/summary. Remove
+    # the prior attempt before each invocation so a bounded retry can write a
+    # fresh xcresult instead of failing on Xcode's existing-directory check.
+    case "$caller_result_bundle_path" in
+      "${RUNNER_TEMP:-/tmp}"/*|/tmp/*) rm -rf -- "$caller_result_bundle_path" ;;
+      *)
+        echo "FAIL: caller result bundle must be under RUNNER_TEMP or /tmp for retry cleanup" >&2
+        exit 2
+        ;;
+    esac
   fi
   {
     echo "shard=${CMUX_APP_HOST_SHARD:-unknown}"
