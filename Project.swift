@@ -96,10 +96,17 @@ func products(_ names: [String]) -> [TargetDependency] {
 }
 
 let appProducts: [String] = [
+    "CmuxAppKitSupportUI",
+    "CmuxControlSocket",
+    "CmuxFeedback",
+    "CmuxTerminal",
+    "CmuxTerminalCore",
     "CmuxCloud",
     "CmuxCloudTui",
     "CmuxSurfaceCatalogModel",
     "CmuxCloudMachines",
+    "CmuxTerminalSizing",
+    "CmuxTerminalSharing",
     "CmuxWorkspacePresence",
     "Sparkle",
     "PostHog",
@@ -168,6 +175,7 @@ let appProducts: [String] = [
 ]
 
 let cliProducts: [String] = [
+    "CmuxCloudMachines",
     "CmuxSurfaceCatalogModel",
     "CMUXAgentLaunch",
     "CmuxAgentJournal",
@@ -195,6 +203,8 @@ let tunnelProducts: [String] = [
 let unitTestProducts: [String] = [
     "CmuxSurfaceCatalogModel",
     "CmuxCloudMachines",
+    "CmuxTerminalSizing",
+    "CmuxTerminalSharing",
     "CmuxWorkspacePresence",
     "CMUXAuthCore",
     "CmuxHive",
@@ -708,6 +718,7 @@ let dockTilePlugin = Target.target(
     deploymentTargets: .macOS("14.0"),
     infoPlist: .default,
     sources: ["Sources/App/AppBundleIconPersistencePolicy.swift", "Sources/AppIconDockTilePlugin.swift"],
+    dependencies: products(["CMUXAgentLaunch"]),
     settings: settings(dockTileSettingsDebug, dockTileSettingsRelease)
 )
 
