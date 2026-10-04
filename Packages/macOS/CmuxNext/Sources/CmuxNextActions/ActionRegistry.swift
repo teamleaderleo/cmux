@@ -45,6 +45,9 @@ public final class ActionRegistry {
         didSet { shortcutIndex = nil }
     }
 
+    /// App and keybindings.json entries, after the defaults and cmux.json (`KeyBindingLoader`).
+    public internal(set) var keyBindingLayers = KeyBindingLayers() { didSet { shortcutIndex = nil } }
+
     /// User key-routing tiers (`cmux.json` `shortcuts.tiers`), see `ActionKeyTier`.
     public internal(set) var keyTierOverrides: [ActionID: ActionKeyTier] = [:]
     /// Features an administrator turned off (`DisabledFeatures`, ActionRegistry+Policy).
@@ -113,11 +116,6 @@ public final class ActionRegistry {
     public init(catalog: [ActionDescriptor], aliases: [ActionID: ActionID] = [:]) {
         self.aliases = aliases
         seed(catalog)
-    }
-
-    /// A registry seeded with the full cmux catalog and legacy aliases.
-    public static func standard() -> ActionRegistry {
-        ActionRegistry(catalog: ActionCatalog.all, aliases: ActionCatalog.legacyAliases)
     }
 
     // MARK: - Catalog
@@ -251,7 +249,7 @@ public final class ActionRegistry {
     /// `isAvailable(_:in:)` with the facts the invocation's explicit target
     /// implies (`ActionContext.implied(by:)`).
     public func isAvailable(_ id: ActionID, for invocation: ActionInvocation) -> Bool {
-        isAvailable(id, in: context.union(ActionContext.implied(by: invocation)))
+        isAvailable(id, in: (invocation.keyContext ?? context).union(ActionContext.implied(by: invocation)))
     }
 
     public static func isAvailable(_ descriptor: ActionDescriptor, in context: ActionContext) -> Bool {

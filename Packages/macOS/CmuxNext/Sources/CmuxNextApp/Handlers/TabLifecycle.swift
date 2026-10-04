@@ -68,7 +68,8 @@ enum TabLifecycle {
             kind = NewTabKind.resolve(setting, sameKind: sameKind, recent: ctx.services.newTabKinds.recent(in: folder))
         }
         // Agent tabs and the page live in a shown pane; elsewhere, a terminal.
-        if controller == nil, kind == .agent || kind == .page { kind = .terminal }
+        // A build without the agent page has no new tab page either.
+        if controller == nil || !ctx.services.agentTabs.canHostChat, kind == .agent || kind == .page { kind = .terminal }
         switch kind {
         case .terminal:
             newTerminal(ctx, invocation)
@@ -124,6 +125,10 @@ enum TabLifecycle {
             let chromium = invocation["engine"]?.stringValue == BrowserEngineTag.cef.rawValue
             guard let resolved = BrowserURLResolver(allowsChromiumSchemes: chromium).url(for: text) else {
                 return ctx.refuse(MiscHandlerStrings.invalidURL(text))
+            }
+            // Agents never open Chromium's own pages (plans/cmux-next/passwords.md, section 2).
+            if invocation.origin != .user, AgentURLPolicy.refuses(resolved) {
+                return ctx.refuse(MiscHandlerStrings.agentChromiumPage)
             }
             url = resolved
         }

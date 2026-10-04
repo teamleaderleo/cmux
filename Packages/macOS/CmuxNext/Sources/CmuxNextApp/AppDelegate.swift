@@ -103,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // when the user reloads a browser tab.
         services.observeBorders()
         if !services.crashRecovery.recovery.skipsBrowserPages { services.startChromiumWarmup() }
+        services.newTabSpares.start()
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURLEvent(_:reply:)),
                                                      forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
         services.windows.onContentDidAppear = { [weak services] _ in services?.externalOpen.flush() }
@@ -134,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.settings = settings
         services.settings = settings
         services.history.commands.start(settings: settings)
+        services.locationTrail.watchScope(settings: settings)
         let shortcutEditor = PaletteShortcutEditor(services: services, settings: settings)
         services.paletteShortcutEditor = shortcutEditor
         services.palette.shortcutRecorder.editor = shortcutEditor
@@ -188,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 control.registerUpdateMethods(services.updater)
                 control.registerInputMethods(services)
                 control.registerSettingsDebugMethods(services)
+                control.registerPageDebugMethods()
                 if let router = control.service?.router {
                     BrowserPageService(engine: AppBrowserPageEngine(services: services)).install(on: router)
                     services.apps.attach(router: router)

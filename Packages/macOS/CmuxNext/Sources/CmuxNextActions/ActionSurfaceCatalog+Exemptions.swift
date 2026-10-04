@@ -42,9 +42,9 @@ nonisolated extension ActionSurfaceCatalog {
         "space.moveLeft", "space.moveRight", "space.move", "space.switch", "workspace.moveToSpace",
         "workspace.duplicateToSpace", "workspaceGroup.moveToSpace", "space.setTheme", "space.clearTheme",
         "workspace.setTheme", "workspace.clearTheme", "terminal.setTheme", "terminal.clearTheme",
-        "splitRight", "newColumn", "splitDown", "newPaneAutoLayout", "equalizeSplits", "triggerFlash",
+        "splitRight", "newColumn", "newRow", "splitDown", "newPaneAutoLayout", "equalizeSplits", "triggerFlash",
         "palette.swapWithSession", "toggleCanvasLayout", "canvasTidy", "palette.newSimulatorPane", "file.open",
-        "newTab.sameKind", "newTab.page", "newSurface", "openBrowser", "openBrowser.webkit",
+        "newTab.sameKind", "newTab.page", "newTab.submit", "newSurface", "openBrowser", "openBrowser.webkit",
         "openBrowser.chromium", "closeOtherTabsInPane", "closeTabsToLeft", "closeTabsToRight",
         "renameTab", "palette.clearTabName",
         "moveSurfaceLeft", "moveSurfaceRight", "moveSurfaceToPreviousPane", "moveSurfaceToNextPane",
@@ -109,7 +109,7 @@ nonisolated extension ActionSurfaceCatalog {
         "renamePane", "column.moveLeft", "column.moveRight", "column.center", "column.widthOneThird",
         "column.widthHalf", "column.widthTwoThirds", "column.widthFull", "column.dock", "column.dockLeft",
         "column.dockRight", "column.dockTop", "column.dockBottom", "column.float", "column.undock", "layout.toggleStripScrollbar", "terminal.clear",
-        "terminal.sendText", "history.show", "agentActivity.open", "history.resumeAgentSession", "history.reopen", "history.clear",
+        "terminal.sendText", "history.show", "agentActivity.open", "history.resumeAgentSession", "history.reopen", "history.open", "history.clear",
         "layout.undo", "bookmark.addPage", "bookmark.addAllTabs", "bookmark.add", "bookmark.newFolder",
         "bookmark.open", "bookmark.openInNewTab", "bookmark.openInBackgroundTab", "bookmark.openAll", "bookmark.edit",
         "bookmark.move", "bookmark.remove", "bookmark.import", "bookmark.export",
@@ -122,6 +122,10 @@ nonisolated extension ActionSurfaceCatalog {
     static let paletteExemptionsByReason: [SurfaceExemption: [ActionID]] = [
         .duplicateOfDefault: [
             "openBrowser.chromium",
+        ],
+        // A row of the titlebar Back / Forward list: the click on the row is the gesture.
+        .focusMove: [
+            "history.goTo",
         ],
     ]
 
@@ -202,6 +206,7 @@ nonisolated extension ActionSurfaceCatalog {
             "palette.attemptUpdate",
         ],
         .focusMove: [
+            "history.goTo",
             "home.show",
             "showHideAllWindows", "goToWorkspace", "showMainWindow", "nextSidebarTab", "prevSidebarTab",
             "nextSidebarTabInGroup", "prevSidebarTabInGroup", "nextWorkspaceGroup", "prevWorkspaceGroup",

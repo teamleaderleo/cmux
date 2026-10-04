@@ -63,6 +63,19 @@ public nonisolated enum SettingsSchema {
                 keywords: ["history", "commands", "shell", "privacy", "osc 133"]
             ),
             SettingDescriptor(
+                NavigationHistoryScopeSetting.configPath, section: .general, group: history,
+                title: SettingsText.keyed("settings.navigation.historyScope", "Back and Forward"),
+                help: SettingsText.keyed("settings.navigation.historyScope.help",
+                                        "What Go Back and Go Forward walk: places in this workspace, in this window, or the focused page's own history."),
+                kind: .choice([
+                    SettingChoice("workspace", SettingsText.keyed("settings.navigation.historyScope.workspace", "Workspace")),
+                    SettingChoice("window", SettingsText.keyed("settings.navigation.historyScope.window", "Window")),
+                    SettingChoice("surface", SettingsText.keyed("settings.navigation.historyScope.surface", "Focused Page")),
+                ]),
+                default: .string(NavigationHistoryScopeSetting.fallback),
+                keywords: ["history", "back", "forward", "navigation", "location", "scope"]
+            ),
+            SettingDescriptor(
                 WindowTitlebarSetting.configPath, section: .general, group: window,
                 title: SettingsText.keyed("settings.window.titlebar", "Titlebar"),
                 help: SettingsText.keyed("settings.window.titlebar.help", "Minimal has no titlebar strip; the top row moves the window."),
@@ -71,19 +84,6 @@ public nonisolated enum SettingsSchema {
                     SettingChoice(TitlebarStyle.standard.rawValue, SettingsText.keyed("settings.choice.standard", "Standard")),
                 ]),
                 default: .string(WindowTitlebarSetting.fallback.rawValue), keywords: ["traffic lights", "title"]
-            ),
-            SettingDescriptor(
-                WindowRailSetting.configPath, section: .general, group: window,
-                title: SettingsText.keyed("settings.window.rail", "Action Rail"),
-                help: SettingsText.keyed("settings.window.rail.help",
-                                        "Shows the sidebar's pinned sections as a column of icons beside it."),
-                kind: .choice([
-                    SettingChoice(WindowRailPlacement.off.rawValue, SettingsText.keyed("settings.choice.off", "Off")),
-                    SettingChoice(WindowRailPlacement.leading.rawValue, SettingsText.keyed("settings.choice.railLeading", "Window Edge")),
-                    SettingChoice(WindowRailPlacement.afterSidebar.rawValue,
-                                  SettingsText.keyed("settings.choice.railAfterSidebar", "After Sidebar")),
-                ]),
-                default: .string(WindowRailSetting.fallback.rawValue), keywords: ["rail", "toolbar", "buttons", "inbox", "accounts"]
             ),
             newTabKind(group: tabs),
             newTerminalOpensWorkspace(group: tabs),
@@ -146,7 +146,7 @@ public nonisolated enum SettingsSchema {
 
     // MARK: Appearance
 
-    static var appearance: [SettingDescriptor] { AppearanceSettingsSchema.descriptors + statusIndicator }
+    static var appearance: [SettingDescriptor] { AppearanceSettingsSchema.descriptors + SurfaceSettingsSchema.descriptors + statusIndicator }
 
     static func points(_ range: ClosedRange<CGFloat>, step: Double, placeholder: Double? = nil) -> SettingNumber {
         SettingNumber(Double(range.lowerBound)...Double(range.upperBound), step: step, unit: .points, placeholder: placeholder)

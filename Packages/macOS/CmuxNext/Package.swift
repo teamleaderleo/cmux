@@ -32,6 +32,9 @@ import PackageDescription
 //   CmuxNextHome -> Design, Wakeups (Home conversations: virtualized CALayer transcript, list, composer;
 //     no daemon; the App maps the conversation mirror and intent log into HomeTranscriptSource)
 //   CmuxNextHistory -> Design (history model, SQLite visit log, cmux://history page; no daemon)
+//   CmuxNextPages -> Design, Settings (the one host for React pages: PageWebView, cmux-page://<id>/
+//     scheme, engine-neutral bridge, PageRouter + PageProvider; no daemon; the App supplies providers;
+//     plans/cmux-next/react-pages.md)
 //   CmuxNextCodeRouter -> CmuxNextCloud (provider sign-in detection, the CodeRouter control-plane
 //     client, pasted-key Keychain store, account row state; no UI, no daemon; plans/cmux-next/coderouter.md)
 //   CmuxNextAccounts -> CodeRouter, Design (Settings > Accounts and the onboarding step; the App supplies AccountsServices)
@@ -112,6 +115,7 @@ let package = Package(
         .package(path: "../../Shared/CmuxAuthRuntime"),
         .package(path: "../../Shared/CMUXMobileCore"),
         .package(path: "../../Shared/CmuxTheme"),
+        .package(path: "../../Shared/CmuxAgentBrands"),
         .package(path: "../../Shared/CmuxHomeCore"),
         .package(path: "../../Shared/CmuxHomeRender"),
         .package(path: "../../Shared/CmuxIrxTransport"),
@@ -156,6 +160,7 @@ let package = Package(
                 "CmuxNextOnboarding",
                 "CmuxNextAgentPane",
                 "CmuxNextHistory",
+                "CmuxNextPages",
                 "CmuxNextRemoteView",
                 "CmuxNextCodeRouter",
                 "CmuxNextAccounts",
@@ -179,7 +184,7 @@ let package = Package(
         // token, session id). Everything above the handshake is TypeScript.
         .target(
             name: "CmuxNextAgentPane",
-            dependencies: ["CmuxNextDesign", "CmuxNextActions", "CmuxNextDictation"],
+            dependencies: ["CmuxNextDesign", "CmuxNextActions", "CmuxNextDictation", "CmuxNextPages", "CmuxNextSettings"],
             resources: [
                 .process("Resources/Localizable.xcstrings"),
                 .copy("Resources/agent-pane"),
@@ -188,7 +193,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CmuxNextAgentPaneTests",
-            dependencies: ["CmuxNextAgentPane", "CmuxNextActions", "CmuxNextDesign", "CmuxNextDictation"],
+            dependencies: ["CmuxNextAgentPane", "CmuxNextActions", "CmuxNextDesign", "CmuxNextDictation", "CmuxNextPages", "CmuxNextSettings"],
             swiftSettings: uiSwiftSettings
         ),
         // Dictation (the composer's mic): the on-device speech engines and
@@ -237,7 +242,7 @@ let package = Package(
         // supplies `AccountsServices`.
         .target(
             name: "CmuxNextAccounts",
-            dependencies: ["CmuxNextCodeRouter", "CmuxNextDesign"],
+            dependencies: ["CmuxNextCodeRouter", "CmuxNextDesign", .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands")],
             resources: [
                 .process("Localizable.xcstrings"),
             ],
@@ -245,7 +250,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CmuxNextAccountsTests",
-            dependencies: ["CmuxNextAccounts", "CmuxNextCodeRouter"],
+            dependencies: ["CmuxNextAccounts", "CmuxNextCodeRouter", .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands")],
             swiftSettings: uiSwiftSettings
         ),
         // Browser import (onboarding step 2; data-model.md 5): source detection
@@ -312,7 +317,7 @@ let package = Package(
         // the per-profile page visit log (SQLite), and the cmux://history page.
         .target(
             name: "CmuxNextHistory",
-            dependencies: ["CmuxNextDesign"],
+            dependencies: ["CmuxNextDesign", .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands")],
             resources: [
                 .process("Resources"),
             ],
@@ -321,6 +326,20 @@ let package = Package(
         .testTarget(
             name: "CmuxNextHistoryTests",
             dependencies: ["CmuxNextHistory"],
+            swiftSettings: uiSwiftSettings
+        ),
+        // React pages (plans/cmux-next/react-pages.md): one WKWebView host, one cmux-page://<id>/
+        // origin per page, the cmuxPage bridge and the page router. Pages ship as one self-contained
+        // index.html each under Resources/pages (scripts/cmux-next/build-pages-web.sh).
+        .target(
+            name: "CmuxNextPages",
+            dependencies: ["CmuxNextDesign", "CmuxNextSettings"],
+            resources: [.copy("Resources/pages"), .process("Localizable.xcstrings")],
+            swiftSettings: uiSwiftSettings
+        ),
+        .testTarget(
+            name: "CmuxNextPagesTests",
+            dependencies: ["CmuxNextPages", "CmuxNextSettings", "CmuxNextDesign"],
             swiftSettings: uiSwiftSettings
         ),
         // Bookmarks (plans/cmux-next/bookmarks.md): the tree per browser
@@ -346,7 +365,7 @@ let package = Package(
         // owns every session; the App supplies the source.
         .target(
             name: "CmuxNextAgentActivity",
-            dependencies: ["CmuxNextDesign", "CmuxNextWakeups"],
+            dependencies: ["CmuxNextDesign", "CmuxNextWakeups", .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands")],
             resources: [
                 .process("Resources/Localizable.xcstrings"),
                 .copy("Resources/agent-activity"),
@@ -400,7 +419,7 @@ let package = Package(
         // confirmed mirror + intent log; the App supplies the source.
         .target(
             name: "CmuxNextTasks",
-            dependencies: ["CmuxNextDesign", "CmuxNextWakeups"],
+            dependencies: ["CmuxNextDesign", "CmuxNextWakeups", .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands")],
             resources: [
                 .process("Resources"),
             ],
@@ -549,7 +568,10 @@ let package = Package(
         // kept out of CmuxNextApp so it links in `swift test` (no GhosttyKit).
         .target(
             name: "CmuxNextBridge",
-            dependencies: ["CmuxNextDaemon", "CmuxNextLayout", "CmuxNextSidebar", "CmuxNextTabs"],
+            dependencies: [
+                "CmuxNextDaemon", "CmuxNextLayout", "CmuxNextSidebar", "CmuxNextTabs",
+                .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands"),
+            ],
             swiftSettings: uiSwiftSettings
         ),
         .testTarget(
@@ -600,6 +622,7 @@ let package = Package(
                 .process("HibernationActions.xcstrings"),
                 .process("HistoryActions.xcstrings"),
                 .process("LayoutActions.xcstrings"),
+                .process("NewTabActions.xcstrings"),
                 .process("Localizable.xcstrings"),
                 .process("PageInfoActions.xcstrings"),
                 .process("ProfileActions.xcstrings"),
@@ -685,7 +708,10 @@ let package = Package(
         ),
         .target(
             name: "CmuxNextTabs",
-            dependencies: ["CmuxNextWakeups", "CmuxNextDesign", "CmuxNextResources"],
+            dependencies: [
+                "CmuxNextWakeups", "CmuxNextDesign", "CmuxNextResources",
+                .product(name: "CmuxAgentBrands", package: "CmuxAgentBrands"),
+            ],
             resources: [
                 .process("Resources"),
             ],
@@ -788,6 +814,7 @@ let package = Package(
             dependencies: ["CmuxNextSettings", "CmuxNextDesign", "CmuxNextActions", "CmuxNextWakeups"],
             resources: [
                 .process("Localizable.xcstrings"),
+                .copy("Resources/settings-page"),
             ],
             swiftSettings: uiSwiftSettings
         ),

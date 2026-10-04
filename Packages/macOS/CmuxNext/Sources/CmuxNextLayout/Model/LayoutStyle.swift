@@ -63,8 +63,15 @@ public nonisolated struct LayoutStyle: Hashable, Sendable {
     /// Height of the band at a screen's top and bottom edge that opens a
     /// dock (layout-model.md DD1).
     public var dockDropBand: CGFloat = 24
+    /// The top dock band, below the tab bar: the tab strip takes drops 8 pt
+    /// below its edge (TabDragSession providers, space4), so the top band is
+    /// 8 pt deeper to leave the same 24 pt to hit as the other bands.
+    public var dockTopDropBand: CGFloat = 32
     /// Which docks own the frame's corners (cmux.json `layout.frameOrientation`).
     public var frameOrientation: FrameOrientation = .columnMajor
+    /// cmux.json `layout.rows` (plans/cmux-next/rows.md O1 to O3): off, a
+    /// column's existing rows fit it like stacked panes and never scroll.
+    public var rowsEnabled = true
     /// DEV layout model prototype (Debug Settings `layout.prototype.*`); off draws the real layout.
     public var prototype = LayoutPrototypeSettings()
 
@@ -110,6 +117,7 @@ extension LayoutStyle {
         // cmux.json `layout.minimumPaneWidth` / `layout.minimumPaneHeight`.
         style.minimumPaneContentSize = DesignSettings.shared.minimumPaneContentSize
         style.frameOrientation = DesignSettings.shared.frameOrientation
+        style.rowsEnabled = DesignSettings.shared.layoutRows
         // Debug Settings overrides only (no override keeps the base style's
         // value; the tunables' defaults equal the literals above).
         if let value = LayoutTunables.inactivePaneDimming.override { style.inactivePaneDimming = value }

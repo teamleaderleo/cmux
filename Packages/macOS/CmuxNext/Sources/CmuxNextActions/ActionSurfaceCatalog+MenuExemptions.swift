@@ -5,6 +5,10 @@ nonisolated extension ActionSurfaceCatalog {
     /// Why no right-click menu offers an action.
     static let contextMenuExemption: [ActionID: SurfaceExemption] = byReason(contextMenuExemptionsByReason)
     static let contextMenuExemptionsByReason: [SurfaceExemption: [ActionID]] = [
+        // The menus offer New Tab Page, whose field is this action's GUI form.
+        .duplicateOfDefault: [
+            "newTab.submit",
+        ],
         .secondaryEngine: [
             "openBrowser.webkit",
             "browser.openInWebKit",
@@ -52,7 +56,7 @@ nonisolated extension ActionSurfaceCatalog {
             "appearance.paneBorderColor.reset", "appearance.titlebar.minimal", "appearance.titlebar.standard",
             "browser.hibernation.off", "browser.hibernation.moderate", "browser.hibernation.aggressive",
             "layout.toggleStripScrollbar", "recentlyFocused", "recentlyClosed", "history.commands", "history.show",
-            "browserShowHistory", "history.search", "history.resumeAgentSession", "history.reopen", "history.clear",
+            "browserShowHistory", "history.search", "history.resumeAgentSession", "history.reopen", "history.open", "history.clear",
             "layout.undo", "bookmark.add", "bookmark.import", "bookmark.export", "agentActivity.open",
         ],
         .noTargetSurface: [
@@ -79,6 +83,7 @@ nonisolated extension ActionSurfaceCatalog {
             "checklistAttachImages", "cloudExec",
         ],
         .focusMove: [
+            "history.goTo",
             "showHideAllWindows", "goToWorkspace", "showMainWindow", "tab.focus", "nextSidebarTab", "prevSidebarTab",
             "nextSidebarTabInGroup", "prevSidebarTabInGroup", "nextWorkspaceGroup", "prevWorkspaceGroup",
             "selectWorkspaceByNumber", "workspace.selectFirst",
