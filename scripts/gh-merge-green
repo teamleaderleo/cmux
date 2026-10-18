@@ -183,6 +183,15 @@ if [ -z "$sha" ] || [ -z "$base" ]; then
     "not green: GitHub metadata for $ref has no head SHA or base branch" \
     'refresh the pull request metadata and retry'
 fi
+
+pr_files_graphql() {
+  gh api graphql \
+    -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){files(first:100){nodes{path}}}}}' \
+    -F "owner=${repo%%/*}" \
+    -F "repo=${repo##*/}" \
+    -F "number=$num" \
+    --jq '.data.repository.pullRequest.files.nodes[].path'
+}
 if jq -e 'any(.labels[]?; .name == "exploration")' <<<"$pr_json" >/dev/null 2>&1; then
   refuse \
     'exploration PR, needs a decision from Leo or the team before merging.' \
@@ -221,7 +230,7 @@ fi
 # every reported exact-head check and status context must be completed successfully.
 workflow_response=''
 workflow_on_base() {
-  local file="$1" response
+  local file="$1" response graphql_response workflow_text encoded
   if response=$(gh api --include "repos/$repo/contents/.github/workflows/$file" -X GET -f "ref=$base" 2>/dev/null); then
     workflow_response="$response"
     return 0
@@ -229,9 +238,29 @@ workflow_on_base() {
   if grep -qE '^HTTP/[^ ]+ 404([[:space:]]|$)' <<<"$response"; then
     return 1
   fi
+
+  # The contents REST endpoint is independently rate-limited from GraphQL. Use
+  # the repository object API as a read-only fallback so a healthy exact-head
+  # merge is not blocked by a transient REST quota, while still failing closed
+  # when neither endpoint can prove the workflow exists or is absent.
+  if graphql_response=$(gh api graphql \
+      -f query='query($owner:String!,$repo:String!,$expr:String!){repository(owner:$owner,name:$repo){object(expression:$expr){... on Blob{text}}}}' \
+      -F "owner=${repo%%/*}" \
+      -F "repo=${repo##*/}" \
+      -F "expr=$base:.github/workflows/$file" 2>/dev/null) \
+    && workflow_text=$(jq -r '.data.repository.object.text // empty' <<<"$graphql_response" 2>/dev/null); then
+    if [ -n "$workflow_text" ]; then
+      encoded=$(printf '%s' "$workflow_text" | base64 | tr -d '\n')
+      workflow_response=$(printf 'HTTP/2 200\n\n%s' "$(jq -cn --arg content "$encoded" '{encoding:"base64",content:$content}')")
+      return 0
+    fi
+    if jq -e '.data.repository.object == null and (.errors == null or (.errors|length == 0))' <<<"$graphql_response" >/dev/null 2>&1; then
+      return 1
+    fi
+  fi
   refuse \
     "not green: cannot probe $file on $repo base $base" \
-    'restore GitHub contents API access; only HTTP 404 means the workflow is absent'
+    'restore GitHub workflow metadata access; the REST and GraphQL fallbacks both failed'
 }
 
 # ci-status is required only when ci.yml or ci-macos.yml defines that job;
@@ -279,9 +308,19 @@ if [ "$base" = main ] && [ "$has_app_compile" -eq 1 ]; then
   fi
 fi
 if ! check_runs_json=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" --paginate --slurp 2>/dev/null); then
-  refuse \
-    "not green: cannot read checks for $sha" \
-    'restore GitHub API access, then retry the exact-head check'
+  # The REST checks endpoint can be exhausted while GraphQL remains available.
+  # Reconstruct only the fields this guard consumes from the exact commit's
+  # check suites; this is still pinned to the immutable head SHA.
+  if ! check_runs_graphql=$(gh api graphql \
+      -f query='query($owner:String!,$repo:String!,$oid:GitObjectID!){repository(owner:$owner,name:$repo){object(oid:$oid){... on Commit{checkSuites(first:100){nodes{checkRuns(first:100){nodes{name status conclusion checkSuite{id}}}}}}}}}' \
+      -F "owner=${repo%%/*}" \
+      -F "repo=${repo##*/}" \
+      -F "oid=$sha" 2>/dev/null) \
+    || ! check_runs_json=$(jq -c '[{check_runs: [(.data.repository.object.checkSuites.nodes[]?.checkRuns.nodes[]? | {name,status:(.status|ascii_downcase),conclusion:(.conclusion|ascii_downcase),check_suite:{id:.checkSuite.id}})]}]' <<<"$check_runs_graphql" 2>/dev/null); then
+    refuse \
+      "not green: cannot read checks for $sha" \
+      'restore GitHub API access, then retry the exact-head check'
+  fi
 fi
 if ! runs=$(jq -r '
   (map(.check_runs) | add)
@@ -574,9 +613,13 @@ fi
 failing=$(printf '%s\n' "$runs" | awk -F'\t' '$3=="failure"||$3=="timed_out"||$3=="cancelled"{print $1}' | sort -u)
 if [ -n "$failing" ]; then echo "note: other failing checks on $sha (${must[*]} decides):" >&2; printf '%s\n' "$failing" | sed 's/^/  /' >&2; fi
 if ! patches=$(gh api --paginate "repos/$repo/pulls/$num/files?per_page=100" -q '.[].patch // empty' 2>/dev/null); then
-  refuse \
-    "not green: cannot read the diff for $ref" \
-    'restore GitHub API access, then retry the exact-head check'
+  # Pull patch URLs remain available when the authenticated REST quota is
+  # exhausted; use the immutable PR patch only for conflict-marker inspection.
+  if ! patches=$(curl -LfsS --max-time 30 "https://github.com/$repo/pull/$num.patch" 2>/dev/null); then
+    refuse \
+      "not green: cannot read the diff for $ref" \
+      'restore GitHub API or pull patch access, then retry the exact-head check'
+  fi
 fi
 if grep -qE '^\+(<<<<<<<|>>>>>>>|=======$)' <<<"$patches"; then
   refuse \
@@ -605,9 +648,11 @@ if [ "$base" = feat-cmux-next ]; then
       'check with the coordinator; they merge this PR while the WINDOW is unreadable'
   fi
   if ! changed=$(gh api --paginate "repos/$repo/pulls/$num/files?per_page=100" -q '.[].filename' 2>/dev/null); then
-    refuse \
-      "not merged: cannot list changed files for $ref to check freezes" \
-      'restore GitHub API access, then retry'
+    if ! changed=$(pr_files_graphql 2>/dev/null); then
+      refuse \
+        "not merged: cannot list changed files for $ref to check freezes" \
+        'restore GitHub API or GraphQL access, then retry'
+    fi
   fi
   if ! frozen=$(WINDOW="$window" FREEZE_TOKEN="$freeze_token" python3 -c '
 import os, sys
